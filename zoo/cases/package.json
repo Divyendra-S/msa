@@ -1,0 +1,16 @@
+{
+  "name": "@windtunnel/zoo-cases",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Bug Zoo cases: bug patches, expected results and the verifier",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "verify": "node verify.ts"
+  },
+  "dependencies": {
+    "@windtunnel/core": "workspace:*",
+    "playwright": "1.64.1",
+    "yaml": "^2.9.1"
+  }
+}

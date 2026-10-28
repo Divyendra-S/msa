@@ -1,0 +1,19 @@
+{
+  "name": "@windtunnel/core",
+  "version": "0.0.0",
+  "description": "Wind Tunnel core: config, isolated branches, runner, rules, run store, prover",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@windtunnel/mock-pay": "workspace:*",
+    "pg": "^8.23.1",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
+  }
+}

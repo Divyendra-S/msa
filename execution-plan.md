@@ -19,12 +19,12 @@
 
 ## Phase 1 — Foundation
 
-- [ ] Monorepo scaffold: `core`, `explorer`, `mcp`, `viewer`, `cli`
-- [ ] Bug Zoo shop app (Next.js + Postgres) with seed data
-- [ ] Mock payment provider (checkout + controllable webhooks)
-- [ ] Bug Zoo cases 1–3: double submit, lost response + retry, duplicate webhook
-- [ ] Config file (`windtunnel.config.yaml`)
-- [ ] Isolated branches: git worktree per code version, Postgres copy per run, app pool, port allocation, cleanup
+- [x] Monorepo scaffold: `core`, `explorer`, `mcp`, `viewer`, `cli`
+- [x] Bug Zoo shop app (Next.js + Postgres) with seed data
+- [x] Mock payment provider (checkout + controllable webhooks)
+- [x] Bug Zoo cases 1–3: double submit, lost response + retry, duplicate webhook
+- [x] Config file (`windtunnel.config.yaml`)
+- [x] Isolated branches: git worktree per code version, Postgres copy per run, app pool, port allocation, cleanup
 
 ## Phase 2 — Experiment engine
 

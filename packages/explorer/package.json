@@ -1,0 +1,11 @@
+{
+  "name": "@windtunnel/explorer",
+  "version": "0.0.0",
+  "description": "Wind Tunnel explorer: static app index, crawler, decider, free sweep",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

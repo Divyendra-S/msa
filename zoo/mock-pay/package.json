@@ -1,0 +1,16 @@
+{
+  "name": "@windtunnel/mock-pay",
+  "version": "0.0.0",
+  "description": "Mock payment provider with controllable webhooks, for Wind Tunnel experiments and the Bug Zoo",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "bin": {
+    "mock-pay": "./src/bin.ts"
+  },
+  "scripts": {
+    "start": "node src/bin.ts"
+  }
+}

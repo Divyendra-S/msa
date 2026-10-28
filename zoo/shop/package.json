@@ -1,0 +1,25 @@
+{
+  "name": "bug-zoo-shop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Bug Zoo demo shop: Next.js + Postgres + mock payment provider",
+  "scripts": {
+    "dev": "next dev --port 3001",
+    "build": "next build",
+    "start": "next start",
+    "db:setup": "node scripts/db-setup.mjs"
+  },
+  "dependencies": {
+    "next": "16.4.2",
+    "pg": "8.23.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "typescript": "6.0.3"
+  }
+}

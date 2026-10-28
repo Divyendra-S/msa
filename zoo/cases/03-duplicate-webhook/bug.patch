@@ -1,0 +1,29 @@
+--- a/zoo/shop/app/api/webhooks/payment/route.ts
++++ b/zoo/shop/app/api/webhooks/payment/route.ts
+@@ -16,13 +16,6 @@
+   if (!Number.isInteger(orderId)) return Response.json({ error: "Charge has no order" }, { status: 400 });
+ 
+   await transaction(async (db) => {
+-    // Providers deliver at least once; handle each event id a single time.
+-    const first = await db.query("INSERT INTO webhook_events (id, type) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING", [
+-      event.id,
+-      event.type,
+-    ]);
+-    if (first.rowCount === 0) return;
+-
+     if (event.type === "charge.failed") {
+       await db.query("UPDATE orders SET status = 'failed' WHERE id = $1 AND status <> 'paid'", [orderId]);
+       return;
+--- a/zoo/shop/db/schema.sql
++++ b/zoo/shop/db/schema.sql
+@@ -64,10 +64,3 @@
+   amount_cents integer NOT NULL,
+   created_at   timestamptz NOT NULL DEFAULT now()
+ );
+-
+--- Payment provider events already handled (webhooks can arrive more than once).
+-CREATE TABLE webhook_events (
+-  id          text PRIMARY KEY,
+-  type        text NOT NULL,
+-  received_at timestamptz NOT NULL DEFAULT now()
+-);

@@ -1,0 +1,22 @@
+{
+  "name": "windtunnel-monorepo",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.34.5",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --test \"packages/*/test/**/*.test.ts\" \"zoo/mock-pay/test/**/*.test.ts\"",
+    "db:up": "docker compose up -d --wait postgres",
+    "db:down": "docker compose down",
+    "zoo:install": "pnpm --dir zoo/shop install --frozen-lockfile --ignore-workspace",
+    "zoo:verify": "node zoo/cases/verify.ts",
+    "wt": "node packages/cli/src/bin.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "typescript": "~6.0.3"
+  }
+}

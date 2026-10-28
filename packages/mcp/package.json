@@ -1,0 +1,11 @@
+{
+  "name": "@windtunnel/mcp",
+  "version": "0.0.0",
+  "description": "Wind Tunnel MCP server: tools for coding agents",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

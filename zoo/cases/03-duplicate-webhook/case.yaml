@@ -1,0 +1,8 @@
+id: 03-duplicate-webhook
+title: Duplicate webhook
+summary: The payment provider delivers the same event twice and the payment is recorded twice.
+scenario: duplicate-webhook
+perturbation: Payment webhook delivered twice
+breaks: [payment-recorded-once]
+handler: app/api/webhooks/payment/route.ts
+fix: Record handled event ids and skip events already seen (webhook_events with ON CONFLICT DO NOTHING).

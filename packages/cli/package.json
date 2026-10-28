@@ -1,0 +1,16 @@
+{
+  "name": "windtunnel",
+  "version": "0.0.0",
+  "description": "Make your coding agent prove its fixes: real-world failure experiments for web apps",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "windtunnel": "./src/bin.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@windtunnel/core": "workspace:*"
+  }
+}

@@ -1,0 +1,32 @@
+# Invariants for the Bug Zoo shop. Each SQL query lists the rows that break the rule.
+
+one-order-per-cart:
+  description: A cart turns into at most one order.
+  sql: SELECT cart_id, count(*) AS orders FROM orders GROUP BY cart_id HAVING count(*) > 1
+  expect: empty
+
+one-charge-per-order:
+  description: An order is charged at most once.
+  sql: >-
+    SELECT order_id, count(DISTINCT charge_id) AS charges
+    FROM payments GROUP BY order_id HAVING count(DISTINCT charge_id) > 1
+  expect: empty
+
+payment-recorded-once:
+  description: Each charge is recorded as a payment exactly once.
+  sql: >-
+    SELECT order_id, charge_id, count(*) AS records
+    FROM payments GROUP BY order_id, charge_id HAVING count(*) > 1
+  expect: empty
+
+paid-orders-are-marked-paid:
+  description: An order with a recorded payment is not left pending or processing.
+  sql: >-
+    SELECT o.id, o.status FROM orders o
+    WHERE o.status <> 'paid' AND EXISTS (SELECT 1 FROM payments p WHERE p.order_id = o.id)
+  expect: empty
+
+stock-non-negative:
+  description: Stock never goes below zero.
+  sql: SELECT id, stock FROM products WHERE stock < 0
+  expect: empty
