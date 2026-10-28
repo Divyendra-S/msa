@@ -14,6 +14,9 @@ const AppSchema = z.object({
   ready: z.string().default("/"),
   readyTimeoutMs: z.number().int().positive().default(60_000),
   env: z.record(z.string(), z.string()).default({}),
+  /** The project's own tests, part of a proof's regression set. Run in each version's worktree with $DATABASE_URL on a fresh seed copy. */
+  test: z.string().optional(),
+  testTimeoutMs: z.number().int().positive().default(600_000),
 });
 
 const DbSchema = z.object({
@@ -22,6 +25,8 @@ const DbSchema = z.object({
   url: z.string(),
   /** Creates schema and seed data in $DATABASE_URL. Runs once per code version to build the snapshot. */
   seed: z.string(),
+  /** Log the app's SQL through a local proxy, for the trace chain (off for servers that need TLS). */
+  sqlLog: z.boolean().default(true),
 });
 
 const MockPaySchema = z.object({

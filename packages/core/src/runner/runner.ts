@@ -1,8 +1,10 @@
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { chromium, type Browser } from "playwright";
 import { type Branch, Branches } from "../branches/branches.ts";
 import type { CodeVersion, CodeVersionSpec } from "../branches/code-versions.ts";
 import { ConfigError } from "../config.ts";
+import { CommandError, sh } from "../exec.ts";
 import type { TestUser } from "../flow-api.ts";
 import { checkRules, loadRules, type Rule, type RuleResult } from "../rules.ts";
 import { type DbSnapshot, diffSnapshots, snapshotDatabase } from "./db-diff.ts";
@@ -15,6 +17,7 @@ import {
   variantsOf,
 } from "./experiment.ts";
 import { findFlowFile, LOGIN_FLOW, type LoadedFlow, loadFlow } from "./flows.ts";
+import { experimentInputs } from "./inputs.ts";
 import { Rep, type TraceMode } from "./rep.ts";
 import { RunStore, writeJson } from "./store.ts";
 
@@ -66,7 +69,7 @@ export interface VariantResult {
 export interface ExperimentResult {
   runId: string;
   experiment: string;
-  version: { id: string; label: string };
+  version: { id: string; label: string; tree?: string };
   outcome: Outcome;
   variants: VariantResult[];
   reps: RepSummary[];
@@ -75,6 +78,22 @@ export interface ExperimentResult {
   dir: string;
   /** Warnings from its runs, each with the number of runs that had it. */
   warnings?: string[];
+  /** Hash of the experiment, its flows and its rules (see experimentInputs). */
+  inputs?: string;
+  /** Requests the app received, `POST /api/orders` (page loads too, webhooks included): what the experiment exercised. */
+  touched?: string[];
+}
+
+/** The project's own test command on one code version. */
+export interface TestRun {
+  command: string;
+  version: string;
+  ok: boolean;
+  exitCode: number;
+  durationMs: number;
+  log: string;
+  /** Last lines of the output. */
+  tail: string[];
 }
 
 /** Runs experiments: each repetition in its own branch, all at once up to `parallel`. */
@@ -126,6 +145,38 @@ export class Runner {
     );
   }
 
+  /**
+   * Runs `app.test` in a version's worktree, with DATABASE_URL on a fresh copy of the seed
+   * so tests never touch a real database. Undefined when the project has no test command.
+   */
+  async runTests(spec: CodeVersionSpec | CodeVersion): Promise<TestRun | undefined> {
+    const { test: command, testTimeoutMs } = this.project.config.app;
+    if (!command) return undefined;
+    const prepared = await this.branches.prepare(spec);
+    const version = prepared.version.id;
+    const log = join(this.project.stateDir, "logs", "tests", `${version}-${Date.now().toString(36)}.log`);
+    const started = Date.now();
+    return this.branches.withSeedCopy(prepared.version, async (url) => {
+      let exitCode = 0;
+      try {
+        await sh(command, { cwd: prepared.appDir, env: { DATABASE_URL: url, CI: "1" }, logFile: log, timeoutMs: testTimeoutMs });
+      } catch (err) {
+        if (!(err instanceof CommandError)) throw err;
+        exitCode = err.result.code;
+      }
+      const output = await readFile(log, "utf8").catch(() => "");
+      return {
+        command,
+        version,
+        ok: exitCode === 0,
+        exitCode,
+        durationMs: Date.now() - started,
+        log,
+        tail: output.trimEnd().split("\n").slice(-15),
+      };
+    });
+  }
+
   async run(experiments: Experiment[], options: RunOptions = {}): Promise<ExperimentResult[]> {
     const { rules } = await this.validate(experiments);
     const spec = options.version ?? {};
@@ -162,10 +213,12 @@ export class Runner {
     const jobs = variantsOf(experiment, users).flatMap((variant) =>
       Array.from({ length: repeat }, () => variant),
     );
+    const inputs = await experimentInputs(this.project, experiment, allRules);
+    const touched = new Set<string>();
 
     const reps = await Promise.all(
       jobs.map(async (variant, i) => {
-        const summary = await this.runRep({ experiment, variant, version, rules, flow, login, users, rep: i + 1, dir, options });
+        const summary = await this.runRep({ experiment, variant, version, rules, flow, login, users, rep: i + 1, dir, options, touched });
         options.onRep?.({ ...summary, experiment: experiment.id });
         return summary;
       }),
@@ -177,7 +230,7 @@ export class Runner {
     const result: ExperimentResult = {
       runId,
       experiment: experiment.id,
-      version: { id: version.id, label: version.label },
+      version: { id: version.id, label: version.label, tree: version.tree },
       outcome: worst(variants.map((v) => v.outcome)),
       variants,
       reps,
@@ -185,6 +238,8 @@ export class Runner {
       durationMs: Date.now() - started,
       dir,
       ...(warned.size ? { warnings: [...warned].map(([w, n]) => `${w} (${n}/${reps.length} runs)`) } : {}),
+      inputs,
+      touched: [...touched].sort(),
     };
     await this.store.finish(dir, result, {
       id: runId,
@@ -208,6 +263,7 @@ export class Runner {
     rep: number;
     dir: string;
     options: RunOptions;
+    touched: Set<string>;
   }): Promise<RepSummary> {
     const started = Date.now();
     const dir = this.store.repDir(job.dir, job.rep);
@@ -298,17 +354,33 @@ export class Runner {
       timedOut: rep?.timedOut ?? false,
       steps: rep?.steps ?? [],
       race: rep?.race,
-      webhooks: rep?.webhookRecords() ?? [],
+      webhooks: (rep?.webhookRecords() ?? []).map((w) => ({ ...w, path: this.project.config.mockPay?.webhookPath })),
       charges: (branch.payments?.tenant.charges ?? []).map((c) => ({
         id: c.id,
         amount: c.amount,
         idempotencyKey: c.idempotency_key,
         metadata: c.metadata,
       })),
+      // Each create-charge request (replays too), for the trace.
+      chargeCalls: (branch.payments?.tenant.calls ?? []).map((c) => ({ ...c, at: c.at - (rep?.t0 ?? started) })),
       console: rep?.console ?? [],
       traces,
     });
-    if (rep) await writeJson(`${dir}/requests.json`, rep.requests);
+    if (rep) {
+      await writeJson(`${dir}/requests.json`, rep.requests);
+      for (const r of rep.requests) {
+        if (r.sent !== null) job.touched.add(`${r.method} ${r.url.split("?")[0]}`);
+      }
+      const webhookPath = this.project.config.mockPay?.webhookPath;
+      if (webhookPath && rep.webhookRecords().some((w) => w.deliveries.length > 0)) job.touched.add(`POST ${webhookPath}`);
+    }
+    if (rep && branch.sql) {
+      const t0 = rep.t0;
+      await writeJson(`${dir}/sql.json`, {
+        dropped: branch.sql.dropped,
+        statements: branch.sql.records.map((r) => ({ ...r, at: r.at - t0 })),
+      });
+    }
     return summary;
   }
 

@@ -3,6 +3,7 @@ export {
   Tenant,
   defaultTenantConfig,
   type Charge,
+  type ChargeCall,
   type ChargeOutcome,
   type CreateChargeInput,
   type CreateChargeResult,

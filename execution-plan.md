@@ -56,10 +56,11 @@
 
 ## Phase 4 — Fix proof
 
-- [ ] Prover: patch in worktree, full matrix × N, revert check, regression set — all but the project's own test command in the regression set landed in Phase 3
-- [ ] Branch output with regression experiments + `EVIDENCE.md`
-- [ ] Trace chain: request → handler file → SQL → row changes
-- [ ] Re-test only what changed (affected experiments, results cached by code hash)
+- [x] Prover: patch in worktree, full matrix × N, revert check, regression set (other experiments + the project's test command on a fresh seed copy); proofs cached and reused
+- [x] Branch output with regression experiments + `EVIDENCE.md` (`.windtunnel/evidence/<id>.md`, one commit on the base, working tree untouched)
+- [x] Trace chain: request → handler file → SQL → row changes (Postgres wire proxy logs the app's statements; linked to requests by time window)
+- [x] Re-test only what changed (affected experiments from recorded requests + the import graph, results reused by code version via `git diff`)
+- [x] Bug Zoo prover check: `pnpm zoo:prove` proves every case's real fix and rejects a wrong fix
 
 ## Phase 5 — Efficiency layer
 

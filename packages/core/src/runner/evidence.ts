@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { git } from "../git.ts";
 import type { Rule, RuleResult } from "../rules.ts";
 import type { DbDiff, Row } from "./db-diff.ts";
 import type { Experiment } from "./experiment.ts";
@@ -7,6 +8,18 @@ import type { RaceRecord, RequestRecord } from "./network.ts";
 import type { ConsoleRecord, FlowError, StepRecord, WebhookRecord } from "./rep.ts";
 import type { ExperimentResult, RepSummary } from "./runner.ts";
 import type { RunStore } from "./store.ts";
+import {
+  attribute,
+  mentions,
+  narrowByCode,
+  type SqlStatement,
+  sqlCounts,
+  statementLine,
+  type TraceContext,
+  type TracedStatement,
+  traceLines,
+  writeTarget,
+} from "./trace.ts";
 
 /** About 2k tokens: the packet a model reads first. */
 export const PACKET_CHARS = 8_000;
@@ -18,6 +31,8 @@ export interface EvidenceOptions {
   rules?: Rule[];
   /** Maps a request to the file that handles it (from the app map). */
   handlerFor?: (method: string, path: string) => string | undefined;
+  /** The repository, to find each statement's line in the code the run used. */
+  source?: { repoRoot: string; appSubdir: string };
   maxChars?: number;
 }
 
@@ -29,6 +44,7 @@ interface RepDetail extends RepSummary {
   race?: RaceRecord;
   webhooks: WebhookRecord[];
   charges: { id: string; amount: number; idempotencyKey: string | null; metadata: Record<string, string> }[];
+  chargeCalls?: { at: number; charge: string; replayed: boolean }[];
   console: ConsoleRecord[];
   traces: string[];
 }
@@ -37,6 +53,8 @@ interface LoadedRep {
   detail: RepDetail;
   requests: RequestRecord[];
   diff?: DbDiff;
+  /** The app's statements linked to requests; undefined when SQL was not logged. */
+  sql?: TracedStatement[];
 }
 
 /** Everything a model needs to judge one run, in about 2k tokens, with handles to drill down. */
@@ -46,6 +64,7 @@ export async function evidencePacket(store: RunStore, runId: string, options: Ev
   const experiment = JSON.parse(await readFile(join(dir, "experiment.json"), "utf8")) as Experiment;
   const focus = pickRep(run);
   const rep = await loadRep(store, runId, focus.rep);
+  const ctx = await traceContext(run, rep, options);
   const rules = new Map((options.rules ?? []).map((r) => [r.id, r]));
 
   const sections: { text: string; priority: number }[] = [];
@@ -107,16 +126,25 @@ export async function evidencePacket(store: RunStore, runId: string, options: Ev
   const handlers = handlerLines(rep.requests, options);
   if (handlers.length) add(3, [`Handlers: ${handlers.join(" · ")}`]);
 
-  if (rep.diff) {
-    const brokenTables = tablesOf(rep.detail.rules.filter((r) => !r.ok).map((r) => rules.get(r.id)?.sql ?? ""));
-    add(4, [`Database changes: ${rep.diff.summary}`, ...diffLines(rep.diff, brokenTables, 3)]);
+  const brokenTables = tablesOf(rep.detail.rules.filter((r) => !r.ok).map((r) => rules.get(r.id)?.sql ?? ""));
+  if (rep.sql && (brokenTables.length || rep.diff?.summary)) {
+    // The tables a broken rule reads; without one, those the rules read that the run changed, then the rest it changed.
+    const only = brokenTables.length > 0;
+    const lines = traceLines(rep.sql, rep.diff, only ? brokenTables : ruleTables(rep, options), ctx, { perTable: 6, tables: 4, only });
+    if (lines.length) {
+      add(3, [`Trace (request → handler → SQL → result) of the ${only ? "tables the broken rules read" : "tables the rules read, then the others the run changed"} (every table: drill down "trace"):`, ...lines]);
+    }
   }
+  if (rep.diff) add(4, [`Database changes: ${rep.diff.summary}`, ...diffLines(rep.diff, brokenTables, 3)]);
 
   const contrast = await divergence(store, run, focus, rep);
   if (contrast.length) add(4, contrast);
 
   const logErrors = await appErrors(store, runId, focus.rep, 5);
-  const consoleErrors = rep.detail.console.filter((c) => c.type === "error").slice(0, 3);
+  // A 4xx the request log already shows ("Failed to load resource … 409") says nothing new.
+  const consoleErrors = rep.detail.console
+    .filter((c) => c.type === "error" && !/Failed to load resource: the server responded with a status of 4\d\d/.test(c.text))
+    .slice(0, 3);
   if (logErrors.length || consoleErrors.length) {
     add(5, [
       ...logErrors.map((l) => `app log: ${l}`),
@@ -126,7 +154,7 @@ export async function evidencePacket(store: RunStore, runId: string, options: Ev
 
   const h = `${runId}/${focus.rep}`;
   add(0, [
-    `Drill down: windtunnel_evidence handle "${h}/<part>", part = steps · requests · diff · diff:<table> · rule:<id> · log · console · webhooks (other runs: ${runId}/1…${run.reps.length})`,
+    `Drill down: windtunnel_evidence handle "${h}/<part>", part = steps · requests · sql · sql:<table> · trace · diff · diff:<table> · rule:<id> · log · console · webhooks (other runs: ${runId}/1…${run.reps.length})`,
     rep.detail.traces.length > 0 && `Playwright trace: ${rep.detail.traces.map((t) => `npx playwright show-trace ${t}`).join(" · ")}`,
   ]);
 
@@ -134,7 +162,8 @@ export async function evidencePacket(store: RunStore, runId: string, options: Ev
 }
 
 /**
- * Detail behind a packet: `<run>`, `<run>/<rep>`, `<run>/<rep>/steps|requests|diff|diff:<table>|rule:<id>|log|console|webhooks`.
+ * Detail behind a packet: `<run>`, `<run>/<rep>`,
+ * `<run>/<rep>/steps|requests|sql|sql:<table>|trace|diff|diff:<table>|rule:<id>|log|console|webhooks`.
  */
 export async function drillDown(store: RunStore, handle: string, options: EvidenceOptions = {}): Promise<string> {
   const [runId, repText, what = "", ...rest] = handle.split("/");
@@ -146,6 +175,7 @@ export async function drillDown(store: RunStore, handle: string, options: Eviden
     throw new Error(`run ${runId} has runs 1–${run.reps.length}; got "${repText}"`);
   }
   const rep = await loadRep(store, runId, repNo);
+  const ctx = await traceContext(run, rep, options);
   const item = [what, ...rest].join("/");
   let text: string;
   if (item === "") {
@@ -160,7 +190,21 @@ export async function drillDown(store: RunStore, handle: string, options: Eviden
       ].join("\n"))
       .join("\n");
   } else if (item === "requests") {
-    text = rep.requests.map((r) => requestLine(r, options, true)).join("\n");
+    const counts = rep.sql ? sqlCounts(rep.sql) : undefined;
+    text = rep.requests.map((r) => requestLine(r, options, true, counts)).join("\n");
+  } else if (item === "sql" || item.startsWith("sql:")) {
+    const table = item.slice(4);
+    if (!rep.sql) text = "no SQL log for this run (db.sqlLog is off, or the run did not start)";
+    else {
+      const statements = table ? rep.sql.filter((s) => mentions(s.sql, table)) : rep.sql;
+      text = statements.map((s) => statementLine(s, ctx, true)).join("\n") || (table ? `no statement mentions ${table}` : "the app ran no SQL");
+    }
+  } else if (item === "trace") {
+    if (!rep.sql) text = "no SQL log for this run (db.sqlLog is off, or the run did not start)";
+    else {
+      const broken = tablesOf(rep.detail.rules.filter((r) => !r.ok).map((r) => options.rules?.find((x) => x.id === r.id)?.sql ?? ""));
+      text = traceLines(rep.sql, rep.diff, broken.length ? broken : ruleTables(rep, options), ctx, { perTable: 50, tables: 50 }).join("\n") || "no table changed and no rule broke";
+    }
   } else if (item === "diff" || item.startsWith("diff:")) {
     if (!rep.diff) text = "no database diff for this run";
     else {
@@ -195,7 +239,7 @@ export async function drillDown(store: RunStore, handle: string, options: Eviden
       ...rep.detail.webhooks.map((w) => `event ${w.event} ${w.type} ${w.charge}: ${w.deliveries.map((d) => `${d.at} → ${d.status ?? d.error}`).join(", ") || "not delivered"}`),
     ].join("\n") || "no payments in this run";
   } else {
-    throw new Error(`unknown handle part "${item}": use steps, requests, diff, diff:<table>, rule:<id>, log, console or webhooks`);
+    throw new Error(`unknown handle part "${item}": use steps, requests, sql, sql:<table>, trace, diff, diff:<table>, rule:<id>, log, console or webhooks`);
   }
   return cut(text, options.maxChars ?? DRILL_CHARS, handle);
 }
@@ -210,11 +254,14 @@ async function loadRep(store: RunStore, runId: string, rep: number): Promise<Loa
   const read = async <T>(name: string): Promise<T | undefined> =>
     JSON.parse(await readFile(join(dir, name), "utf8").catch(() => "null")) ?? undefined;
   // Runs that could not start have a summary only.
-  const detail = (await read<Partial<RepDetail>>("result.json")) ?? {};
+  const detail = { rules: [], errors: [], steps: [], webhooks: [], charges: [], console: [], traces: [], ...((await read<Partial<RepDetail>>("result.json")) ?? {}) } as RepDetail;
+  const requests = (await read<RequestRecord[]>("requests.json")) ?? [];
+  const sql = await read<{ statements: SqlStatement[] }>("sql.json");
   return {
-    detail: { rules: [], errors: [], steps: [], webhooks: [], charges: [], console: [], traces: [], ...detail } as RepDetail,
-    requests: (await read<RequestRecord[]>("requests.json")) ?? [],
+    detail,
+    requests,
     diff: await read<DbDiff>("db-diff.json"),
+    sql: sql && attribute(sql.statements, requests, detail.webhooks, detail.startedAt),
   };
 }
 
@@ -237,7 +284,12 @@ function interesting(r: RequestRecord): boolean {
   return r.method !== "GET" || (r.type !== "document" && !/[?&]_rsc=/.test(r.url));
 }
 
-function requestLine(r: RequestRecord, options: EvidenceOptions, all = false): string {
+function requestLine(
+  r: RequestRecord,
+  options: EvidenceOptions,
+  all = false,
+  counts?: Map<number, { total: number; writes: number; errors: number }>,
+): string {
   // React Server Component fetches (client navigation, refresh, prefetch) look like page paths.
   const rsc = /[?&]_rsc=/.test(r.url);
   const path = r.url.replace(/([?&])_rsc=[^&]*/, "$1").replace(/[?&]$/, "") + (rsc ? " (RSC)" : "");
@@ -251,16 +303,19 @@ function requestLine(r: RequestRecord, options: EvidenceOptions, all = false): s
           : "no answer";
   const timing = `${r.start}${r.end !== undefined ? `–${r.end}` : ""}`;
   const handler = all ? options.handlerFor?.(r.method, path) : undefined;
-  return `${all ? `${timing} ${r.tab}${r.step ? ` / ${r.step}` : ""} ` : ""}${r.method} ${path} ${outcome}${(r.harness ?? []).map((h) => ` [harness] ${h}`).join("")}${handler ? ` → ${handler}` : ""}`;
+  const c = counts?.get(r.id);
+  const sql = c ? ` · SQL ${c.total}${c.writes ? `, ${c.writes} write${c.writes > 1 ? "s" : ""}` : ""}${c.errors ? `, ${c.errors} failed` : ""}` : "";
+  return `${all ? `${timing} ${r.tab}${r.step ? ` / ${r.step}` : ""} ` : ""}${r.method} ${path} ${outcome}${sql}${(r.harness ?? []).map((h) => ` [harness] ${h}`).join("")}${handler ? ` → ${handler}` : ""}`;
 }
 
 function timeline(rep: LoadedRep, options: EvidenceOptions): string[] {
   const lines: string[] = [];
+  const counts = rep.sql ? sqlCounts(rep.sql) : undefined;
   for (const s of rep.detail.steps) {
     const reqs = rep.requests.filter((r) => r.tab === s.tab && r.start >= s.start && r.start < (s.end || Infinity) && interesting(r));
     lines.push(
       `  ${s.tab} ${s.step}${s.attempt ? ` (${s.attempt})` : ""} ${s.start}–${s.end}${(s.harness ?? []).map((h) => ` [harness] ${h}`).join("")}${s.error ? ` ERROR ${s.error}` : ""}`,
-      ...reqs.map((r) => `    ${requestLine(r, options)}`),
+      ...reqs.map((r) => `    ${requestLine(r, options, false, counts)}`),
     );
   }
   return lines;
@@ -278,8 +333,54 @@ function handlerLines(requests: RequestRecord[], options: EvidenceOptions): stri
   return [...seen].map(([req, file]) => `${req} → ${file}`);
 }
 
+/** Tables the run's rules read that the run changed or wrote to. */
+function ruleTables(rep: LoadedRep, options: EvidenceOptions): string[] {
+  const read = tablesOf(rep.detail.rules.map((r) => options.rules?.find((x) => x.id === r.id)?.sql ?? ""));
+  const touched = new Set([...Object.keys(rep.diff?.tables ?? {}), ...(rep.sql ?? []).flatMap((s) => writeTarget(s.sql)?.table ?? [])]);
+  return read.filter((t) => touched.has(t) || touched.has(`public.${t}`));
+}
+
+/** Handler lookup, each statement's line in the run's own code, and the payment calls between statements. */
+async function traceContext(run: ExperimentResult, rep: LoadedRep, options: EvidenceOptions): Promise<TraceContext> {
+  const orderOf = new Map(rep.detail.charges.map((c) => [c.id, c.metadata.order_id]));
+  const externals = (rep.detail.chargeCalls ?? []).map((c) => ({
+    at: c.at,
+    text: `[payment provider] ${c.replayed ? "replayed" : "created"} charge ${c.charge}${orderOf.get(c.charge) ? ` (order ${orderOf.get(c.charge)})` : ""}`,
+  }));
+  const ctx: TraceContext = { handlerFor: options.handlerFor, locate: await sqlLocator(run, rep.sql, options.source), externals };
+  // Before anything counts or shows statements: settle overlaps the code can settle.
+  if (rep.sql) narrowByCode(rep.sql, ctx);
+  return ctx;
+}
+
+/** Finds each statement's first line in the code version the run used (`git grep` in its tree). */
+async function sqlLocator(
+  run: ExperimentResult,
+  statements: TracedStatement[] | undefined,
+  source: EvidenceOptions["source"],
+): Promise<((sql: string) => string[]) | undefined> {
+  if (!statements?.length || !source || !run.version.tree) return undefined;
+  const firstLine = (sql: string) => sql.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+  // Short or generic lines (BEGIN, SELECT 1) would match anywhere.
+  const patterns = [...new Set(statements.map((s) => firstLine(s.sql)))].filter((p) => p.length >= 16 && /\s/.test(p));
+  if (patterns.length === 0) return undefined;
+  const out = await git(["grep", "-n", "-F", ...patterns.flatMap((p) => ["-e", p]), run.version.tree, "--", source.appSubdir || "."], source.repoRoot).catch(() => "");
+  const prefix = source.appSubdir ? `${source.appSubdir.split("\\").join("/")}/` : "";
+  const hits: { at: string; text: string }[] = [];
+  for (const line of out.split("\n")) {
+    const m = /^[0-9a-f]+:(.+?):(\d+):(.*)$/.exec(line);
+    if (m) hits.push({ at: `${m[1]!.startsWith(prefix) ? m[1]!.slice(prefix.length) : m[1]}:${m[2]}`, text: m[3]! });
+  }
+  return (sql) => {
+    const p = firstLine(sql);
+    return hits.filter((h) => h.text.includes(p)).map((h) => h.at);
+  };
+}
+
+/** Tables a rule's SQL reads, without the seed copies it may compare with. */
 function tablesOf(sql: string[]): string[] {
-  return [...new Set(sql.flatMap((s) => [...s.matchAll(/\b(?:FROM|JOIN)\s+([\w."]+)/gi)].map((m) => m[1]!.replace(/"/g, ""))))];
+  const tables = sql.flatMap((s) => [...s.matchAll(/\b(?:FROM|JOIN)\s+([\w."]+)/gi)].map((m) => m[1]!.replace(/"/g, "")));
+  return [...new Set(tables.filter((t) => !t.startsWith("windtunnel_seed.")))];
 }
 
 function diffLines(diff: DbDiff, first: string[], maxRows: number): string[] {

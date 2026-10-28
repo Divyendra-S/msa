@@ -1,4 +1,5 @@
 // Wind Tunnel explorer: the static app index (routes, handlers, schema). Crawler, decider and free sweep come later.
+export { type AffectedEntry, findAffected, formatAffected, formatAffectedRun } from "./affected.ts";
 export { type AppMap, buildAppMap, formatAppMap, formatEffects, type PageInfo, type RouteInfo } from "./map.ts";
 export { findNextRoutes, type RouteFile } from "./routes.ts";
 export { formatTable, readSchema, type TableInfo } from "./schema.ts";

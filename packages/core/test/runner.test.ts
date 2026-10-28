@@ -14,10 +14,22 @@ import type { RequestRecord } from "../src/runner/network.ts";
 import type { StepRecord } from "../src/runner/rep.ts";
 import { drillDown, evidencePacket, PACKET_CHARS } from "../src/runner/evidence.ts";
 import { formatResults } from "../src/runner/report.ts";
+import { writeProofBranch } from "../src/runner/proof-branch.ts";
 import { prove } from "../src/runner/prove.ts";
 import { type ExperimentResult, Runner } from "../src/runner/runner.ts";
 import { loadRules } from "../src/rules.ts";
-import { createFixtureRepo, pgAvailable, SEED, SERVER } from "./fixture.ts";
+import { CONFIG, createFixtureRepo, pgAvailable, SEED, SERVER } from "./fixture.ts";
+
+// The project's own tests: they use the seed copy they are given.
+const TESTS = `const { Client } = require(process.env.WT_TEST_PG_MODULE);
+(async () => {
+  const db = new Client({ connectionString: process.env.DATABASE_URL });
+  await db.connect();
+  await db.query("SELECT count(*) FROM hits");
+  await db.end();
+  console.log("tests pass");
+})().catch((err) => { console.error(err.message); process.exit(1); });
+`;
 
 const EXPERIMENTS: Record<string, string> = {
   plain: "flow: send",
@@ -94,7 +106,10 @@ describe("runner", { skip: !(await pgAvailable()) && "Postgres not reachable (pn
     (await repFile<DbDiff>(id, "db-diff.json", rep)).tables.hits?.added ?? [];
 
   before(async () => {
-    repo = await createFixtureRepo(EXPERIMENTS);
+    repo = await createFixtureRepo(EXPERIMENTS, {
+      "windtunnel.config.yaml": CONFIG.replace("app:\n", "app:\n  test: node tests.cjs\n"),
+      "tests.cjs": TESTS,
+    });
     cache = await mkdtemp(join(tmpdir(), "wt-cache-"));
     process.env.WINDTUNNEL_CACHE_DIR = cache;
 
@@ -279,16 +294,26 @@ describe("runner", { skip: !(await pgAvailable()) && "Postgres not reachable (pn
   it("evidence packet: broken rule, harness notes, short, with drill-down handles", async () => {
     const result = results.get("lost-response")!;
     const rules = await loadRules(runner.project);
-    const packet = await evidencePacket(runner.store, result.runId, { rules, handlerFor: (m, p) => (p === "/api/send" ? "server.cjs" : undefined) });
+    const packet = await evidencePacket(runner.store, result.runId, {
+      rules,
+      handlerFor: (m, p) => (p === "/api/send" ? "server.cjs" : undefined),
+      source: runner.project,
+    });
     assert.ok(packet.length < PACKET_CHARS, `packet is ${packet.length} chars`);
     assert.match(packet, /Result: FAIL — at-most-one-hit broken in 1\/1 runs/);
     assert.match(packet, /Rule at-most-one-hit broken/);
     assert.match(packet, /\[harness\] response lost/);
     assert.match(packet, /POST \/api\/send → server\.cjs/);
     assert.match(packet, /hits: \+\{id: 1, who: alice@example\.test\} \+\{id: 2/);
+    // The trace chain: the rule's table → the statements that wrote it → the request and its handler.
+    assert.match(packet, /Trace \(request → handler → SQL → result\) of the tables the broken rules read/);
+    // With the line of the SQL in the code the run used, the connection, and no transaction around it.
+    assert.match(packet, /hits \(\+2\):\n {4}\d+ alice POST \/api\/send → server\.cjs:\d+: INSERT INTO hits \(who\) VALUES \(\$1\) RETURNING id \[alice@example\.test\] → INSERT 0 1 \(c\d+, no tx\)/);
+    assert.match(packet, /POST \/api\/send ✗ net::ERR_CONNECTION_RESET · SQL \d+, \d writes? \[harness\]/);
+    assert.match(await drillDown(runner.store, `${result.runId}/1/sql:hits`), /INSERT INTO hits .* → INSERT 0 1 \(c\d+, no tx, \d+ ms\)/);
 
     const requests = await drillDown(runner.store, `${result.runId}/1/requests`, { rules });
-    assert.match(requests, /alice \/ send POST \/api\/send ✗ net::ERR_CONNECTION_RESET \[harness\]/);
+    assert.match(requests, /alice \/ send POST \/api\/send ✗ net::ERR_CONNECTION_RESET · SQL \d+, \d writes? \[harness\]/);
     assert.match(await drillDown(runner.store, `${result.runId}/1/diff:hits`), /hits: \+/);
     assert.match(await drillDown(runner.store, `${result.runId}/1/rule:at-most-one-hit`, { rules }), /SQL: SELECT count\(\*\)/);
     await assert.rejects(drillDown(runner.store, `${result.runId}/1/nope`), /unknown handle part "nope"/);
@@ -331,8 +356,30 @@ describe("runner", { skip: !(await pgAvailable()) && "Postgres not reachable (pn
     assert.match(packet, new RegExp(`Compared with passing run ${good.fix.results[0]!.runId} on version ${good.fix.version.id}`));
     assert.match(packet, /database changes there: hits \+1/);
 
+    // The project's tests ran on both versions, each with its own seed copy.
+    assert.equal(good.tests?.base.ok, true, good.tests?.base.tail.join("\n"));
+    assert.equal(good.tests?.fix.ok, true, good.tests?.fix.tail.join("\n"));
+
+    // Proving the same thing again reuses the proof; the branch is built from it.
+    const again = await prove(runner, { experiments: target, fix: { patch: fix }, repeat: 2, regression, reuse: true });
+    assert.ok(again.reused);
+    const rules = await loadRules(runner.project);
+    const branch = await writeProofBranch(runner, again, { name: "windtunnel/fix-double-submit", experiments: target, rules });
+    // Committed experiment files are kept as they are; the state folder's .gitignore wasn't committed yet.
+    assert.deepEqual(branch.added, [".windtunnel/.gitignore", ".windtunnel/evidence/double-submit.md"]);
+    assert.deepEqual(git("show", "--name-only", "--format=", branch.name).trim().split("\n").sort(), [".windtunnel/.gitignore", ".windtunnel/evidence/double-submit.md", "seed.cjs", "server.cjs"]);
+    assert.equal(git("log", "-1", "--format=%s", branch.name).trim(), "Fix at-most-one-hit (double-submit)");
+    const evidence = git("show", `${branch.name}:.windtunnel/evidence/double-submit.md`);
+    assert.match(evidence, /\| `double-submit` \| fix \| working tree \+ patch @ [0-9a-f]{12} \| PASS \| 2\/2 runs held every rule \|/);
+    assert.match(evidence, /Project tests \(`node tests\.cjs`\): pass on the base, pass with the fix/);
+    // The working tree and the current branch are left alone.
+    assert.equal(git("status", "--porcelain", "--untracked-files=no"), "");
+    assert.equal(git("branch", "--show-current").trim(), "main");
+    await assert.rejects(writeProofBranch(runner, again, { name: branch.name, experiments: target }), /already exists/);
+
     const bad = await prove(runner, { experiments: target, fix: { patch: wrong }, repeat: 2, regression });
     assert.equal(bad.verdict, "not proven");
     assert.match(bad.reasons.join("\n"), /double-submit still fails with the fix/);
+    await assert.rejects(writeProofBranch(runner, bad, { name: "windtunnel/wrong", experiments: target }), /not proven/);
   });
 });

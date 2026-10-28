@@ -21,6 +21,9 @@ const { values, positionals } = parseArgs({
     "no-schema": { type: "boolean", default: false },
     out: { type: "string" },
     prefix: { type: "string" },
+    affected: { type: "boolean", default: false },
+    branch: { type: "string" },
+    message: { type: "string" },
     help: { type: "boolean", short: "h", default: false },
   },
 });

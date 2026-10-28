@@ -57,7 +57,9 @@ export interface WebhookRecord {
   event: string;
   type: string;
   charge: string;
-  deliveries: { at: string; status: number | null; error?: string }[];
+  deliveries: { at: string; status: number | null; ms?: number; error?: string }[];
+  /** The app path deliveries were posted to. */
+  path?: string;
 }
 
 export interface RepInput {
@@ -102,7 +104,8 @@ interface Tab {
   reload(): Promise<void>;
 }
 
-type StepInstance = object;
+/** One run of a step in one tab; `started` is ms since the run started. */
+type StepInstance = { started: number };
 
 const MAX_CONSOLE = 100;
 
@@ -139,7 +142,11 @@ export class Rep {
         order: (input.variant.order ?? race.order) as RaceOrder,
       },
     });
-    this.webhooks = new WebhookControl(input.tenant, experiment.webhooks, this.active);
+    this.webhooks = new WebhookControl(input.tenant, experiment.webhooks, this.active, () => {
+      // When the earliest request that could have made the charge (not a GET, still waiting) was sent.
+      const pending = this.network.log.filter((r) => r.end === undefined && r.method !== "GET");
+      return pending.length ? Math.min(...pending.map((r) => r.start)) : undefined;
+    });
   }
 
   get race(): RaceRecord | undefined {
@@ -377,7 +384,7 @@ export class Rep {
     if (tab.current) return action();
 
     // Late webhooks wait for the whole step, retries included.
-    const instance: StepInstance = {};
+    const instance: StepInstance = { started: this.now() };
     this.active.add(instance);
     try {
       return await this.runStep(tab, name, action);
@@ -496,15 +503,22 @@ class WebhookControl {
   private readonly tenant?: Tenant;
   private readonly spec?: WebhookSpec;
   private readonly active: Set<StepInstance>;
+  private readonly chargeSentAt: () => number | undefined;
   private held: { event: MockEvent; waitFor: Set<StepInstance> }[] = [];
   /** Whether `out-of-order` ever had two or more events to reorder. */
   reordered = false;
   private chain: Promise<void> = Promise.resolve();
 
-  constructor(tenant: Tenant | undefined, spec: WebhookSpec | undefined, active: Set<StepInstance>) {
+  constructor(
+    tenant: Tenant | undefined,
+    spec: WebhookSpec | undefined,
+    active: Set<StepInstance>,
+    chargeSentAt: () => number | undefined,
+  ) {
     this.tenant = tenant;
     this.spec = spec;
     this.active = active;
+    this.chargeSentAt = chargeSentAt;
   }
 
   setup(): void {
@@ -517,9 +531,12 @@ class WebhookControl {
       ...(spec.timing === "normal" && spec.delay !== undefined ? { webhookDelayMs: spec.delay } : {}),
     });
     if (spec.timing === "late") {
-      // Held until every step running when the charge was made has finished.
+      // Held until the steps running when the paying request was sent have finished.
       tenant.onEvent = (event) => {
-        this.held.push({ event, waitFor: new Set(this.active) });
+        // Steps that began after the paying request was sent (e.g. one waiting for the confirmation)
+        // can't have made the charge, and may be waiting for this very webhook.
+        const sent = this.chargeSentAt();
+        this.held.push({ event, waitFor: new Set([...this.active].filter((s) => sent === undefined || s.started <= sent)) });
         setTimeout(() => this.flush(false), 0);
       };
     }
@@ -543,7 +560,7 @@ class WebhookControl {
       event: e.id,
       type: e.type,
       charge: e.data.object.id,
-      deliveries: e.deliveries.map(({ at, status, error }) => ({ at, status, ...(error ? { error } : {}) })),
+      deliveries: e.deliveries.map(({ at, status, error, durationMs }) => ({ at, status, ms: durationMs, ...(error ? { error } : {}) })),
     }));
   }
 

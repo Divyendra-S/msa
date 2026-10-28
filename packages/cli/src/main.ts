@@ -13,10 +13,11 @@ import {
   openProject,
   prove,
   Runner,
+  writeProofBranch,
   stopOnSignals,
   type TraceMode,
 } from "@windtunnel/core";
-import { buildAppMap, formatAppMap, readSchema } from "@windtunnel/explorer";
+import { buildAppMap, findAffected, formatAffected, formatAffectedRun, formatAppMap, readSchema } from "@windtunnel/explorer";
 import { findProjectDir, serveStdio, Workspace } from "@windtunnel/mcp";
 
 export interface Flags {
@@ -36,6 +37,9 @@ export interface Flags {
   "no-schema"?: boolean;
   out?: string;
   prefix?: string;
+  affected?: boolean;
+  branch?: string;
+  message?: string;
   help?: boolean;
 }
 
@@ -45,6 +49,7 @@ Usage: windtunnel <command> [options]
 
 Commands
   run [experiment…]   Run experiments (default: all in .windtunnel/experiments)
+  affected [exp…]     Which experiments the working tree's changes affect, and why (runs nothing)
   validate [exp…]     Check experiment files and flows, and run the rules on the seed data
   runs                List recent runs
   evidence <run>[/<n>/<part>]
@@ -64,6 +69,7 @@ Options
   --ref <git ref>     Code version to use (default: the working tree, uncommitted changes included)
   --patch <file>      Unified diff applied on top of the code version
   --repeat <n>        (run) repetitions per variant, overriding the experiment's repeat
+  --affected          (run) only experiments whose code changed since their last result; reuse the rest
   --trace <mode>      (run) Playwright traces: failures (default: runs that broke a rule or errored), on, off
   --headed            (run) show the browser
   --keep-db           (run, branch) keep run databases after stopping
@@ -71,6 +77,9 @@ Options
   --focus <text>      (map) only routes and pages whose path or file contains this
   --no-schema         (map) skip the database schema (no build or database needed)
   --base <git ref>    (prove) code with the bug (default HEAD)
+  --branch <name>     (prove) when proven, create this branch: the fix + the experiments as regression
+                      tests + .windtunnel/evidence/<id>.md (the working tree is not touched)
+  --message <text>    (prove --branch) commit message (default: generated from the proof)
   --prefix <text>     (skills) prefix for skill names, e.g. windtunnel-
   --base-patch <file> (prove) diff applied to --base (default: the working tree) to get the code with
                       the bug; the fix is then --base itself unless --patch is given
@@ -88,6 +97,8 @@ export async function main(args: string[], flags: Flags): Promise<number> {
     switch (command) {
       case "run":
         return await run(args.slice(1), flags);
+      case "affected":
+        return await affected(args.slice(1), flags);
       case "validate":
         return await validate(args.slice(1), flags);
       case "runs":
@@ -116,7 +127,8 @@ export async function main(args: string[], flags: Flags): Promise<number> {
         return 1;
     }
   } catch (err) {
-    const message = err instanceof ConfigError ? err.message : ((err as Error).stack ?? String(err));
+    // Expected problems (config, git) read better without a stack trace.
+    const message = err instanceof ConfigError || (err as Error).name === "GitError" ? (err as Error).message : ((err as Error).stack ?? String(err));
     process.stderr.write(`error: ${message}\n`);
     return 1;
   }
@@ -230,9 +242,12 @@ async function run(ids: string[], flags: Flags): Promise<number> {
   const runner = await Runner.open(flags.cwd);
   stopOnSignals(() => runner.close());
   try {
-    const experiments = await loadExperiments(runner.project, ids);
-    if (experiments.length === 0) throw new ConfigError(`no experiments in ${runner.project.stateDir}/experiments`);
-    const results = await runner.run(experiments, {
+    const all = await loadExperiments(runner.project, ids);
+    if (all.length === 0) throw new ConfigError(`no experiments in ${runner.project.stateDir}/experiments`);
+    if (flags.affected && (flags.ref || flags.patch)) throw new ConfigError("--affected works on the working tree only (no --ref or --patch)");
+    const statuses = flags.affected ? await findAffected(runner, all, { repeat }) : undefined;
+    const experiments = statuses ? all.filter((e) => statuses.find((s) => s.experiment === e.id)?.status !== "cached") : all;
+    const results = experiments.length === 0 ? [] : await runner.run(experiments, {
       version: await versionSpec(flags),
       repeat,
       trace: trace as TraceMode,
@@ -242,8 +257,26 @@ async function run(ids: string[], flags: Flags): Promise<number> {
         ? undefined
         : (r) => process.stderr.write(`  ${r.outcome.padEnd(6)} ${r.experiment}${r.variant === "default" ? "" : ` [${r.variant}]`} #${r.rep}  ${r.durationMs} ms\n`),
     });
+    if (statuses) {
+      const cached = statuses.filter((s) => s.status === "cached");
+      print(flags, { results, cached }, `\n${formatAffectedRun(statuses, results)}`);
+      return [...results.map((r) => r.outcome), ...cached.map((c) => c.last!.outcome)].every((o) => o === "pass") ? 0 : 1;
+    }
     print(flags, results, `\n${formatResults(results)}`);
     return results.every((r) => r.outcome === "pass") ? 0 : 1;
+  } finally {
+    await runner.close();
+  }
+}
+
+async function affected(ids: string[], flags: Flags): Promise<number> {
+  const runner = await Runner.open(flags.cwd);
+  try {
+    const experiments = await loadExperiments(runner.project, ids);
+    const repeat = flags.repeat === undefined ? undefined : Number(flags.repeat);
+    const statuses = await findAffected(runner, experiments, { repeat });
+    print(flags, statuses.map(({ last, ...s }) => ({ ...s, lastRun: last?.runId, lastOutcome: last?.outcome })), formatAffected(statuses));
+    return 0;
   } finally {
     await runner.close();
   }
@@ -293,6 +326,7 @@ async function evidence(args: string[], flags: Flags): Promise<number> {
     const text = await drillDown(runner.store, handle, {
       rules: await loadRules(runner.project).catch(() => []),
       handlerFor: await workspace.handlerResolver().catch(() => undefined),
+      source: runner.project,
     });
     process.stdout.write(`${text}\n`);
     return 0;
@@ -315,26 +349,52 @@ async function map(flags: Flags): Promise<number> {
 
 async function proveCommand(ids: string[], flags: Flags): Promise<number> {
   if (ids.length === 0) throw new ConfigError("usage: windtunnel prove <experiment…> [--base <ref>] [--patch <fix.patch>] [--repeat <n>]");
-  const runner = await Runner.open(flags.cwd);
-  stopOnSignals(() => runner.close());
+  const workspace = new Workspace(flags.cwd ?? process.cwd());
+  const runner = await workspace.open();
+  stopOnSignals(() => workspace.close());
   try {
     const all = await loadExperiments(runner.project);
     const repeat = flags.repeat === undefined ? undefined : Number(flags.repeat);
     // With --base-patch the bug is a diff on top of --base (default: the working tree), and the fix is --base itself.
     const basePatch = flags["base-patch"] ? await readFile(resolve(flags["base-patch"]), "utf8") : undefined;
     const at = flags.base ? { ref: flags.base } : basePatch ? {} : { ref: "HEAD" };
+    if (flags.branch && basePatch) throw new ConfigError("--branch needs the bug to be in --base (a commit), not in --base-patch");
+    const targets = await loadExperiments(runner.project, ids);
     const proof = await prove(runner, {
-      experiments: await loadExperiments(runner.project, ids),
+      experiments: targets,
       base: { ...at, ...(basePatch ? { patch: basePatch } : {}) },
       fix: flags.patch ? { ...at, patch: await readFile(resolve(flags.patch), "utf8") } : basePatch ? at : {},
       repeat,
       regression: all.filter((e) => !ids.includes(e.id)),
+      reuse: !!flags.branch,
     });
-    print(flags, proof, formatProof(proof));
+    let text = formatProof(proof);
+    let branch: Awaited<ReturnType<typeof writeProofBranch>> | undefined;
+    if (flags.branch && proof.verdict === "proven") {
+      branch = await writeProofBranch(runner, proof, {
+        name: flags.branch,
+        parent: flags.base ?? "HEAD",
+        experiments: targets,
+        rules: await workspace.rules(),
+        handlerFor: await workspace.handlerResolver().catch(() => undefined),
+        message: flags.message,
+      });
+      text += `\n\n${formatBranch(branch)}`;
+    } else if (flags.branch) text += "\n\nNo branch created: the fix is not proven.";
+    print(flags, { ...proof, branch }, text);
     return proof.verdict === "proven" ? 0 : 1;
   } finally {
-    await runner.close();
+    await workspace.close();
   }
+}
+
+function formatBranch(b: { name: string; commit: string; added: string[]; evidenceCopy: string; remote?: string }): string {
+  return [
+    `Branch ${b.name} created (${b.commit.slice(0, 12)}): the fix${b.added.length ? " plus" : ""}`,
+    ...b.added.map((f) => `  ${f}`),
+    b.remote ? `Push it: git push -u ${b.remote} ${b.name}` : "No git remote is set up, so there is nowhere to push it yet.",
+    `PR text: ${b.evidenceCopy}`,
+  ].join("\n");
 }
 
 /** The plugin's skills folder: next to the CLI in a checkout of the repository. */

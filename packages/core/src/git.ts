@@ -105,6 +105,61 @@ export async function withoutPaths(root: string, base: CommitTree, paths: string
   });
 }
 
+/** Files that differ between two trees: `A` added, `D` deleted, `M` modified (renames count as both). */
+export async function changedFiles(root: string, from: string, to: string): Promise<{ status: "A" | "D" | "M"; path: string }[]> {
+  if (from === to) return [];
+  const out = await git(["diff-tree", "-r", "--no-renames", "--name-status", "-z", from, to], root);
+  const parts = out.split("\0").filter(Boolean);
+  const files: { status: "A" | "D" | "M"; path: string }[] = [];
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    const status = parts[i]!.charAt(0);
+    files.push({ status: status === "A" || status === "D" ? status : "M", path: parts[i + 1]! });
+  }
+  return files;
+}
+
+/** `git diff --stat` between two commits or trees, leaving out `exclude` paths. */
+export async function diffStat(root: string, from: string, to: string, exclude: string[] = []): Promise<string> {
+  return git(["diff", "--stat=100", from, to, "--", ".", ...exclude.map((p) => `:(exclude)${p}`)], root);
+}
+
+/**
+ * Creates branch `name` with one commit on top of `parent`: the files of `tree`, the
+ * `restore` folder as it is in `parent`, and `files` (repository path → file on disk).
+ * Never moves an existing branch, and never touches the working tree or the real index.
+ */
+export async function createBranchCommit(
+  root: string,
+  options: { name: string; parent: string; tree: string; restore?: string; files: { path: string; source: string }[]; message: string },
+): Promise<string> {
+  await git(["check-ref-format", "--branch", options.name], root).catch(() => {
+    throw new GitError(`not a valid branch name: ${options.name}`);
+  });
+  const parent = await git(["rev-parse", "--verify", `${options.parent}^{commit}`], root);
+  return withTempIndex(async (env) => {
+    await git(["read-tree", options.tree], root, env);
+    if (options.restore) {
+      const kept = await git(["rev-parse", "--verify", "--quiet", `${parent}:${options.restore}`], root).catch(() => "");
+      if (kept) await git(["read-tree", `--prefix=${options.restore}/`, kept], root, env);
+    }
+    const info: string[] = [];
+    for (const f of options.files) {
+      const blob = await git(["hash-object", "-w", f.source], root);
+      info.push("--cacheinfo", `100644,${blob},${f.path}`);
+    }
+    if (info.length) await git(["update-index", "--add", ...info], root, env);
+    const tree = await git(["write-tree"], root, env);
+    const commitArgs = ["commit-tree", tree, "-p", parent, "-m", options.message];
+    // The user's own name when git knows it, else a neutral one.
+    const { GIT_AUTHOR_DATE: _a, GIT_COMMITTER_DATE: _c, ...identity } = SNAPSHOT_ENV;
+    const commit = await git(commitArgs, root, env).catch(() => git(commitArgs, root, { ...env, ...identity }));
+    await git(["update-ref", `refs/heads/${options.name}`, commit, ""], root).catch((err: Error) => {
+      throw new GitError(/exists|reference already/.test(err.message) ? `branch ${options.name} already exists: pick another name` : err.message);
+    });
+    return commit;
+  });
+}
+
 export async function addWorktree(root: string, dir: string, commit: string): Promise<void> {
   await git(["worktree", "add", "--detach", "--force", dir, commit], root);
 }

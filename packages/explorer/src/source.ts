@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import ts from "typescript";
 
@@ -54,6 +54,8 @@ interface ParsedFile {
   /** local name → module file (resolved) + exported name */
   imports: Map<string, { file: string; name: string }>;
   functions: Map<string, ts.FunctionLikeDeclaration>;
+  /** Local files it loads at runtime: imports, re-exports, import(), require(); styles and data too. */
+  deps: string[];
 }
 
 /**
@@ -115,6 +117,11 @@ export class SourceIndex {
       out.push({ name, effects: await this.analyze(parsed, fn, 0, new Set()), ...(comment ? { comment } : {}) });
     }
     return out;
+  }
+
+  /** Local files a module loads at runtime (not `import type`). */
+  async dependencies(file: string): Promise<string[]> {
+    return (await this.parse(file))?.deps ?? [];
   }
 
   /** Exported HTTP method handlers of a Next.js route file. */
@@ -186,6 +193,28 @@ export class SourceIndex {
     const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, kind);
     const imports = new Map<string, { file: string; name: string }>();
     const functions = new Map<string, ts.FunctionLikeDeclaration>();
+    const deps = new Set<string>();
+    const specs: string[] = [];
+    const findLoads = (node: ts.Node): void => {
+      if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && !node.importClause?.isTypeOnly) {
+        specs.push(node.moduleSpecifier.text);
+      } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier) && !node.isTypeOnly) {
+        specs.push(node.moduleSpecifier.text);
+      } else if (
+        ts.isCallExpression(node) &&
+        (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === "require")) &&
+        node.arguments[0] &&
+        ts.isStringLiteralLike(node.arguments[0])
+      ) {
+        specs.push(node.arguments[0].text);
+      }
+      ts.forEachChild(node, findLoads);
+    };
+    findLoads(sf);
+    for (const spec of specs) {
+      const target = (await this.resolveModule(file, spec)) ?? (await this.resolveAsset(file, spec));
+      if (target) deps.add(target);
+    }
     for (const stmt of sf.statements) {
       if (ts.isImportDeclaration(stmt) && ts.isStringLiteral(stmt.moduleSpecifier) && stmt.importClause) {
         const target = await this.resolveModule(file, stmt.moduleSpecifier.text);
@@ -213,7 +242,7 @@ export class SourceIndex {
         if (ts.isArrowFunction(expr) || ts.isFunctionExpression(expr)) functions.set("default", expr);
       }
     }
-    return { file, sf, imports, functions };
+    return { file, sf, imports, functions, deps: [...deps] };
   }
 
   private async analyze(
@@ -334,7 +363,24 @@ export class SourceIndex {
     return target && fn ? { parsed: target, fn } : undefined;
   }
 
+  /** `./globals.css`, `@/data/x.json`: a local file named with its extension. */
+  private async resolveAsset(from: string, spec: string): Promise<string | undefined> {
+    if (!/\.[a-z0-9]+$/i.test(spec)) return undefined;
+    const base = await this.specBase(from, spec);
+    return base && (await stat(base).then((s) => s.isFile(), () => false)) ? base : undefined;
+  }
+
   private async resolveModule(from: string, spec: string): Promise<string | undefined> {
+    const base = await this.specBase(from, spec);
+    if (!base) return undefined;
+    for (const candidate of [base, ...[".ts", ".tsx", ".js", ".jsx", ".mjs"].map((e) => base + e), ...["index.ts", "index.tsx", "index.js"].map((f) => join(base, f))]) {
+      if (/\.(m?[jt]sx?)$/.test(candidate) && (await readFile(candidate, "utf8").then(() => true, () => false))) return candidate;
+    }
+    return undefined;
+  }
+
+  /** The path a relative or tsconfig `paths` specifier points at (before extensions); undefined for packages. */
+  private async specBase(from: string, spec: string): Promise<string | undefined> {
     let base: string | undefined;
     if (spec.startsWith(".")) base = resolve(dirname(from), spec);
     else {
@@ -348,11 +394,7 @@ export class SourceIndex {
         }
       }
     }
-    if (!base) return undefined;
-    for (const candidate of [base, ...[".ts", ".tsx", ".js", ".jsx", ".mjs"].map((e) => base + e), ...["index.ts", "index.tsx", "index.js"].map((f) => join(base, f))]) {
-      if (/\.(m?[jt]sx?)$/.test(candidate) && (await readFile(candidate, "utf8").then(() => true, () => false))) return candidate;
-    }
-    return undefined;
+    return base;
   }
 
   private tsPaths(): Promise<{ base: string; map: [string, string[]][] }> {

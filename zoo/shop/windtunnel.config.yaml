@@ -6,6 +6,8 @@ app:
   start: node_modules/.bin/next start --port $PORT
   baseUrl: http://127.0.0.1:$PORT
   ready: /api/health
+  # The shop's own tests: part of every proof's regression set.
+  test: pnpm -s test
   env:
     DATABASE_URL: $DATABASE_URL
     PAYMENT_API_URL: $MOCK_PAY_URL

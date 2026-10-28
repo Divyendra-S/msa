@@ -6,7 +6,8 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "verify": "node verify.ts"
+    "verify": "node verify.ts",
+    "prove": "node prove.ts"
   },
   "dependencies": {
     "@windtunnel/core": "workspace:*",

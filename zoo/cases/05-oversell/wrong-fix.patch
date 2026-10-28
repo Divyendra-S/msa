@@ -1,0 +1,90 @@
+--- a/zoo/shop/app/api/orders/route.ts
++++ b/zoo/shop/app/api/orders/route.ts
+@@ -1,6 +1,6 @@
+ import { getCurrentUser } from "@/lib/auth";
+-import { cartTotal, getCartItems, getCheckoutCart, getUserCart } from "@/lib/cart";
+-import { query, transaction } from "@/lib/db";
++import { type CartItem, cartTotal, getCartItems, getCheckoutCart, getUserCart } from "@/lib/cart";
++import { query, queryOne, transaction } from "@/lib/db";
+ import { createCharge } from "@/lib/payments";
+ 
+ interface Order {
+@@ -9,7 +9,6 @@
+   total_cents: number;
+ }
+ 
+-class OutOfStockError extends Error {}
+ class EmptyCartError extends Error {}
+ 
+ // Checkout: turn the user's cart into an order and charge it.
+@@ -24,9 +23,17 @@
+     : await getCheckoutCart(user.id);
+   if (!cart) return Response.json({ error: "Your cart is empty" }, { status: 400 });
+ 
+-  let order: Order;
++  // Fail fast if something in the cart sold out since it was added.
++  for (const item of await getCartItems(cart.id)) {
++    const product = await queryOne<{ stock: number }>("SELECT stock FROM products WHERE id = $1", [item.product_id]);
++    if (!product || product.stock < item.quantity) {
++      return Response.json({ error: `${item.name} is out of stock` }, { status: 409 });
++    }
++  }
++
++  let placed: { order: Order; created: boolean; items: CartItem[] };
+   try {
+-    order = await transaction(async (db) => {
++    placed = await transaction(async (db) => {
+       // Lock the cart and read it here, so nothing is added between reading it and ordering it.
+       await db.query("SELECT id FROM carts WHERE id = $1 FOR UPDATE", [cart.id]);
+       const items = await getCartItems(cart.id, db);
+@@ -43,14 +50,9 @@
+         const existing = await db.query<Order>("SELECT id, status, total_cents FROM orders WHERE cart_id = $1", [
+           cart.id,
+         ]);
+-        return existing.rows[0]!;
++        return { order: existing.rows[0]!, created: false, items };
+       }
+       for (const item of items) {
+-        const reserved = await db.query("UPDATE products SET stock = stock - $1 WHERE id = $2 AND stock >= $1", [
+-          item.quantity,
+-          item.product_id,
+-        ]);
+-        if (reserved.rowCount === 0) throw new OutOfStockError(item.name);
+         await db.query(
+           "INSERT INTO order_items (order_id, product_id, quantity, unit_price_cents) VALUES ($1, $2, $3, $4)",
+           [newOrder.id, item.product_id, item.quantity, item.price_cents],
+@@ -58,15 +60,13 @@
+       }
+       // The cart is this order now: anything added from here on goes into a new cart.
+       await db.query("UPDATE carts SET status = 'ordered' WHERE id = $1 AND status = 'open'", [cart.id]);
+-      return newOrder;
++      return { order: newOrder, created: true, items };
+     });
+   } catch (err) {
+     if (err instanceof EmptyCartError) return Response.json({ error: "Your cart is empty" }, { status: 400 });
+-    if (err instanceof OutOfStockError) {
+-      return Response.json({ error: `${err.message} is out of stock` }, { status: 409 });
+-    }
+     throw err;
+   }
++  const { order, created, items } = placed;
+ 
+   if (order.status === "paid" || order.status === "failed") {
+     return Response.json({ orderId: order.id, status: order.status });
+@@ -77,6 +77,16 @@
+     { amountCents: order.total_cents, orderId: order.id },
+     { idempotencyKey: `order-${order.id}` },
+   );
++  // Payment accepted: take the new order's items out of stock.
++  if (created) {
++    for (const item of items) {
++      // Check again: another buyer may have taken the last one while this payment ran.
++      const product = await queryOne<{ stock: number }>("SELECT stock FROM products WHERE id = $1", [item.product_id]);
++      if (product && product.stock >= item.quantity) {
++        await query("UPDATE products SET stock = stock - $1 WHERE id = $2", [item.quantity, item.product_id]);
++      }
++    }
++  }
+   // The payment webhook may already have marked the order paid; only move it forward from pending.
+   await query("UPDATE orders SET status = 'processing', charge_id = $2 WHERE id = $1 AND status = 'pending'", [
+     order.id,

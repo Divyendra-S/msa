@@ -8,6 +8,7 @@ import { allocatePort, releasePort } from "../ports.ts";
 import { openProject, type Project } from "../project.ts";
 import { type CodeVersion, type CodeVersionSpec, CodeVersions, type PreparedVersion } from "./code-versions.ts";
 import { PgServer } from "./postgres.ts";
+import { type SqlLog, SqlProxy } from "./sql-log.ts";
 
 export interface CreateBranchOptions {
   /** Keep the run database after stop() for inspection. */
@@ -40,11 +41,15 @@ export class Branch implements BranchInfo {
   readonly database: { name: string; url: string };
   readonly logDir: string;
   readonly payments?: { url: string; tenant: Tenant };
+  /** The app's statements, when SQL logging is on. */
+  readonly sql?: SqlLog;
   private readonly service: Service;
   private readonly teardown: () => Promise<void>;
   private stopping?: Promise<void>;
 
-  constructor(init: BranchInfo & { service: Service; payments?: Branch["payments"]; teardown: () => Promise<void> }) {
+  constructor(
+    init: BranchInfo & { service: Service; payments?: Branch["payments"]; sql?: SqlLog; teardown: () => Promise<void> },
+  ) {
     this.id = init.id;
     this.version = init.version;
     this.baseUrl = init.baseUrl;
@@ -52,6 +57,7 @@ export class Branch implements BranchInfo {
     this.database = init.database;
     this.logDir = init.logDir;
     this.payments = init.payments;
+    this.sql = init.sql;
     this.service = init.service;
     this.teardown = init.teardown;
   }
@@ -95,6 +101,7 @@ export class Branches {
   private readonly live = new Set<Branch>();
   private pruning?: Promise<string[]>;
   private mockPay?: Promise<MockPay>;
+  private sqlProxy?: Promise<SqlProxy | undefined>;
 
   constructor(project: Project) {
     this.project = project;
@@ -167,11 +174,17 @@ export class Branches {
       if (!options.keepDatabase) cleanup.push(() => this.pg.drop(dbName));
       await options.beforeStart?.({ name: dbName, url: dbUrl });
 
+      // The app reaches its database through the SQL proxy, which logs its statements.
+      const proxy = await this.startSqlProxy();
+      const sql = proxy?.record(dbName);
+      if (sql) cleanup.push(() => sql.stop());
+      const appDbUrl = proxy ? proxy.urlFor(dbUrl) : dbUrl;
+
       const port = await allocatePort();
       cleanup.push(() => releasePort(port));
       const baseUrl = expandVars(this.project.config.app.baseUrl, { PORT: String(port) }).replace(/\/$/, "");
 
-      const vars: Record<string, string> = { PORT: String(port), BASE_URL: baseUrl, DATABASE_URL: dbUrl };
+      const vars: Record<string, string> = { PORT: String(port), BASE_URL: baseUrl, DATABASE_URL: appDbUrl };
       let payments: Branch["payments"];
       const mockPayConfig = this.project.config.mockPay;
       if (mockPayConfig) {
@@ -192,7 +205,7 @@ export class Branches {
       const scope = { ...process.env, ...vars };
       // PORT, DATABASE_URL and BASE_URL are always set, so an app that forgets to
       // map them can't fall back to a developer database. `app.env` adds to or overrides them.
-      const env: Record<string, string> = { PORT: vars.PORT!, DATABASE_URL: dbUrl, BASE_URL: baseUrl };
+      const env: Record<string, string> = { PORT: vars.PORT!, DATABASE_URL: appDbUrl, BASE_URL: baseUrl };
       for (const [key, value] of Object.entries(this.project.config.app.env)) env[key] = expandVars(value, scope);
 
       const appLog = join(logDir, "app.log");
@@ -219,6 +232,7 @@ export class Branches {
         logDir,
         service,
         payments,
+        sql,
         teardown: async () => {
           this.live.delete(branch);
           await teardown();
@@ -233,13 +247,10 @@ export class Branches {
   }
 
   /**
-   * Every edit to the working tree is a new version, so old ones are removed:
-   * beyond the `keep` most recently used, any version idle for `idleMs` loses its
-   * worktree and seed snapshot. Versions in use here are never removed.
-   */
-  /**
-   * Removes the least recently used versions beyond `keep` (worktree and snapshot). One prune
-   * at a time; a version that can't be removed now is left for the next one.
+   * Every edit to the working tree is a new version, so old ones are removed: beyond the
+   * `keep` most recently used, any version idle for `idleMs` loses its worktree and seed
+   * snapshot. Versions in use are never removed. One prune at a time; a version that
+   * can't be removed now is left for the next one.
    */
   prune(keep = 10, idleMs = 30 * 60_000): Promise<string[]> {
     this.pruning ??= this.pruneOnce(keep, idleMs).finally(() => (this.pruning = undefined));
@@ -263,17 +274,27 @@ export class Branches {
     return removed;
   }
 
-
   /** Stops every live branch and releases shared resources. */
   async close(): Promise<void> {
     await Promise.allSettled([...this.live].map((b) => b.stop()));
     if (this.mockPay) await (await this.mockPay).close();
+    if (this.sqlProxy) await (await this.sqlProxy)?.close();
     await this.pg.close();
   }
 
   private startMockPay(): Promise<MockPay> {
     this.mockPay ??= MockPay.start();
     return this.mockPay;
+  }
+
+  /** One proxy for every branch; off when disabled in the config or the server needs TLS. */
+  private startSqlProxy(): Promise<SqlProxy | undefined> {
+    const { url, sqlLog } = this.project.config.db;
+    const u = new URL(url);
+    const tls = /^(require|verify-ca|verify-full)$/.test(u.searchParams.get("sslmode") ?? "") || u.searchParams.get("ssl") === "true";
+    if (!sqlLog || tls) return Promise.resolve(undefined);
+    this.sqlProxy ??= SqlProxy.start({ host: u.hostname || "127.0.0.1", port: Number(u.port || 5432) });
+    return this.sqlProxy;
   }
 }
 

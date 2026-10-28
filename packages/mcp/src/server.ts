@@ -7,8 +7,9 @@ import {
   formatResults,
   loadExperiments,
   prove,
+  writeProofBranch,
 } from "@windtunnel/core";
-import { buildAppMap, formatAppMap, readSchema } from "@windtunnel/explorer";
+import { buildAppMap, findAffected, formatAffectedRun, formatAppMap, readSchema } from "@windtunnel/explorer";
 import { z } from "zod";
 import { Workspace } from "./workspace.ts";
 
@@ -63,25 +64,29 @@ export function createServer(workspace: Workspace): McpServer {
         "Run experiments, each run in its own copy of the app and database, in parallel. Returns pass/fail/flaky per experiment with the rules broken and a run id for windtunnel_evidence. Default: every experiment on the working tree.",
       inputSchema: {
         experiments: z.array(z.string()).optional().describe("Experiment ids (default: all)"),
+        affected: z.boolean().optional().describe("Only experiments whose code changed since their last result; reuse the others"),
         repeat: z.number().int().min(1).max(50).optional().describe("Runs per ordering (default: each experiment's repeat)"),
         ref: z.string().optional().describe("Git ref to test instead of the working tree"),
         patch: z.string().optional().describe("Unified diff (or path to one) applied on top"),
       },
     },
-    tool(async ({ experiments: ids, repeat, ref, patch }, progress) => {
+    tool(async ({ experiments: ids, affected, repeat, ref, patch }, progress) => {
       const runner = await workspace.open();
-      const experiments = await loadExperiments(runner.project, ids ?? []);
-      if (experiments.length === 0) throw new ConfigError("no experiments yet: write one in .windtunnel/experiments/");
+      const all = await loadExperiments(runner.project, ids ?? []);
+      if (all.length === 0) throw new ConfigError("no experiments yet: write one in .windtunnel/experiments/");
+      if (affected && (ref || patch)) throw new ConfigError("affected works on the working tree only (no ref or patch)");
+      const statuses = affected ? await findAffected(runner, all, { repeat }) : undefined;
+      const experiments = statuses ? all.filter((e) => statuses.find((s) => s.experiment === e.id)?.status !== "cached") : all;
       let done = 0;
       const total = experiments.reduce((n, e) => n + (repeat ?? e.repeat), 0);
-      const results = await runner.run(experiments, {
+      const results = experiments.length === 0 ? [] : await runner.run(experiments, {
         version: await workspace.versionSpec({ ref, patch }),
         repeat,
         onRep: (r) => progress(++done, total, `${r.experiment} #${r.rep} ${r.outcome}`),
       });
       const failing = results.filter((r) => r.outcome !== "pass");
       return [
-        formatResults(results, runner.project.root),
+        statuses ? formatAffectedRun(statuses, results, runner.project.root) : formatResults(results, runner.project.root),
         failing.length ? `\nEvidence: windtunnel_evidence handle=<run> (e.g. ${failing[0]!.runId})` : "",
       ].join("");
     }),
@@ -100,6 +105,7 @@ export function createServer(workspace: Workspace): McpServer {
       return drillDown(runner.store, handle.trim(), {
         rules: await workspace.rules(),
         handlerFor: await workspace.handlerResolver().catch(() => undefined),
+        source: runner.project,
       });
     }),
   );
@@ -155,9 +161,11 @@ export function createServer(workspace: Workspace): McpServer {
         base: z.string().optional().describe("Git ref with the bug (default: HEAD)"),
         patch: z.string().optional().describe("The fix as a unified diff or path to one, applied on the base (default: the working tree)"),
         repeat: z.number().int().min(1).max(50).optional().describe("Runs per ordering (default: at least 5)"),
+        branch: z.string().optional().describe("When proven, create this git branch: fix + regression experiments + evidence file (working tree untouched)"),
+        message: z.string().optional().describe("Commit message for the branch (default: generated)"),
       },
     },
-    tool(async ({ experiments: ids, base, patch, repeat }) => {
+    tool(async ({ experiments: ids, base, patch, repeat, branch, message }) => {
       const runner = await workspace.open();
       const all = await loadExperiments(runner.project);
       const targets = await loadExperiments(runner.project, ids);
@@ -167,8 +175,26 @@ export function createServer(workspace: Workspace): McpServer {
         fix: patch ? await workspace.versionSpec({ ref: base ?? "HEAD", patch }) : {},
         repeat,
         regression: all.filter((e) => !ids.includes(e.id)),
+        reuse: !!branch,
       });
-      return formatProof(proof);
+      if (!branch) return formatProof(proof);
+      if (proof.verdict !== "proven") return `${formatProof(proof)}\n\nNo branch created: the fix is not proven.`;
+      const created = await writeProofBranch(runner, proof, {
+        name: branch,
+        parent: base ?? "HEAD",
+        experiments: targets,
+        rules: await workspace.rules(),
+        handlerFor: await workspace.handlerResolver().catch(() => undefined),
+        message,
+      });
+      return [
+        formatProof(proof),
+        "",
+        `Branch ${created.name} created (${created.commit.slice(0, 12)}) with the fix and: ${created.added.join(", ")}`,
+        created.remote
+          ? `Ask the user before pushing (git push -u ${created.remote} ${created.name}). PR text: ${created.evidenceCopy}`
+          : `The repository has no git remote. PR text: ${created.evidenceCopy}`,
+      ].join("\n");
     }),
   );
 

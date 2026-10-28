@@ -12,6 +12,7 @@ export {
   type WindtunnelConfig,
 } from "./config.ts";
 export { CommandError, Service, sh } from "./exec.ts";
+export { changedFiles } from "./git.ts";
 export { openProject, type Project } from "./project.ts";
 export { checkRules, loadRules, parseRules, type Rule, type RuleResult, RULES_FILE } from "./rules.ts";
 export { flow, type Flow, type FlowContext, type TestUser } from "./flow-api.ts";
@@ -30,6 +31,8 @@ export { DRILL_CHARS, drillDown, type EvidenceOptions, evidencePacket, PACKET_CH
 export { FLOWS_DIR, loadFlow, stepNames } from "./runner/flows.ts";
 export { formatProof, type ProofResult, prove, type ProveOptions, type RegressionResult } from "./runner/prove.ts";
 export { matchesRequest, parseRequestPattern, type RequestPattern } from "./runner/match.ts";
+export { experimentInputs, flowFiles } from "./runner/inputs.ts";
+export { type ProofBranch, type ProofBranchOptions, writeProofBranch } from "./runner/proof-branch.ts";
 export { formatResults } from "./runner/report.ts";
 export { type RequestRecord } from "./runner/network.ts";
 export { type StepRecord, type TraceMode } from "./runner/rep.ts";
@@ -41,6 +44,7 @@ export {
   type RepSummary,
   type RunOptions,
   Runner,
+  type TestRun,
   type VariantResult,
 } from "./runner/runner.ts";
 export { type RunIndexEntry, RunStore } from "./runner/store.ts";

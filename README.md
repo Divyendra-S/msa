@@ -9,19 +9,22 @@ and database, traces what broke, and proves a fix by re-running the experiment.
 - Product plan: [`plan.md`](plan.md)
 - Build plan by phase: [`execution-plan.md`](execution-plan.md)
 
-**Status:** Phases 1–3 are done: isolated branches; the experiment engine (flows,
+**Status:** Phases 1–4 are done: isolated branches; the experiment engine (flows,
 perturbations, ordered races, webhook control, rules, database diff, repeat runs, run
-store); and the agent connection: an MCP server, skills and a plugin for Claude Code, Codex
-and Muse Code, the static app map, evidence packets, a first prover, and Bug Zoo cases 1–7.
+store); the agent connection (an MCP server, skills and a plugin for Claude Code, Codex
+and Muse Code, the static app map, evidence packets, Bug Zoo cases 1–7); and fix proof (the
+prover with the project's tests in its regression set, proof branches with `EVIDENCE` files,
+the SQL trace chain, and re-running only the experiments a change affects).
 
 ## Layout
 
 ```
 packages/
   core/       config, isolated branches (worktree + Postgres copy + app process),
-              experiment runner (flows, perturbations, races, webhooks), rules, DB diff, run store,
-              evidence packets, prover
-  explorer/   static app map: Next.js routes, what each handler does, risky patterns, pages, schema
+              experiment runner (flows, perturbations, races, webhooks), rules, DB diff, SQL log,
+              run store, evidence packets and trace chain, prover and proof branches
+  explorer/   static app map: Next.js routes, what each handler does, risky patterns, pages, schema;
+              which experiments a code change affects
   mcp/        MCP server (map, validate, run, evidence, branch, prove)
   cli/        `windtunnel` CLI
   viewer/     (later phase) web viewer
@@ -33,10 +36,10 @@ zoo/
   shop/       Bug Zoo demo shop: Next.js + Postgres, standalone app with its own lockfile;
               its .windtunnel/ holds the reference flows, experiments and rules
   mock-pay/   mock payment provider: idempotent charges, signed webhooks, harness control
-  cases/      one bug patch per case + expected results + verifier
+  cases/      one bug patch per case + expected results + verifier; prover check
 docs/
   experiments.md   flow, experiment and rules reference
-  agents.md        skills, MCP tools, app map, evidence packets, proof
+  agents.md        skills, MCP tools, app map, evidence packets, trace chain, affected runs, proof
 ```
 
 ## Development setup
@@ -56,6 +59,7 @@ Checks:
 pnpm typecheck               # packages, tests and the shop's flow files
 pnpm test                    # unit + integration tests (branches, runner; need pnpm db:up)
 pnpm zoo:verify              # every shop experiment against the clean shop and each bug variant
+pnpm zoo:prove               # the prover: proves each case's real fix, rejects the wrong fixes
 ```
 
 TypeScript runs directly on Node (type stripping), so there is no build step in
@@ -100,6 +104,7 @@ webhooks: late
 
 ```sh
 pnpm wt --cwd zoo/shop run                          # every experiment, 3 runs each
+pnpm wt --cwd zoo/shop run --affected               # only experiments whose code changed since their last result
 pnpm wt --cwd zoo/shop run checkout-lost-response --patch zoo/cases/02-lost-response-retry/bug.patch
 pnpm wt --cwd zoo/shop validate                     # check files without running
 pnpm wt --cwd zoo/shop runs                         # recent runs
@@ -116,8 +121,9 @@ checkout-lost-response  FAIL    3 broken  one-charge-per-order 3/3  261028-12141
 1 experiment(s) · 3 run(s) · 2.5 s · details in zoo/shop/.windtunnel/runs/<run>
 ```
 
-Each run leaves steps, a request log, rule results, a row-level database diff, the app log
-and (for failures) a Playwright trace in `.windtunnel/runs/<run>/`. See
+Each run leaves steps, a request log, the app's SQL (through a logging proxy), rule results,
+a row-level database diff, the app log and (for failures) a Playwright trace in
+`.windtunnel/runs/<run>/`. See
 [`docs/experiments.md`](docs/experiments.md) for the full format.
 
 ## With a coding agent
@@ -136,6 +142,7 @@ The same steps from the shell:
 
 ```sh
 pnpm wt --cwd zoo/shop map --focus orders           # what each handler does, flagged patterns, schema
-pnpm wt --cwd zoo/shop evidence <run>               # evidence packet; <run>/1/diff:orders to drill down
+pnpm wt --cwd zoo/shop evidence <run>               # evidence packet; <run>/1/trace or /1/diff:orders to drill down
 pnpm wt --cwd zoo/shop prove checkout-two-buyers --base-patch zoo/cases/05-oversell/bug.patch
+pnpm wt --cwd zoo/shop prove checkout-two-buyers --branch windtunnel/fix-oversell   # bug in HEAD, fix in the working tree
 ```

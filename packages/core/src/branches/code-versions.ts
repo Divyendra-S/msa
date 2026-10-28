@@ -21,6 +21,8 @@ export interface CodeVersion {
   commit: string;
   tree: string;
   label: string;
+  /** The commit it builds on: the ref, or HEAD for the working tree (absent in a repository with no commits). */
+  base?: string;
 }
 
 export interface PreparedVersion {
@@ -53,11 +55,12 @@ export class CodeVersions {
   async resolve(spec: CodeVersionSpec = {}): Promise<CodeVersion> {
     const root = this.project.repoRoot;
     const exclude = [[this.project.appSubdir, ".windtunnel"].filter(Boolean).join("/").split(sep).join("/")];
+    const on = await resolveRef(root, spec.ref ?? "HEAD").then((r) => r.commit, () => undefined);
     let base = spec.ref ? await resolveRef(root, spec.ref) : await snapshotWorkingTree(root, exclude);
     if (spec.patch) base = await commitPatch(root, base.commit, spec.patch);
     if (spec.ref || spec.patch) base = await withoutPaths(root, base, exclude);
     const label = spec.label ?? [spec.ref ?? "working tree", spec.patch ? "+ patch" : ""].filter(Boolean).join(" ");
-    return { id: base.tree.slice(0, 12), commit: base.commit, tree: base.tree, label };
+    return { id: base.tree.slice(0, 12), commit: base.commit, tree: base.tree, label, ...(on ? { base: on } : {}) };
   }
 
   /** Checks out, installs and builds a version once; later calls reuse it. */

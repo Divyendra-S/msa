@@ -8,7 +8,9 @@ Everything lives in `.windtunnel/` next to `windtunnel.config.yaml`:
   flows/login.ts             how a test user logs in (used by login())
   experiments/<id>.yaml      flow + perturbations + rules + repeat count
   rules.yaml                 invariants: SQL that lists the rows breaking a rule
+  evidence/<id>.md           evidence for a proven fix (written into proof branches)
   runs/                      run store (git-ignored)
+  cache/proofs/              finished proofs, reused for branch output (git-ignored)
 ```
 
 Flows, experiments and rules are read from the working tree and are **not** part of the
@@ -128,7 +130,7 @@ Needs `mockPay` in the config.
 |---|---|
 | `duplicate` | Each event is delivered twice |
 | `early` | Delivered before the payment API answers the app |
-| `late` | Held until every step running when the charge was made has finished, in every tab (retries included) |
+| `late` | Held until the steps that were running when the paying request was sent have finished, in every tab (retries included); a step that started later (one waiting for the confirmation) doesn't hold it |
 | `out-of-order` | `late`, newest event first |
 | `{ delay: 3s }` | Each delivery waits this long (a slow provider; with `late`, counted from the release) |
 | `{ timing, times, order, delay }` | The long form: `timing: normal \| early \| late`, `times: 1–5`, `order: sent \| reverse` |
@@ -177,11 +179,13 @@ with the most common result).
 .windtunnel/runs/
   index.jsonl                        one line per run
   <run id>/                          one experiment on one code version
-    run.json                         summary: outcome, variants, rule counts, every run
+    run.json                         summary: outcome, variants, rule counts, every run, code tree,
+                                     inputs hash and the requests the app received (for --affected)
     experiment.json                  the experiment as run
     reps/<n>/
       result.json                    steps, actions, harness notes, rules, race, webhooks, charges, console
-      requests.json                  request log: tab, step, timing, status, harness notes
+      requests.json                  request log: tab, step, timing (sent to the app, answered), status, harness notes
+      sql.json                       the app's statements: SQL, parameters, result tag or error, timing, connection
       db-diff.json                   row-level diff against the seed, keyed by primary key
       app.log                        the app's output
       trace-<user>.zip               Playwright trace (runs that broke a rule or errored)
@@ -194,6 +198,7 @@ The newest 100 runs are kept.
 
 ```sh
 windtunnel run [experiment…]   # all experiments by default
+  --affected                   # only those whose code changed since their last result; reuse the rest
   --repeat <n>                 # override repeat
   --ref <ref> --patch <file>   # code version (default: the working tree)
   --trace failures|on|off      # Playwright traces (default: failures)
@@ -201,10 +206,12 @@ windtunnel run [experiment…]   # all experiments by default
   --headed                     # show the browser
   --json                       # results as JSON
 windtunnel validate [experiment…]  # also runs every rule on the seed data (each must hold there)
+windtunnel affected [experiment…]  # which experiments the working tree's changes affect, and why
 windtunnel runs [--limit n]
-windtunnel evidence <run>[/<n>/<part>]   # evidence packet, or steps|requests|diff[:table]|rule:<id>|log|console|webhooks
+windtunnel evidence <run>[/<n>/<part>]   # evidence packet, or steps|requests|sql[:table]|trace|diff[:table]|rule:<id>|log|console|webhooks
 windtunnel map [--focus text] [--no-schema]
 windtunnel prove <experiment…> [--base ref] [--base-patch file] [--patch file] [--repeat n]
+  --branch <name> [--message text]   # when proven: a branch with the fix, regression experiments and evidence
 ```
 
 `run` exits with 1 unless every experiment passes; `prove` exits with 1 unless the fix is

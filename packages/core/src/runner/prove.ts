@@ -1,7 +1,13 @@
+import { createHash } from "node:crypto";
+import { mkdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import type { CodeVersion, CodeVersionSpec } from "../branches/code-versions.ts";
 import { ConfigError } from "../config.ts";
+import { loadRules } from "../rules.ts";
+import { experimentInputs } from "./inputs.ts";
+import { writeJson } from "./store.ts";
 import type { Experiment } from "./experiment.ts";
-import type { ExperimentResult, Runner } from "./runner.ts";
+import type { ExperimentResult, Runner, TestRun } from "./runner.ts";
 
 export interface ProveOptions {
   /** Experiments that reproduce the bug: they must fail on `base` and pass on `fix`. */
@@ -14,6 +20,10 @@ export interface ProveOptions {
   repeat?: number;
   /** Experiments that must not get worse (default: every other experiment). */
   regression?: Experiment[];
+  /** Run the project's test command (`app.test`) on the base and the fix (default: when configured). */
+  tests?: boolean;
+  /** Return the last proof of exactly this (same code, experiments, rules, repeat) instead of running again. */
+  reuse?: boolean;
 }
 
 export interface RegressionResult {
@@ -32,7 +42,11 @@ export interface ProofResult {
   /** The base code run again after the fix passed: it must fail again. */
   revert: ExperimentResult[];
   regression: RegressionResult[];
+  /** The project's tests on the base and the fix, when configured. */
+  tests?: { base: TestRun; fix: TestRun };
   repeat: number;
+  /** Set when this is an earlier proof of the same thing, returned by `reuse`. */
+  reused?: string;
 }
 
 /**
@@ -52,13 +66,31 @@ export async function prove(runner: Runner, options: ProveOptions): Promise<Proo
   const targets = new Set(options.experiments.map((e) => e.id));
   const regression = (options.regression ?? []).filter((e) => !targets.has(e.id));
 
+  // Same code, experiments, rules and settings: the same proof.
+  const rules = await loadRules(runner.project);
+  const key = createHash("sha256");
+  key.update(JSON.stringify([base.tree, fix.tree, repeat, options.tests !== false]));
+  for (const e of [...options.experiments, ...regression]) key.update(`${e.id}:${await experimentInputs(runner.project, e, rules)}:${targets.has(e.id)}`);
+  const saved = join(runner.project.stateDir, "cache", "proofs", `${key.digest("hex").slice(0, 16)}.json`);
+  if (options.reuse) {
+    const previous = await readFile(saved, "utf8").then((t) => JSON.parse(t) as ProofResult, () => undefined);
+    if (previous) return { ...previous, reused: saved };
+  }
+
   const run = (version: CodeVersion, experiments: Experiment[], n?: number) =>
     experiments.length ? runner.run(experiments, { version, repeat: n }) : Promise.resolve([]);
-  const [baseResults, fixResults, baseRegression, fixRegression] = await Promise.all([
+  // The test suites run one after the other (they may share ports or files), alongside the experiments.
+  const testing = options.tests === false ? Promise.resolve(undefined) : (async () => {
+    const b = await runner.runTests(base);
+    const f = b && (await runner.runTests(fix));
+    return b && f ? { base: b, fix: f } : undefined;
+  })();
+  const [baseResults, fixResults, baseRegression, fixRegression, tests] = await Promise.all([
     run(base, options.experiments, repeat),
     run(fix, options.experiments, repeat),
     run(base, regression),
     run(fix, regression),
+    testing,
   ]);
   // Only after the fix passed: the bug must come back without it.
   const revert = await run(base, options.experiments, repeat);
@@ -90,27 +122,44 @@ export async function prove(runner: Runner, options: ProveOptions): Promise<Proo
   for (const r of regressions) {
     if (r.base === "pass" && r.fix !== "pass") reasons.push(`regression: ${r.experiment} passes on the base code but is ${r.fix} with the fix (run ${r.runId})`);
   }
+  if (tests?.base.ok && !tests.fix.ok) {
+    reasons.push(`regression: the project's tests (${tests.fix.command}) pass on the base code but fail with the fix (exit ${tests.fix.exitCode}; log ${tests.fix.log})`);
+  }
 
-  return {
+  const proof: ProofResult = {
     verdict: reasons.length === 0 ? "proven" : "not proven",
     reasons,
     base: { version: base, results: baseResults },
     fix: { version: fix, results: fixResults },
     revert,
     regression: regressions,
+    ...(tests ? { tests } : {}),
     repeat,
   };
+  await mkdir(join(runner.project.stateDir, "cache", "proofs"), { recursive: true });
+  await writeJson(saved, proof);
+  return proof;
 }
 
 export function formatProof(proof: ProofResult): string {
   const row = (stage: string, r: ExperimentResult) => {
-    const rules = new Map<string, number>();
-    for (const rep of r.reps) for (const id of rep.broken) rules.set(id, (rules.get(id) ?? 0) + 1);
-    const detail = r.outcome === "pass" ? `${r.reps.length}/${r.reps.length} ok` : [...rules].map(([id, n]) => `${id} ${n}/${r.reps.length}`).join(", ") || `${r.reps.filter((x) => x.outcome === "error").length}/${r.reps.length} errored`;
+    const errors = r.reps.filter((x) => x.outcome === "error").length;
+    let detail: string;
+    if (r.outcome === "pass") detail = `${r.reps.length}/${r.reps.length} ok${r.variants.length > 1 ? " (every ordering)" : ""}`;
+    else {
+      const rules = [...new Set(r.variants.flatMap((v) => Object.keys(v.rules)))];
+      // With several orderings, say which ones broke: "together 3/3 · alice,bob 0/3".
+      detail = rules
+        .map((id) => (r.variants.length > 1 ? `${id}: ${r.variants.map((v) => `${v.variant} ${v.rules[id] ?? 0}/${v.runs}`).join(" · ")}` : `${id} ${r.variants[0]!.rules[id]}/${r.variants[0]!.runs}`))
+        .join("; ");
+      if (errors) detail = [detail, `${errors}/${r.reps.length} errored`].filter(Boolean).join("; ");
+    }
     return `  ${stage.padEnd(7)} ${r.outcome.toUpperCase().padEnd(6)} ${detail.padEnd(40)} run ${r.runId}`;
   };
+  const code = (v: CodeVersion) => `${v.label}${v.base ? ` @ ${v.base.slice(0, 12)}` : ""} (version ${v.id})`;
   const lines = [
-    `Proof: base ${proof.base.version.id} (${proof.base.version.label}) → fix ${proof.fix.version.id} (${proof.fix.version.label}), ${proof.repeat} runs per ordering`,
+    `Proof: base ${code(proof.base.version)} → fix ${code(proof.fix.version)}, ${proof.repeat} runs per ordering`,
+    ...(proof.reused ? ["(the same proof as before: nothing changed since, so it was not run again)"] : []),
   ];
   for (const r of proof.base.results) {
     const variants = r.variants.length > 1 ? ` (${r.variants.length} orderings)` : "";
@@ -123,10 +172,17 @@ export function formatProof(proof: ProofResult): string {
   if (proof.regression.length) {
     const worse = proof.regression.filter((r) => r.base === "pass" && r.fix !== "pass");
     const already = proof.regression.filter((r) => r.base !== "pass");
+    const both = proof.regression.length - worse.length - already.length;
     lines.push(
-      `Regression set: ${proof.regression.length} other experiment(s) on the fix — ${worse.length ? `${worse.length} got worse: ${worse.map((r) => `${r.experiment} (${r.fix}, run ${r.runId})`).join(", ")}` : "none got worse"}`,
-      ...(already.length ? [`  already failing on the base code: ${already.map((r) => `${r.experiment} ${r.base}→${r.fix}`).join(", ")}`] : []),
+      `Regression set: ${proof.regression.length} other experiment(s): ${both} pass on base and fix${worse.length ? `; got worse: ${worse.map((r) => `${r.experiment} (${r.fix}, run ${r.runId})`).join(", ")}` : ""}`,
+      ...(already.length ? [`  already not passing on the base code: ${already.map((r) => `${r.experiment} ${r.base}→${r.fix}`).join(", ")}`] : []),
     );
+  }
+  if (proof.tests) {
+    const t = proof.tests;
+    const show = (x: TestRun) => `${x.ok ? "pass" : `fail (exit ${x.exitCode})`} in ${(x.durationMs / 1000).toFixed(1)} s`;
+    lines.push(`Project tests (${t.base.command}): base ${show(t.base)} · fix ${show(t.fix)}`);
+    if (!t.fix.ok) lines.push(...t.fix.tail.slice(-6).map((l) => `  | ${l}`), `  log: ${t.fix.log}`);
   }
   lines.push(`Verdict: ${proof.verdict.toUpperCase()}`, ...proof.reasons.map((r) => `  - ${r}`));
   return lines.join("\n");

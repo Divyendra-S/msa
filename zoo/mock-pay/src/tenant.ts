@@ -62,6 +62,14 @@ export interface CreateChargeInput {
   metadata?: Record<string, string>;
 }
 
+/** One create-charge request, including idempotent replays. */
+export interface ChargeCall {
+  /** Epoch ms. */
+  at: number;
+  charge: string;
+  replayed: boolean;
+}
+
 export interface CreateChargeResult {
   charge: Charge;
   /** The event the new charge produced; absent on a replay. */
@@ -79,6 +87,8 @@ export class Tenant {
   config: TenantConfig;
   readonly charges: Charge[] = [];
   readonly events: MockEvent[] = [];
+  /** Every create-charge request in order, replays too. */
+  readonly calls: ChargeCall[] = [];
   /** Called for every new event, before any delivery. */
   onEvent?: (event: MockEvent) => void;
   private readonly byIdempotencyKey = new Map<string, Charge>();
@@ -99,7 +109,10 @@ export class Tenant {
   createCharge(input: CreateChargeInput, idempotencyKey?: string): CreateChargeResult {
     if (idempotencyKey) {
       const existing = this.byIdempotencyKey.get(idempotencyKey);
-      if (existing) return { charge: existing, replayed: true };
+      if (existing) {
+        this.calls.push({ at: Date.now(), charge: existing.id, replayed: true });
+        return { charge: existing, replayed: true };
+      }
     }
     const charge: Charge = {
       id: this.nextId("ch"),
@@ -112,6 +125,7 @@ export class Tenant {
       created: unixNow(),
     };
     this.charges.push(charge);
+    this.calls.push({ at: Date.now(), charge: charge.id, replayed: false });
     if (idempotencyKey) this.byIdempotencyKey.set(idempotencyKey, charge);
 
     const event: MockEvent = {
@@ -161,6 +175,7 @@ export class Tenant {
     this.cancelTimers();
     this.onEvent = undefined;
     this.charges.length = 0;
+    this.calls.length = 0;
     this.events.length = 0;
     this.byIdempotencyKey.clear();
     this.seq.ch = 0;

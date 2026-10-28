@@ -23,6 +23,10 @@ export interface RequestRecord {
   type: string;
   /** ms since the run started. */
   start: number;
+  /** When it reached the app, if later than `start` (held or delayed); null when the app never saw it. */
+  sent?: number | null;
+  /** When the app's answer arrived (headers; a streamed body may take until `end`). */
+  response?: number;
   end?: number;
   status?: number;
   failure?: string;
@@ -145,6 +149,10 @@ export class Network {
         set.add(request);
       }
       this.recordFor(request);
+    });
+    context.on("response", (response) => {
+      const record = this.records.get(response.request());
+      if (record) record.response ??= this.now();
     });
     context.on("requestfinished", (request) => {
       const record = this.settle(request);
@@ -284,20 +292,24 @@ export class Network {
       case "delay":
         note(record, `delayed ${p.ms} ms`);
         await sleep(p.ms);
+        record.sent = Date.now() - this.t0;
         return this.forward(route, request);
       case "fail":
         note(record, `answered ${p.status} by the harness; the app never saw it`);
+        record.sent = null;
         return this.reply(request, () =>
           route.fulfill({ status: p.status, contentType: "text/plain", body: "Service unavailable (injected)" }),
         );
       case "lose-response": {
         const response = await route.fetch({ maxRedirects: 0 });
         await response.body().catch(() => undefined);
+        record.response ??= this.now();
         note(record, `response lost: the app answered ${response.status()}, the browser saw a network error`);
         return this.reply(request, () => route.abort(LOST_RESPONSE));
       }
       case "duplicate": {
         const [first, second] = await Promise.all([route.fetch({ maxRedirects: 0 }), route.fetch({ maxRedirects: 0 })]);
+        record.response ??= this.now();
         note(record, `sent to the app twice (${first.status()}, ${second.status()}); the browser got the first answer`);
         return this.reply(request, () => route.fulfill({ response: first }));
       }
@@ -337,6 +349,7 @@ export class Network {
     const go = async (entry: Parked, position: number) => {
       entry.state.parked -= 1;
       note(entry.record, race.order === "together" ? "released with the others" : `released ${ordinal(position)}`);
+      entry.record.sent = Date.now() - this.t0;
       try {
         const perturbation = this.takePerturbation(entry.request.method(), entry.request.url(), entry.tab);
         await (perturbation

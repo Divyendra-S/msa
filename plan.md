@@ -160,10 +160,10 @@ The output is a branch or PR with regression experiments and an evidence report,
 - **App pool:** one built app process per code version and slot, with `DATABASE_URL` pointing at that run's copy. Default 4 in parallel.
 - **Trace chain (MVP):**
   - **Request log:** request start and end come from Playwright routing.
-  - **SQL log:** Postgres runs with `log_statement=all` and timestamps.
+  - **SQL log:** the app reaches Postgres through a small wire-protocol proxy that records each statement with its parameters, command tag, error, timing and connection. This works with any Postgres server and needs no server settings or log access (`log_statement=all` was the first idea).
   - **Handler file:** the URL and method map to a handler file through the static index.
 
-  The harness runs steps one at a time, so time windows link each SQL statement to its request. The agent pinpoints the exact line by reading one handler file. OpenTelemetry comes later.
+  The harness runs steps one at a time, so time windows link each SQL statement to its request; where requests overlap (races), the evidence names every candidate rather than guessing, and transactions narrow it. The agent pinpoints the exact line by reading one handler file. OpenTelemetry comes later.
 
 ## 7. Core concepts
 
@@ -363,8 +363,9 @@ Assumes two people: **H** (harness and runner) and **A** (agent, plugin and view
 
 ```
 packages/
-  core/       config, branches (worktree, PG copy, app pool), runner, perturbations, rules, DB diff, run store, prover
-  explorer/   static index, crawler, Decider (rules / jev / handback), free sweep
+  core/       config, branches (worktree, PG copy, app pool, SQL log proxy), runner, perturbations, rules, DB diff,
+              run store, evidence + trace chain, prover + proof branches
+  explorer/   static index, affected experiments, crawler, Decider (rules / jev / handback), free sweep
   mcp/        MCP server (tools below)
   viewer/     local web UI
   cli/        `windtunnel` CLI: install, init, run, view, bench
@@ -392,6 +393,7 @@ plan.md
 app:
   build: pnpm build
   start: pnpm start --port $PORT
+  test: pnpm test             # optional: part of every proof's regression set
   baseUrl: http://localhost:$PORT
   env:
     DATABASE_URL: $DATABASE_URL
