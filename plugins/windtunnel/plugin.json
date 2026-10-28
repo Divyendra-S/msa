@@ -1,0 +1,6 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "windtunnel",
+  "version": "0.0.0",
+  "description": "Real-world failure experiments for web apps: hunt bugs (double clicks, lost responses, duplicate webhooks, races) against the real backend and database, and prove fixes."
+}

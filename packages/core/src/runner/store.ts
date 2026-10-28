@@ -58,7 +58,11 @@ export class RunStore {
 
   async read(id: string): Promise<unknown> {
     if (!/^[\w-]+$/.test(id)) throw new Error(`bad run id: ${id}`);
-    return JSON.parse(await readFile(join(this.dir, id, SUMMARY), "utf8"));
+    const text = await readFile(join(this.dir, id, SUMMARY), "utf8").catch((err: NodeJS.ErrnoException) => {
+      if (err.code === "ENOENT") throw new Error(`no finished run ${id} (windtunnel runs lists recent runs)`);
+      throw err;
+    });
+    return JSON.parse(text);
   }
 
   /** Keeps the newest `keep` runs. */

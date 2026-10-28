@@ -19,6 +19,8 @@ interface Case {
   id: string;
   title: string;
   experiment: string;
+  /** Only this race ordering must break (default: every run of the experiment). */
+  variant?: string;
   breaks: string[];
   handler: string;
   patch: string;
@@ -100,11 +102,16 @@ async function main(): Promise<number> {
         if (variant.id === "clean" && result.outcome !== "pass") {
           failures.push(`clean shop: ${experiment.id} is ${cell(result)} (run ${result.runId})`);
         }
-        if (variant.expected?.experiment === experiment.id) {
-          const runs = result.reps.length;
-          for (const id of variant.expected.breaks) {
-            const n = result.reps.filter((r) => r.broken.includes(id)).length;
-            if (n !== runs) failures.push(`${variant.id}: expected ${id} to break in ${runs}/${runs} runs, got ${n} (run ${result.runId})`);
+        const expected = variant.expected;
+        if (expected?.experiment === experiment.id) {
+          const reps = result.reps.filter((r) => !expected.variant || r.variant === expected.variant);
+          const where = expected.variant ? ` of variant ${expected.variant}` : "";
+          if (reps.length === 0) failures.push(`${variant.id}: no runs of variant ${expected.variant} (run ${result.runId})`);
+          for (const id of expected.breaks) {
+            const n = reps.filter((r) => r.broken.includes(id)).length;
+            if (n !== reps.length) {
+              failures.push(`${variant.id}: expected ${id} to break in ${reps.length}/${reps.length} runs${where}, got ${n} (run ${result.runId})`);
+            }
           }
         }
         return cell(result);

@@ -1,0 +1,4 @@
+description: The payment provider takes 3 seconds to send its webhook; the buyer waits on the order page.
+flow: checkout
+webhooks: { delay: 3s }
+repeat: 2

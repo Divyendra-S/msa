@@ -1,6 +1,6 @@
 --- a/zoo/shop/app/api/orders/route.ts
 +++ b/zoo/shop/app/api/orders/route.ts
-@@ -62,11 +62,7 @@
+@@ -72,11 +72,7 @@
      return Response.json({ orderId: order.id, status: order.status });
    }
  

@@ -40,7 +40,7 @@ export default async function CartPage() {
         </tbody>
       </table>
       <p className="price">Total: {formatPrice(cartTotal(items))}</p>
-      <PayButton />
+      <PayButton cartId={cart!.id} />
     </>
   );
 }

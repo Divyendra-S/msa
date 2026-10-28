@@ -1,5 +1,5 @@
 import { getCurrentUser } from "@/lib/auth";
-import { cartTotal, getCartItems, getOpenCart } from "@/lib/cart";
+import { cartTotal, getCartItems, getCheckoutCart, getUserCart } from "@/lib/cart";
 import { query, transaction } from "@/lib/db";
 import { createCharge } from "@/lib/payments";
 
@@ -10,20 +10,27 @@ interface Order {
 }
 
 class OutOfStockError extends Error {}
+class EmptyCartError extends Error {}
 
-// Checkout: turn the user's open cart into an order and charge it.
-export async function POST() {
+// Checkout: turn the user's cart into an order and charge it.
+export async function POST(req: Request) {
   const user = await getCurrentUser();
   if (!user) return Response.json({ error: "Please log in" }, { status: 401 });
 
-  const cart = await getOpenCart(user.id);
+  // The cart on the page the user paid from: a retry still finds it after it became an order.
+  const body = (await req.json().catch(() => ({}))) as { cartId?: unknown };
+  const cart = Number.isInteger(body.cartId)
+    ? await getUserCart(user.id, body.cartId as number)
+    : await getCheckoutCart(user.id);
   if (!cart) return Response.json({ error: "Your cart is empty" }, { status: 400 });
-  const items = await getCartItems(cart.id);
-  if (items.length === 0) return Response.json({ error: "Your cart is empty" }, { status: 400 });
 
   let order: Order;
   try {
     order = await transaction(async (db) => {
+      // Lock the cart and read it here, so nothing is added between reading it and ordering it.
+      await db.query("SELECT id FROM carts WHERE id = $1 FOR UPDATE", [cart.id]);
+      const items = await getCartItems(cart.id, db);
+      if (items.length === 0) throw new EmptyCartError();
       // One order per cart: a repeated or concurrent checkout gets the existing order back.
       const created = await db.query<Order>(
         `INSERT INTO orders (user_id, cart_id, total_cents) VALUES ($1, $2, $3)
@@ -49,9 +56,12 @@ export async function POST() {
           [newOrder.id, item.product_id, item.quantity, item.price_cents],
         );
       }
+      // The cart is this order now: anything added from here on goes into a new cart.
+      await db.query("UPDATE carts SET status = 'ordered' WHERE id = $1 AND status = 'open'", [cart.id]);
       return newOrder;
     });
   } catch (err) {
+    if (err instanceof EmptyCartError) return Response.json({ error: "Your cart is empty" }, { status: 400 });
     if (err instanceof OutOfStockError) {
       return Response.json({ error: `${err.message} is out of stock` }, { status: 409 });
     }

@@ -7,5 +7,11 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "@windtunnel/core": "workspace:*",
+    "@windtunnel/explorer": "workspace:*",
+    "zod": "^4.6.7"
   }
 }

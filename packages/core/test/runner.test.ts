@@ -2,132 +2,22 @@
 // against a tiny app with no guards. Needs the development Postgres (`pnpm db:up`).
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { PgServer } from "../src/branches/postgres.ts";
 import { clean } from "../src/cleanup.ts";
 import { ConfigError } from "../src/config.ts";
 import type { DbDiff } from "../src/runner/db-diff.ts";
 import { loadExperiments, parseExperiment } from "../src/runner/experiment.ts";
 import type { RequestRecord } from "../src/runner/network.ts";
 import type { StepRecord } from "../src/runner/rep.ts";
+import { drillDown, evidencePacket, PACKET_CHARS } from "../src/runner/evidence.ts";
+import { formatResults } from "../src/runner/report.ts";
+import { prove } from "../src/runner/prove.ts";
 import { type ExperimentResult, Runner } from "../src/runner/runner.ts";
-
-const PG_URL = process.env.WT_TEST_PG_URL ?? "postgres://postgres:postgres@127.0.0.1:55432/postgres";
-
-// Sends are not guarded in any way: no disabled button, no idempotency, no webhook dedupe.
-// A successful send navigates to /done, like a checkout going to its confirmation page.
-const SERVER = `const http = require("node:http");
-const { Pool } = require(process.env.WT_TEST_PG_MODULE);
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 5 });
-const PAY = process.env.PAYMENT_API_URL;
-const html = (body) => "<!doctype html><html><body>" + body + '<p id="year"></p>' +
-  '<script>document.getElementById("year").textContent = "year " + new Date().getUTCFullYear();</script></body></html>';
-const read = (req) => new Promise((r) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => r(b)); });
-const sid = (req) => { const m = /(?:^|; )sid=([^;]+)/.exec(req.headers.cookie || ""); return m ? decodeURIComponent(m[1]) : null; };
-
-http.createServer(async (req, res) => {
-  try {
-    const url = new URL(req.url, "http://x");
-    const user = sid(req);
-    if (req.method === "GET" && url.pathname === "/login") {
-      res.setHeader("content-type", "text/html");
-      return res.end(html('<form method="post" action="/login"><label>Email <input name="email"></label><label>Password <input name="password" type="password"></label><button>Log in</button></form>'));
-    }
-    if (req.method === "POST" && url.pathname === "/login") {
-      const form = new URLSearchParams(await read(req));
-      res.writeHead(303, { "set-cookie": "sid=" + encodeURIComponent(form.get("email")) + "; Path=/; HttpOnly", location: "/" });
-      return res.end();
-    }
-    if (req.method === "GET" && url.pathname === "/") {
-      res.setHeader("content-type", "text/html");
-      return res.end(html('<p>user: ' + (user || "nobody") + '</p><button id="send">Send</button><p id="status"></p>' +
-        '<script>document.getElementById("send").onclick = async () => { const s = document.getElementById("status"); s.textContent = "Sending";' +
-        'try { const r = await fetch("/api/send", { method: "POST" }); if (r.ok) location.href = "/done?id=" + (await r.json()).id; else s.textContent = "Failed " + r.status; }' +
-        'catch { s.textContent = "Network error"; } };</script>'));
-    }
-    if (req.method === "GET" && url.pathname === "/done") {
-      res.setHeader("content-type", "text/html");
-      return res.end(html("<p>Sent " + Number(url.searchParams.get("id")) + "</p>"));
-    }
-    if (req.method === "POST" && url.pathname === "/api/send") {
-      if (!user) { res.writeHead(401); return res.end("{}"); }
-      await new Promise((r) => setTimeout(r, 30));
-      const { rows } = await pool.query("INSERT INTO hits (who) VALUES ($1) RETURNING id", [user]);
-      if (PAY) await fetch(PAY + "/v1/charges", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ amount: 100 }) });
-      res.setHeader("content-type", "application/json");
-      return res.end(JSON.stringify({ id: rows[0].id }));
-    }
-    if (req.method === "POST" && url.pathname === "/hook") {
-      const event = JSON.parse(await read(req));
-      await pool.query("INSERT INTO hooks (event_id) VALUES ($1)", [event.id]);
-      return res.end("ok");
-    }
-    res.writeHead(404);
-    res.end("not found");
-  } catch (err) {
-    res.writeHead(500);
-    res.end(String(err));
-  }
-}).listen(Number(process.env.PORT), "127.0.0.1");
-`;
-
-const SEED = `const { Client } = require(process.env.WT_TEST_PG_MODULE);
-(async () => {
-  const db = new Client({ connectionString: process.env.DATABASE_URL });
-  await db.connect();
-  await db.query("CREATE TABLE hits (id serial PRIMARY KEY, who text NOT NULL)");
-  await db.query("CREATE TABLE hooks (id serial PRIMARY KEY, event_id text NOT NULL)");
-  await db.end();
-})();
-`;
-
-const CONFIG = `app:
-  start: node server.cjs
-  env:
-    PAYMENT_API_URL: $MOCK_PAY_URL
-db:
-  kind: postgres
-  url: ${PG_URL}
-  seed: node seed.cjs
-mockPay:
-  webhookPath: /hook
-  webhookDelayMs: 20
-users:
-  alice: { email: alice@example.test, password: a }
-  bob: { email: bob@example.test, password: b }
-parallel: 4
-`;
-
-const RULES = `at-most-one-hit:
-  sql: SELECT count(*) AS hits FROM hits HAVING count(*) > 1
-one-hook-per-event:
-  sql: SELECT event_id, count(*) AS deliveries FROM hooks GROUP BY event_id HAVING count(*) > 1
-`;
-
-const LOGIN_FLOW = `import { flow } from "windtunnel";
-
-export default flow(async ({ page, user }) => {
-  await page.goto("/login");
-  await page.getByLabel("Email").fill(user.email);
-  await page.getByLabel("Password").fill(user.password);
-  await page.getByRole("button", { name: "Log in" }).click();
-  await page.waitForURL("/");
-});
-`;
-
-const SEND_FLOW = `import { flow } from "windtunnel";
-
-export default flow(async ({ page, step, login, params }) => {
-  await login();
-  await step("open", () => page.goto("/"));
-  await step("send", () => page.getByRole("button", { name: "Send" }).click());
-  await step("result", () => page.getByText(new RegExp(params.expect ?? "^Sent \\\\d+$")).waitFor());
-});
-`;
+import { loadRules } from "../src/rules.ts";
+import { createFixtureRepo, pgAvailable, SEED, SERVER } from "./fixture.ts";
 
 const EXPERIMENTS: Record<string, string> = {
   plain: "flow: send",
@@ -161,6 +51,16 @@ race: { request: POST /api/send, order: each }`,
 clock: 2031-05-01T00:00:00Z
 params: { expect: "^year 2032$" }
 perturb: [{ do: advance-clock, step: open, by: 400d }]`,
+  "sql-state": `flow: send
+perturb: [{ do: sql, step: send, sql: "INSERT INTO hits (who) VALUES ('ghost')" }]`,
+  "second-tab-order": `flow: send
+perturb: [{ do: second-tab, step: send }]
+race: { request: POST /api/send, order: ["alice#2", alice] }`,
+  "webhook-delay": "flow: send\nwebhooks: { delay: 700ms }",
+  "not-exercised": `flow: send
+perturb: [{ do: lose-response, request: POST /api/nothing }]
+race: { request: GET /nowhere, timeout: 200ms }
+webhooks: out-of-order`,
   "duplicate-webhook": "flow: send\nwebhooks: duplicate",
   "late-webhook": "flow: send\nwebhooks: late",
   "out-of-order-webhooks": `flow: send
@@ -168,18 +68,6 @@ users: [alice, bob]
 race: { request: POST /api/send }
 webhooks: out-of-order`,
 };
-
-async function pgAvailable(): Promise<boolean> {
-  const probe = new PgServer(PG_URL);
-  try {
-    await probe.ping();
-    return true;
-  } catch {
-    return false;
-  } finally {
-    await probe.close().catch(() => undefined);
-  }
-}
 
 describe("runner", { skip: !(await pgAvailable()) && "Postgres not reachable (pnpm db:up)" }, () => {
   let repo: string;
@@ -206,27 +94,9 @@ describe("runner", { skip: !(await pgAvailable()) && "Postgres not reachable (pn
     (await repFile<DbDiff>(id, "db-diff.json", rep)).tables.hits?.added ?? [];
 
   before(async () => {
-    repo = await realpath(await mkdtemp(join(tmpdir(), "wt-runner-")));
+    repo = await createFixtureRepo(EXPERIMENTS);
     cache = await mkdtemp(join(tmpdir(), "wt-cache-"));
     process.env.WINDTUNNEL_CACHE_DIR = cache;
-    process.env.WT_TEST_PG_MODULE = createRequire(import.meta.url).resolve("pg");
-    await writeFile(join(repo, "server.cjs"), SERVER);
-    await writeFile(join(repo, "seed.cjs"), SEED);
-    await writeFile(join(repo, "windtunnel.config.yaml"), CONFIG);
-    await mkdir(join(repo, ".windtunnel", "flows"), { recursive: true });
-    await mkdir(join(repo, ".windtunnel", "experiments"), { recursive: true });
-    await writeFile(join(repo, ".windtunnel", "rules.yaml"), RULES);
-    await writeFile(join(repo, ".windtunnel", "flows", "login.ts"), LOGIN_FLOW);
-    await writeFile(join(repo, ".windtunnel", "flows", "send.ts"), SEND_FLOW);
-    for (const [id, text] of Object.entries(EXPERIMENTS)) {
-      await writeFile(join(repo, ".windtunnel", "experiments", `${id}.yaml`), `${text}\nrepeat: 1\n`);
-    }
-    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo });
-    git("init", "-q", "-b", "main");
-    git("config", "user.email", "t@example.test");
-    git("config", "user.name", "t");
-    git("add", ".");
-    git("commit", "-q", "-m", "init");
 
     runner = await Runner.open(repo);
     for (const result of await runner.run(await loadExperiments(runner.project))) results.set(result.experiment, result);
@@ -322,6 +192,41 @@ describe("runner", { skip: !(await pgAvailable()) && "Postgres not reachable (pn
     }
   });
 
+  it("sql perturbation changes the run's database before the step", async () => {
+    assertOutcome("sql-state", "fail");
+    const { steps } = await repFile<{ steps: StepRecord[] }>("sql-state", "result.json");
+    const send = steps.find((step) => step.step === "send")!;
+    assert.match(send.harness?.join(" ") ?? "", /ran SQL \(1 row\(s\)\): INSERT INTO hits/);
+    assert.deepEqual((await addedHits("sql-state")).map((h) => h.who).sort(), ["alice@example.test", "ghost"]);
+  });
+
+  it("races can name the second tab in their order", async () => {
+    assertOutcome("second-tab-order", "fail");
+    const requests = await sendRequests("second-tab-order");
+    const byTab = Object.fromEntries(requests.map((r) => [r.tab, r]));
+    assert.ok(byTab["alice#2"] && byTab.alice, "both tabs sent");
+    assert.ok(byTab["alice#2"]!.end! <= byTab.alice!.end!, "the second tab's request was released and answered first");
+  });
+
+  it("delays webhooks by a fixed time", async () => {
+    assertOutcome("webhook-delay", "pass");
+    const [send] = await sendRequests("webhook-delay");
+    const { startedAt, webhooks } = await repFile<{ startedAt: string; webhooks: { deliveries: { at: string }[] }[] }>("webhook-delay", "result.json");
+    const deliveredAt = Date.parse(webhooks[0]!.deliveries[0]!.at) - Date.parse(startedAt);
+    assert.ok(deliveredAt - send!.end! >= 650, `delivered ${deliveredAt - send!.end!} ms after the charge`);
+  });
+
+  it("warns about parts of an experiment that never took effect", async () => {
+    const result = results.get("not-exercised")!;
+    assert.equal(result.outcome, "pass");
+    assert.deepEqual(result.warnings, [
+      "lose-response POST /api/nothing: no request matched (1/1 runs)",
+      "race on GET /nowhere: no request matched, nothing was held (1/1 runs)",
+      "webhooks out-of-order: never more than one event at a time, nothing was reordered (1/1 runs)",
+    ]);
+    assert.match(formatResults([result]), /not exercised \(a pass here proves less\):\n {2}not-exercised: lose-response POST \/api\/nothing: no request matched/);
+  });
+
   it("fake clock: fixed start time, advanced before a step", async () => {
     const result = results.get("clock")!;
     assert.equal(result.outcome, "pass", result.variants[0]!.firstError?.message);
@@ -369,5 +274,65 @@ describe("runner", { skip: !(await pgAvailable()) && "Postgres not reachable (pn
       assert.match(err.message, /unknown rule "nope"/);
       return true;
     });
+  });
+
+  it("evidence packet: broken rule, harness notes, short, with drill-down handles", async () => {
+    const result = results.get("lost-response")!;
+    const rules = await loadRules(runner.project);
+    const packet = await evidencePacket(runner.store, result.runId, { rules, handlerFor: (m, p) => (p === "/api/send" ? "server.cjs" : undefined) });
+    assert.ok(packet.length < PACKET_CHARS, `packet is ${packet.length} chars`);
+    assert.match(packet, /Result: FAIL — at-most-one-hit broken in 1\/1 runs/);
+    assert.match(packet, /Rule at-most-one-hit broken/);
+    assert.match(packet, /\[harness\] response lost/);
+    assert.match(packet, /POST \/api\/send → server\.cjs/);
+    assert.match(packet, /hits: \+\{id: 1, who: alice@example\.test\} \+\{id: 2/);
+
+    const requests = await drillDown(runner.store, `${result.runId}/1/requests`, { rules });
+    assert.match(requests, /alice \/ send POST \/api\/send ✗ net::ERR_CONNECTION_RESET \[harness\]/);
+    assert.match(await drillDown(runner.store, `${result.runId}/1/diff:hits`), /hits: \+/);
+    assert.match(await drillDown(runner.store, `${result.runId}/1/rule:at-most-one-hit`, { rules }), /SQL: SELECT count\(\*\)/);
+    await assert.rejects(drillDown(runner.store, `${result.runId}/1/nope`), /unknown handle part "nope"/);
+    await assert.rejects(drillDown(runner.store, `${result.runId}/9`), /has runs 1–1/);
+  });
+
+  it("proves a real fix and rejects a wrong one", async () => {
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo }).toString();
+    const patchFor = async (server: string, seed: string) => {
+      await writeFile(join(repo, "server.cjs"), server);
+      await writeFile(join(repo, "seed.cjs"), seed);
+      const diff = git("diff");
+      git("checkout", "--", ".");
+      return diff;
+    };
+    const insert = `await pool.query("INSERT INTO hits (who) VALUES ($1) RETURNING id", [user]);`;
+    // Real fix: one row per user, enforced by the database.
+    const fix = await patchFor(
+      SERVER.replace(insert, `await pool.query("INSERT INTO hits (who) VALUES ($1) ON CONFLICT (who) DO UPDATE SET who = EXCLUDED.who RETURNING id", [user]);`),
+      SEED.replace("who text NOT NULL)", "who text NOT NULL UNIQUE)"),
+    );
+    // Wrong fix: check first, then insert; both requests pass the check.
+    const wrong = await patchFor(
+      SERVER.replace("await new Promise((r) => setTimeout(r, 30));", `const seen = await pool.query("SELECT 1 FROM hits WHERE who = $1", [user]); if (seen.rowCount) { res.end('{"id":0}'); return; } await new Promise((r) => setTimeout(r, 30));`),
+      SEED,
+    );
+    const all = await loadExperiments(runner.project);
+    const target = all.filter((e) => e.id === "double-submit");
+    const regression = all.filter((e) => e.id === "plain" || e.id === "fail-503");
+
+    const good = await prove(runner, { experiments: target, fix: { patch: fix }, repeat: 2, regression });
+    assert.equal(good.verdict, "proven", good.reasons.join("; "));
+    assert.equal(good.base.results[0]!.outcome, "fail");
+    assert.equal(good.fix.results[0]!.outcome, "pass");
+    assert.equal(good.revert[0]!.outcome, "fail");
+    assert.deepEqual(good.regression.map((r) => `${r.experiment} ${r.base}→${r.fix}`).sort(), ["fail-503 pass→pass", "plain pass→pass"]);
+
+    // The base's evidence now points at the fix's passing run of the same experiment.
+    const packet = await evidencePacket(runner.store, good.revert[0]!.runId);
+    assert.match(packet, new RegExp(`Compared with passing run ${good.fix.results[0]!.runId} on version ${good.fix.version.id}`));
+    assert.match(packet, /database changes there: hits \+1/);
+
+    const bad = await prove(runner, { experiments: target, fix: { patch: wrong }, repeat: 2, regression });
+    assert.equal(bad.verdict, "not proven");
+    assert.match(bad.reasons.join("\n"), /double-submit still fails with the fix/);
   });
 });

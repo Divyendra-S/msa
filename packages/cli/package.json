@@ -11,6 +11,8 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@windtunnel/core": "workspace:*"
+    "@windtunnel/core": "workspace:*",
+    "@windtunnel/explorer": "workspace:*",
+    "@windtunnel/mcp": "workspace:*"
   }
 }

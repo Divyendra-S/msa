@@ -1,0 +1,11 @@
+description: A staff member edits the same product in two tabs and saves both, one after the other.
+flow: edit-product
+users: [sam]
+params:
+  mayConflict: true
+perturb:
+  - do: second-tab
+    step: edit
+race:
+  request: PUT /api/products/:id
+  order: [sam, "sam#2"]

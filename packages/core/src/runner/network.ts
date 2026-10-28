@@ -54,6 +54,14 @@ function isPrefetch(request: Request): boolean {
 function tracked(request: Request): boolean {
   return TRACKED_TYPES.has(request.resourceType()) && !isPrefetch(request);
 }
+function pageOf(request: Request): Page | undefined {
+  try {
+    return request.frame().page();
+  } catch {
+    return undefined; // service worker requests have no frame
+  }
+}
+
 const LOST_RESPONSE = "connectionreset";
 const DROPPED = "canceled by the browser (page navigated away)";
 
@@ -66,6 +74,7 @@ interface ActivePerturbation {
   spec: NetworkPerturbation;
   pattern: RequestPattern;
   remaining: number;
+  matched: number;
 }
 
 interface Parked {
@@ -100,6 +109,7 @@ export class Network {
   private readonly states = new Map<BrowserContext, ContextState>();
   /** In-flight requests and the context they count against. */
   private readonly open = new WeakMap<Request, ContextState>();
+  private readonly openByPage = new Map<Page, Set<Request>>();
   private readonly work = new Set<Promise<unknown>>();
 
   constructor(options: {
@@ -114,6 +124,7 @@ export class Network {
       spec,
       pattern: parseRequestPattern(spec.request),
       remaining: spec.count === "all" ? Number.POSITIVE_INFINITY : spec.count,
+      matched: 0,
     }));
     if (options.race) this.raceSpec = { ...options.race, pattern: parseRequestPattern(options.race.request) };
   }
@@ -123,15 +134,27 @@ export class Network {
     this.states.set(context, state);
     context.on("request", (request) => {
       if (!tracked(request)) return;
+      const page = pageOf(request);
+      // A new document: the browser may never report on requests the old one left open.
+      if (page && request.isNavigationRequest() && request.frame() === page.mainFrame()) this.orphan(page);
       state.busy += 1;
       this.open.set(request, state);
+      if (page) {
+        let set = this.openByPage.get(page);
+        if (!set) this.openByPage.set(page, (set = new Set()));
+        set.add(request);
+      }
       this.recordFor(request);
     });
     context.on("requestfinished", (request) => {
       const record = this.settle(request);
       if (record) void request.response().then((r) => (record.status = r?.status()), () => undefined);
     });
-    context.on("requestfailed", (request) => this.settle(request, request.failure()?.errorText ?? "failed"));
+    context.on("requestfailed", (request) => {
+      const record = this.settle(request, request.failure()?.errorText ?? "failed");
+      // The app may have answered before the browser gave up (e.g. a 500, then a navigation).
+      if (record) void within(request.response(), 300).then((r) => r && (record.status = r.status()), () => undefined);
+    });
 
     const patterns = [...this.perturbations.map((p) => p.pattern), ...(this.raceSpec ? [this.raceSpec.pattern] : [])];
     await context.route(
@@ -163,11 +186,29 @@ export class Network {
     }
   }
 
+  /**
+   * Settles the requests a page left open when it started loading a new document: with the
+   * status if the answer had arrived, otherwise as dropped. Held race requests stay held.
+   */
+  private orphan(page: Page): void {
+    for (const request of this.openByPage.get(page) ?? []) {
+      if (this.parked.some((p) => p.request === request)) continue;
+      void within(request.response(), 300)
+        .catch(() => false as const)
+        .then((response) => {
+          const record = this.settle(request, response ? undefined : DROPPED);
+          if (record && response) record.status = response.status();
+        });
+    }
+  }
+
   /** Marks a request finished, once. Returns its record the first time. */
   private settle(request: Request, failure?: string): RequestRecord | undefined {
     const state = this.open.get(request);
     if (!state) return undefined;
     this.open.delete(request);
+    const page = pageOf(request);
+    if (page) this.openByPage.get(page)?.delete(request);
     state.busy -= 1;
     const record = this.recordFor(request);
     record.end = this.now();
@@ -219,6 +260,11 @@ export class Network {
     return route.fallback();
   }
 
+  /** Network perturbations that never matched a request. */
+  unused(): NetworkPerturbation[] {
+    return this.perturbations.filter((p) => p.matched === 0).map((p) => p.spec);
+  }
+
   private takePerturbation(method: string, url: string, tab: NetworkTab): NetworkPerturbation | undefined {
     for (const p of this.perturbations) {
       if (p.remaining <= 0) continue;
@@ -226,6 +272,7 @@ export class Network {
       if (p.spec.tab && p.spec.tab !== tab.label) continue;
       if (!matchesRequest(p.pattern, method, url)) continue;
       p.remaining -= 1;
+      p.matched += 1;
       return p.spec;
     }
     return undefined;

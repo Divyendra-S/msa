@@ -1,0 +1,9 @@
+id: 05-oversell
+title: Oversell
+summary: Stock is checked before the order and taken after payment, so two buyers released together both get the last item.
+experiment: checkout-two-buyers
+variant: together
+perturbation: Two buyers' checkouts released together for the last item
+breaks: [stock-non-negative]
+handler: app/api/orders/route.ts
+fix: Reserve stock in the order transaction with a conditional UPDATE … WHERE stock >= quantity.

@@ -101,6 +101,7 @@ Applied to a `step` (optionally only in `tab`).
 | `expire-session` (`cookie`) | Session cookies (or one cookie) are cleared before the step |
 | `advance-clock` (`by`) | The browser clock jumps forward before the step |
 | `second-tab` | A second tab of the same session opens on the current page and runs the flow from this step on |
+| `sql` (`sql`) | One SQL statement runs against the run's database before the first tab reaches the step, e.g. to expire sessions on the server: `UPDATE sessions SET expires_at = now()` |
 
 ### Ordered races
 
@@ -115,7 +116,9 @@ race:
 
 Matching requests are held until `count` have arrived, then released together or one at a
 time (each after the previous one's response). `order: each` runs `together` plus every
-ordering, each as its own variant.
+ordering, each as its own variant. With `step`, only requests made during that step are held.
+Sequential release shows ordering bugs; only `together` interleaves requests inside the app,
+where the window can be a few milliseconds (more data widens it).
 
 ### Payment webhooks
 
@@ -125,9 +128,10 @@ Needs `mockPay` in the config.
 |---|---|
 | `duplicate` | Each event is delivered twice |
 | `early` | Delivered before the payment API answers the app |
-| `late` | Held until the step that caused the charge (retries included) has finished |
+| `late` | Held until every step running when the charge was made has finished, in every tab (retries included) |
 | `out-of-order` | `late`, newest event first |
-| `{ timing, times, order }` | The long form: `timing: normal \| early \| late`, `times: 1–5`, `order: sent \| reverse` |
+| `{ delay: 3s }` | Each delivery waits this long (a slow provider; with `late`, counted from the release) |
+| `{ timing, times, order, delay }` | The long form: `timing: normal \| early \| late`, `times: 1–5`, `order: sent \| reverse` |
 
 Shorthands can be combined: `webhooks: [early, duplicate]`.
 
@@ -147,7 +151,13 @@ one-order-per-cart:
 ```
 
 Each query lists the rows that break the rule; it runs read-only against the run's
-database after the flow and webhooks have finished.
+database after the flow and webhooks have finished. Every run's database also holds a copy
+of the seed data in the `windtunnel_seed` schema (same table names), for rules that compare
+with the start, e.g. `JOIN windtunnel_seed.products s ON s.id = p.id`.
+
+Results list anything that never took effect under "not exercised": a network perturbation
+that matched no request, a race that held fewer requests than it waited for, webhooks when
+the app made no payment, out-of-order webhooks with only one event at a time.
 
 ## Results
 
@@ -190,8 +200,12 @@ windtunnel run [experiment…]   # all experiments by default
   --keep-db                    # keep run databases
   --headed                     # show the browser
   --json                       # results as JSON
-windtunnel validate [experiment…]
+windtunnel validate [experiment…]  # also runs every rule on the seed data (each must hold there)
 windtunnel runs [--limit n]
+windtunnel evidence <run>[/<n>/<part>]   # evidence packet, or steps|requests|diff[:table]|rule:<id>|log|console|webhooks
+windtunnel map [--focus text] [--no-schema]
+windtunnel prove <experiment…> [--base ref] [--base-patch file] [--patch file] [--repeat n]
 ```
 
-`run` exits with 1 unless every experiment passes.
+`run` exits with 1 unless every experiment passes; `prove` exits with 1 unless the fix is
+proven. See [`agents.md`](agents.md) for evidence packets, the app map and proofs.

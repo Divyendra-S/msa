@@ -1,0 +1,7 @@
+description: The session ends while the order page waits for a slow payment confirmation; the user logs in again.
+flow: checkout
+perturb:
+  - do: sql
+    step: confirmation
+    sql: UPDATE sessions SET expires_at = now()
+webhooks: { delay: 3s }

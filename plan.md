@@ -368,11 +368,12 @@ packages/
   mcp/        MCP server (tools below)
   viewer/     local web UI
   cli/        `windtunnel` CLI: install, init, run, view, bench
-skills/         init, hunt, prove, test: written once (SKILL.md), packaged for every host
 plugins/
-  claude-code/  plugin manifest, agents/windtunnel-helper.md (model: haiku), hooks/ (opt-in proof gate)
-  codex/        plugin manifest, .mcp.json
-  muse-code/    settings snippet (mcp_servers), .muse/hooks.json (opt-in proof gate)
+  windtunnel/   one plugin folder for Claude Code and Codex: skills/ (init, hunt, prove, test: written
+                once), .claude-plugin/plugin.json + .mcp.json (Claude Code), plugin.json + mcp.json (Codex),
+                agents/windtunnel-helper.md (model: haiku), hooks/ (opt-in proof gate, later)
+  muse-code/    settings snippet (mcp_servers); skills copied from plugins/windtunnel/skills
+                with a prefix (`windtunnel skills --out .agents/skills --prefix windtunnel-`)
 apps/
   mac/          SwiftUI menu-bar app (stretch S8), a client of the daemon's local API
 zoo/
@@ -454,7 +455,7 @@ stock-non-negative:
 | `windtunnel_evidence` | Evidence packet for a run; drill-down by handle (step, request, SQL, diff) |
 | `windtunnel_branch` | Creates an isolated branch from a code ref or patch plus a snapshot |
 | `windtunnel_prove` | Proof matrix result: base / patch / revert / regression |
-| `windtunnel_decide` | Answers a decision the daemon handed back (selector, triage) |
+| `windtunnel_decide` | Answers a decision the daemon handed back (selector, triage). Added with the Decider (Phase 5); the first six tools shipped in Phase 3 |
 
 **Skills:** `init`, `hunt`, `prove`, `test`, shared by all hosts. **Subagent:** `windtunnel-helper` for routine leftovers (Muse Spark in the submission, Haiku on Claude). **Hook (opt-in):** Stop proof gate.
 

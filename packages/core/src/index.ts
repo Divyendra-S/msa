@@ -26,7 +26,10 @@ export {
   variantsOf,
 } from "./runner/experiment.ts";
 export { type DbDiff, diffSnapshots, snapshotDatabase } from "./runner/db-diff.ts";
-export { FLOWS_DIR, loadFlow } from "./runner/flows.ts";
+export { DRILL_CHARS, drillDown, type EvidenceOptions, evidencePacket, PACKET_CHARS } from "./runner/evidence.ts";
+export { FLOWS_DIR, loadFlow, stepNames } from "./runner/flows.ts";
+export { formatProof, type ProofResult, prove, type ProveOptions, type RegressionResult } from "./runner/prove.ts";
+export { matchesRequest, parseRequestPattern, type RequestPattern } from "./runner/match.ts";
 export { formatResults } from "./runner/report.ts";
 export { type RequestRecord } from "./runner/network.ts";
 export { type StepRecord, type TraceMode } from "./runner/rep.ts";

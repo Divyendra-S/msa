@@ -22,6 +22,7 @@ export async function Header() {
       {user ? (
         <>
           <Link href="/orders">Orders</Link>
+          {user.is_staff && <Link href="/admin/products">Admin</Link>}
           <Link href="/cart">Cart ({cart?.count ?? 0})</Link>
           <span className="muted">{user.name}</span>
           <LogoutButton />

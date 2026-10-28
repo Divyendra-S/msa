@@ -42,7 +42,7 @@ SELECT n.nspname AS schema, c.relname AS name,
   FROM pg_class c
   JOIN pg_namespace n ON n.oid = c.relnamespace
  WHERE c.relkind IN ('r', 'p') AND NOT c.relispartition
-   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+   AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'windtunnel_seed')
    AND n.nspname NOT LIKE 'pg\\_%'
  ORDER BY 1, 2`;
 

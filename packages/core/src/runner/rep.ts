@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
+import pg from "pg";
 import type { MockEvent, Tenant } from "@windtunnel/mock-pay";
 import type { Browser, BrowserContext, Page } from "playwright";
 import type { FlowContext, TestUser } from "../flow-api.ts";
@@ -8,7 +9,7 @@ import { isNetworkPerturbation } from "./experiment.ts";
 import type { LoadedFlow } from "./flows.ts";
 import { type ActionCall, describeAction, instrumentPage } from "./instrument.ts";
 import { Network, type RaceRecord, type RequestRecord } from "./network.ts";
-import { within } from "./time.ts";
+import { sleep, within } from "./time.ts";
 
 export type TraceMode = "off" | "failures" | "on";
 
@@ -32,6 +33,16 @@ export interface FlowError {
   tab: string;
   step?: string;
   message: string;
+  /** What the page showed when the flow failed. */
+  page?: PageState;
+}
+
+export interface PageState {
+  path: string;
+  /** Texts of role="alert" elements. */
+  alerts: string[];
+  /** The start of the visible text. */
+  text: string;
 }
 
 export interface ConsoleRecord {
@@ -54,6 +65,8 @@ export interface RepInput {
   variant: Variant;
   browser: Browser;
   baseUrl: string;
+  /** The branch's database, for `sql` perturbations. */
+  databaseUrl?: string;
   tenant?: Tenant;
   flow: LoadedFlow;
   login?: LoadedFlow;
@@ -108,6 +121,7 @@ export class Rep {
   private readonly tabByPage = new Map<Page, Tab>();
   private readonly running = new Set<Promise<void>>();
   private readonly active = new Set<StepInstance>();
+  private readonly sqlDone = new Set<BrowserPerturbation>();
   private readonly webhooks: WebhookControl;
   private closing = false;
 
@@ -151,6 +165,28 @@ export class Rep {
 
   webhookRecords(): WebhookRecord[] {
     return this.webhooks.records();
+  }
+
+  /** Parts of the experiment that never took effect in this run: a pass then proves less than it seems. */
+  warnings(): string[] {
+    const out: string[] = [];
+    for (const p of this.network.unused()) out.push(`${p.do} ${p.request}${p.step ? ` (step ${p.step})` : ""}: no request matched`);
+    const race = this.input.experiment.race;
+    if (race) {
+      const record = this.network.race;
+      const count = race.count ?? Math.max(2, this.input.tabs.length);
+      if (!record) out.push(`race on ${race.request}: no request matched, nothing was held`);
+      else if (record.timedOut && record.arrived.length < count) {
+        out.push(`race on ${race.request}: only ${record.arrived.length} of ${count} requests arrived; released after the timeout`);
+      }
+    }
+    const spec = this.input.experiment.webhooks;
+    if (spec && this.input.tenant) {
+      const events = this.input.tenant.events.length;
+      if (events === 0) out.push("webhooks: the app sent no payment, so no webhook was delivered");
+      else if (spec.order === "reverse" && !this.webhooks.reordered) out.push("webhooks out-of-order: never more than one event at a time, nothing was reordered");
+    }
+    return out;
   }
 
   /** Stops tracing (saving traces when asked) and closes the browser contexts. */
@@ -278,7 +314,8 @@ export class Rep {
         await this.input.flow.flow.run(this.contextFor(tab));
       } catch (err) {
         if (this.closing) return;
-        this.errors.push({ tab: tab.label, step: tab.lastStep, message: firstLine(err) });
+        const page = await pageState(tab.page);
+        this.errors.push({ tab: tab.label, step: tab.lastStep, message: firstLine(err), ...(page ? { page } : {}) });
         await this.screenshot(tab);
       }
     })();
@@ -360,6 +397,10 @@ export class Rep {
       } else if (p.do === "advance-clock") {
         await tab.session.context.clock.fastForward(p.by);
         notes.push(`clock advanced ${p.by} ms`);
+      } else if (p.do === "sql" && !this.sqlDone.has(p)) {
+        this.sqlDone.add(p);
+        const rows = await runSql(this.input.databaseUrl, p.sql);
+        notes.push(`ran SQL (${rows} row(s)): ${p.sql.replace(/\s+/g, " ").trim()}`);
       } else if (p.do === "second-tab" && !tab.isFork) {
         const fork = await this.fork(tab, name);
         notes.push(`opened a second tab (${fork.label}) at ${pathOf(tab.page.url())}`);
@@ -456,6 +497,8 @@ class WebhookControl {
   private readonly spec?: WebhookSpec;
   private readonly active: Set<StepInstance>;
   private held: { event: MockEvent; waitFor: Set<StepInstance> }[] = [];
+  /** Whether `out-of-order` ever had two or more events to reorder. */
+  reordered = false;
   private chain: Promise<void> = Promise.resolve();
 
   constructor(tenant: Tenant | undefined, spec: WebhookSpec | undefined, active: Set<StepInstance>) {
@@ -468,7 +511,11 @@ class WebhookControl {
     const { tenant, spec } = this;
     if (!tenant || !spec) return;
     const webhooks = spec.timing === "early" ? "early" : spec.timing === "late" ? "manual" : "auto";
-    tenant.configure({ webhooks, webhookTimes: spec.times });
+    tenant.configure({
+      webhooks,
+      webhookTimes: spec.times,
+      ...(spec.timing === "normal" && spec.delay !== undefined ? { webhookDelayMs: spec.delay } : {}),
+    });
     if (spec.timing === "late") {
       // Held until every step running when the charge was made has finished.
       tenant.onEvent = (event) => {
@@ -508,7 +555,10 @@ class WebhookControl {
     this.held = this.held.filter((h) => !ready.includes(h));
     const batch = this.spec.order === "reverse" ? ready.reverse() : ready;
     const times = this.spec.times;
+    if (batch.length > 1) this.reordered ||= this.spec.order === "reverse";
+    const delay = this.spec.delay ?? 0;
     this.chain = this.chain.then(async () => {
+      if (delay > 0) await sleep(delay);
       for (const h of batch) await tenant.deliver(h.event.id, times).catch(() => undefined);
     });
   }
@@ -524,5 +574,30 @@ function pathOf(url: string): string {
     return u.pathname + u.search;
   } catch {
     return url;
+  }
+}
+
+/** Runs one statement against the branch's database; returns the affected row count. */
+async function runSql(url: string | undefined, sql: string): Promise<number> {
+  if (!url) throw new Error("sql perturbation: this run has no database");
+  const client = new pg.Client({ connectionString: url, application_name: "windtunnel-perturb" });
+  client.on("error", () => undefined);
+  await client.connect();
+  try {
+    return (await client.query(sql)).rowCount ?? 0;
+  } finally {
+    await client.end();
+  }
+}
+
+/** Where the page is and what it says, for evidence when a flow fails. */
+async function pageState(page: Page): Promise<PageState | undefined> {
+  try {
+    const path = new URL(page.url()).pathname;
+    const alerts = (await within(page.getByRole("alert").allInnerTexts(), 1_000)) || [];
+    const body = (await within(page.locator("body").innerText({ timeout: 1_000 }), 1_500)) || "";
+    return { path, alerts: alerts.map((a) => a.trim()).filter(Boolean), text: body.replace(/\s+/g, " ").trim().slice(0, 300) };
+  } catch {
+    return undefined;
   }
 }

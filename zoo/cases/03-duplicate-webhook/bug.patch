@@ -16,7 +16,7 @@
        return;
 --- a/zoo/shop/db/schema.sql
 +++ b/zoo/shop/db/schema.sql
-@@ -64,10 +64,3 @@
+@@ -78,10 +78,3 @@
    amount_cents integer NOT NULL,
    created_at   timestamptz NOT NULL DEFAULT now()
  );

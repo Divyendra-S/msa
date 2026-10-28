@@ -3,7 +3,26 @@ import pg from "pg";
 const NAME = /^[a-z_][a-z0-9_]{0,62}$/;
 
 type Queryable = Pick<pg.Pool, "query">;
-const READY_COMMENT = "windtunnel snapshot (ready)";
+/** Bumped when snapshots change shape (v2: the windtunnel_seed schema), so older ones are rebuilt. */
+const READY_COMMENT = "windtunnel snapshot v2 (ready)";
+
+/** Read-only copy of the seed data in every snapshot, for rules that compare with the start. */
+export const SEED_SCHEMA = "windtunnel_seed";
+
+const COPY_SEED = `
+DO $$
+DECLARE t record;
+BEGIN
+  CREATE SCHEMA ${SEED_SCHEMA};
+  FOR t IN SELECT schemaname, tablename FROM pg_tables
+            WHERE schemaname NOT IN ('pg_catalog', 'information_schema', '${SEED_SCHEMA}')
+              AND schemaname NOT LIKE 'pg\\_%'
+  LOOP
+    EXECUTE format('CREATE TABLE ${SEED_SCHEMA}.%I AS TABLE %I.%I',
+      CASE WHEN t.schemaname = 'public' THEN t.tablename ELSE t.schemaname || '_' || t.tablename END,
+      t.schemaname, t.tablename);
+  END LOOP;
+END $$`;
 
 /**
  * Admin access to the Postgres server that holds snapshots and per-run copies.
@@ -91,6 +110,7 @@ export class PgServer {
       await db.query(`CREATE DATABASE ${ident(name)}`);
       try {
         await build(this.urlFor(name));
+        await copySeed(this.urlFor(name));
       } catch (err) {
         await this.drop(name, db).catch(() => undefined);
         throw err;
@@ -115,4 +135,15 @@ export class PgServer {
 function ident(name: string): string {
   if (!NAME.test(name)) throw new Error(`unsafe database name: ${name}`);
   return `"${name}"`;
+}
+
+async function copySeed(url: string): Promise<void> {
+  const client = new pg.Client({ connectionString: url, application_name: "windtunnel" });
+  client.on("error", () => undefined);
+  await client.connect();
+  try {
+    await client.query(COPY_SEED);
+  } finally {
+    await client.end();
+  }
 }

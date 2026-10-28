@@ -1,0 +1,8 @@
+id: 06-session-expiry
+title: Session expires mid-checkout
+summary: The session lookup ignores the server-side expiry (the cookie lasts as long as the session), so a checkout goes through on an expired session.
+experiment: checkout-session-expired
+perturbation: Session expired on the server before "Pay now"
+breaks: [orders-need-a-live-session]
+handler: lib/auth.ts
+fix: Check expires_at on every session lookup; the client sends the user to log in again and the cart is kept.

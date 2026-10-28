@@ -1,0 +1,9 @@
+description: The checkout response is lost and the payment webhook lands before the user clicks "Pay now" again.
+flow: checkout
+perturb:
+  - do: lose-response
+    request: POST /api/orders
+    step: pay
+  - do: repeat
+    step: pay
+webhooks: early

@@ -1,0 +1,8 @@
+id: 07-lost-update
+title: Lost update
+summary: Saving a product ignores the version the editor loaded, so the second of two edits silently overwrites the first.
+experiment: product-edit-two-tabs
+perturbation: Two tabs edit the same product and save one after the other
+breaks: [no-lost-update]
+handler: app/api/products/[id]/route.ts
+fix: Optimistic locking — UPDATE … WHERE version = <loaded version>, and answer 409 when nothing matched.

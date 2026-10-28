@@ -93,6 +93,7 @@ export class Branches {
   readonly pg: PgServer;
   private readonly slots: Semaphore;
   private readonly live = new Set<Branch>();
+  private pruning?: Promise<string[]>;
   private mockPay?: Promise<MockPay>;
 
   constructor(project: Project) {
@@ -121,7 +122,7 @@ export class Branches {
     const version = isResolved(spec) ? spec : await this.versions.resolve(spec);
     const isNew = !(await this.versions.list()).includes(version.id);
     const prepared = await this.versions.prepare(version);
-    if (isNew) await this.prune();
+    if (isNew) await this.prune().catch(() => []);
     await this.pg.ensureSnapshot(this.snapshotName(version.id), async (url) => {
       await sh(this.project.config.db.seed, {
         cwd: prepared.appDir,
@@ -130,6 +131,18 @@ export class Branches {
       });
     });
     return prepared;
+  }
+
+  /** Runs `fn` against a throwaway copy of a version's seed snapshot (no app process). */
+  async withSeedCopy<T>(spec: CodeVersionSpec | CodeVersion, fn: (url: string) => Promise<T>): Promise<T> {
+    const { version } = await this.prepare(spec);
+    const name = `${this.dbPrefix}run_${newBranchId()}`;
+    const url = await this.pg.clone(this.snapshotName(version.id), name);
+    try {
+      return await fn(url);
+    } finally {
+      await this.pg.drop(name).catch(() => undefined);
+    }
   }
 
   async create(spec: CodeVersionSpec | CodeVersion = {}, options: CreateBranchOptions = {}): Promise<Branch> {
@@ -224,18 +237,32 @@ export class Branches {
    * beyond the `keep` most recently used, any version idle for `idleMs` loses its
    * worktree and seed snapshot. Versions in use here are never removed.
    */
-  async prune(keep = 10, idleMs = 30 * 60_000): Promise<string[]> {
+  /**
+   * Removes the least recently used versions beyond `keep` (worktree and snapshot). One prune
+   * at a time; a version that can't be removed now is left for the next one.
+   */
+  prune(keep = 10, idleMs = 30 * 60_000): Promise<string[]> {
+    this.pruning ??= this.pruneOnce(keep, idleMs).finally(() => (this.pruning = undefined));
+    return this.pruning;
+  }
+
+  private async pruneOnce(keep: number, idleMs: number): Promise<string[]> {
     const inUse = new Set([...this.live].map((b) => b.version.id));
     const removed: string[] = [];
     const versions = await this.versions.listByLastUse();
     for (const { id, lastUsed } of versions.slice(keep)) {
-      if (inUse.has(id) || Date.now() - lastUsed < idleMs) continue;
-      await this.versions.remove(id);
-      await this.pg.drop(this.snapshotName(id));
-      removed.push(id);
+      if (inUse.has(id) || Date.now() - lastUsed < idleMs || (await this.versions.isBusy(id))) continue;
+      try {
+        await this.versions.remove(id);
+        await this.pg.drop(this.snapshotName(id));
+        removed.push(id);
+      } catch {
+        // Another process may be pruning the same version.
+      }
     }
     return removed;
   }
+
 
   /** Stops every live branch and releases shared resources. */
   async close(): Promise<void> {

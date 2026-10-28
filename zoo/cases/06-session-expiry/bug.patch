@@ -1,0 +1,11 @@
+--- a/zoo/shop/lib/auth.ts
++++ b/zoo/shop/lib/auth.ts
+@@ -18,7 +18,7 @@
+   const user = await queryOne<User>(
+     `SELECT u.id, u.email, u.name, u.is_staff
+        FROM sessions s JOIN users u ON u.id = s.user_id
+-      WHERE s.id = $1 AND s.expires_at > now()`,
++      WHERE s.id = $1`,
+     [sid],
+   );
+   return user ?? null;

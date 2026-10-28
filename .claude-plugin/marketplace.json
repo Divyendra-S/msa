@@ -1,0 +1,12 @@
+{
+  "name": "windtunnel",
+  "owner": { "name": "Wind Tunnel contributors" },
+  "metadata": { "description": "Wind Tunnel: real-world failure experiments for web apps" },
+  "plugins": [
+    {
+      "name": "windtunnel",
+      "source": "./plugins/windtunnel",
+      "description": "Hunt bugs with real-world failure experiments (double clicks, lost responses, duplicate webhooks, races) and prove fixes."
+    }
+  ]
+}

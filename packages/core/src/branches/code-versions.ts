@@ -70,14 +70,21 @@ export class CodeVersions {
     return pending;
   }
 
-  /** Prepared versions, most recently used first. */
+  /** Checked-out versions, most recently used first. One still being built counts from when it started. */
   async listByLastUse(): Promise<{ id: string; lastUsed: number }[]> {
     const result: { id: string; lastUsed: number }[] = [];
     for (const id of await this.list()) {
-      const info = await stat(join(this.worktreesDir, id, READY_MARKER)).catch(() => undefined);
+      const info =
+        (await stat(join(this.worktreesDir, id, READY_MARKER)).catch(() => undefined)) ??
+        (await stat(join(this.worktreesDir, id)).catch(() => undefined));
       result.push({ id, lastUsed: info?.mtimeMs ?? 0 });
     }
     return result.sort((a, b) => b.lastUsed - a.lastUsed);
+  }
+
+  /** Being prepared, here or in another process (which holds its lock). */
+  async isBusy(id: string): Promise<boolean> {
+    return this.inflight.has(id) || (await exists(join(this.worktreesDir, `${id}.lock`)));
   }
 
   async list(): Promise<string[]> {

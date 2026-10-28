@@ -2,12 +2,14 @@ CREATE TABLE users (
   id            serial PRIMARY KEY,
   email         text NOT NULL UNIQUE,
   name          text NOT NULL,
-  password_hash text NOT NULL
+  password_hash text NOT NULL,
+  is_staff      boolean NOT NULL DEFAULT false
 );
 
 CREATE TABLE sessions (
   id         text PRIMARY KEY,
   user_id    integer NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+  created_at timestamptz NOT NULL DEFAULT now(),
   expires_at timestamptz NOT NULL
 );
 
@@ -18,13 +20,25 @@ CREATE TABLE products (
   description text NOT NULL,
   price_cents integer NOT NULL CHECK (price_cents > 0),
   stock       integer NOT NULL,
+  -- Bumped on every edit; editors send the version they loaded.
   version     integer NOT NULL DEFAULT 1
+);
+
+-- Audit log of product edits by staff.
+CREATE TABLE product_changes (
+  id           serial PRIMARY KEY,
+  product_id   integer NOT NULL REFERENCES products (id),
+  user_id      integer NOT NULL REFERENCES users (id),
+  base_version integer NOT NULL,
+  new_version  integer NOT NULL,
+  changed_at   timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE carts (
   id         serial PRIMARY KEY,
   user_id    integer NOT NULL REFERENCES users (id),
-  status     text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'checked_out')),
+  -- open: shopping · ordered: became an order, waiting for payment · checked_out: paid
+  status     text NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'ordered', 'checked_out')),
   created_at timestamptz NOT NULL DEFAULT now()
 );
 

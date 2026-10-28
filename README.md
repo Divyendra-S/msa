@@ -9,20 +9,26 @@ and database, traces what broke, and proves a fix by re-running the experiment.
 - Product plan: [`plan.md`](plan.md)
 - Build plan by phase: [`execution-plan.md`](execution-plan.md)
 
-**Status:** Phases 1–2 are done: isolated branches, the Bug Zoo shop with cases 1–3,
-and the experiment engine (flows, perturbations, ordered races, webhook control, rules,
-database diff, repeat runs, run store, `windtunnel run`).
+**Status:** Phases 1–3 are done: isolated branches; the experiment engine (flows,
+perturbations, ordered races, webhook control, rules, database diff, repeat runs, run
+store); and the agent connection: an MCP server, skills and a plugin for Claude Code, Codex
+and Muse Code, the static app map, evidence packets, a first prover, and Bug Zoo cases 1–7.
 
 ## Layout
 
 ```
 packages/
   core/       config, isolated branches (worktree + Postgres copy + app process),
-              experiment runner (flows, perturbations, races, webhooks), rules, DB diff, run store
+              experiment runner (flows, perturbations, races, webhooks), rules, DB diff, run store,
+              evidence packets, prover
+  explorer/   static app map: Next.js routes, what each handler does, risky patterns, pages, schema
+  mcp/        MCP server (map, validate, run, evidence, branch, prove)
   cli/        `windtunnel` CLI
-  explorer/   (later phase) static index, crawler, decider
-  mcp/        (later phase) MCP server
   viewer/     (later phase) web viewer
+plugins/
+  windtunnel/ plugin for Claude Code and Codex: skills (init, hunt, prove, test), MCP server,
+              helper subagent
+  muse-code/  Muse Code setup (same skills, MCP settings)
 zoo/
   shop/       Bug Zoo demo shop: Next.js + Postgres, standalone app with its own lockfile;
               its .windtunnel/ holds the reference flows, experiments and rules
@@ -30,6 +36,7 @@ zoo/
   cases/      one bug patch per case + expected results + verifier
 docs/
   experiments.md   flow, experiment and rules reference
+  agents.md        skills, MCP tools, app map, evidence packets, proof
 ```
 
 ## Development setup
@@ -112,3 +119,23 @@ checkout-lost-response  FAIL    3 broken  one-charge-per-order 3/3  261028-12141
 Each run leaves steps, a request log, rule results, a row-level database diff, the app log
 and (for failures) a Playwright trace in `.windtunnel/runs/<run>/`. See
 [`docs/experiments.md`](docs/experiments.md) for the full format.
+
+## With a coding agent
+
+```sh
+claude --plugin-dir ./plugins/windtunnel      # Claude Code, from this checkout
+```
+
+Then, in the app's folder: `/windtunnel:init`, `/windtunnel:hunt checkout`,
+`/windtunnel:prove <experiment>`, `/windtunnel:test`. The agent reads a map of the app built
+from its code, writes rules and experiments, runs them, and reads short evidence packets.
+Codex and Muse Code setup, the MCP tools and the formats are in
+[`docs/agents.md`](docs/agents.md).
+
+The same steps from the shell:
+
+```sh
+pnpm wt --cwd zoo/shop map --focus orders           # what each handler does, flagged patterns, schema
+pnpm wt --cwd zoo/shop evidence <run>               # evidence packet; <run>/1/diff:orders to drill down
+pnpm wt --cwd zoo/shop prove checkout-two-buyers --base-patch zoo/cases/05-oversell/bug.patch
+```

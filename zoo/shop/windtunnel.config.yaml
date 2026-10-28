@@ -24,5 +24,6 @@ mockPay:
 users:
   alice: { email: alice@example.test, password: test }
   bob: { email: bob@example.test, password: test }
+  sam: { email: sam@example.test, password: test } # staff: can edit products
 
 parallel: 4

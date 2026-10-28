@@ -1,0 +1,12 @@
+description: The user pays for a full cart in one tab while a second tab adds another product, at the same moment and in either order.
+flow: pay-and-keep-shopping
+params:
+  products: [Ceramic Mug, Zip Hoodie, Canvas Cap, Tote Bag]
+perturb:
+  - do: second-tab
+    step: checkout
+race:
+  request: POST /api/**
+  step: checkout
+  order: each
+webhooks: late

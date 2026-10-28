@@ -44,19 +44,19 @@
 
 ## Phase 3 — Agent connection + hunting
 
-- [ ] MCP server (7 tools: map, validate, run, evidence, branch, prove, decide)
-- [ ] Shared skills: `init`, `hunt`, `prove`, `test`
-- [ ] Claude Code plugin with helper subagent
-- [ ] Codex plugin
-- [ ] Muse Code packaging
-- [ ] Evidence packets + drill-down
-- [ ] App map: static index (Next.js routes and handlers, Postgres schema)
-- [ ] Hunt loop: risky code patterns → experiments → findings
-- [ ] Bug Zoo cases 4–7: early webhook, oversell, session expiry, lost update
+- [x] MCP server (7 tools: map, validate, run, evidence, branch, prove, decide) — six now; `decide` comes with the Decider in Phase 5
+- [x] Shared skills: `init`, `hunt`, `prove`, `test`
+- [x] Claude Code plugin with helper subagent
+- [x] Codex plugin
+- [x] Muse Code packaging
+- [x] Evidence packets + drill-down
+- [x] App map: static index (Next.js routes and handlers, Postgres schema)
+- [x] Hunt loop: risky code patterns → experiments → findings (two blind tests: an agent with only the skill, map and CLI found the seeded oversell from its map flag, and four real bugs in the clean shop, now fixed and guarded by experiments)
+- [x] Bug Zoo cases 4–7: early webhook, oversell, session expiry, lost update
 
 ## Phase 4 — Fix proof
 
-- [ ] Prover: patch in worktree, full matrix × N, revert check, regression set
+- [ ] Prover: patch in worktree, full matrix × N, revert check, regression set — all but the project's own test command in the regression set landed in Phase 3
 - [ ] Branch output with regression experiments + `EVIDENCE.md`
 - [ ] Trace chain: request → handler file → SQL → row changes
 - [ ] Re-test only what changed (affected experiments, results cached by code hash)

@@ -1,17 +1,23 @@
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { cp, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
 import {
   Branches,
   type CodeVersionSpec,
   clean,
   ConfigError,
+  drillDown,
+  formatProof,
   formatResults,
   loadExperiments,
+  loadRules,
   openProject,
+  prove,
   Runner,
   stopOnSignals,
   type TraceMode,
 } from "@windtunnel/core";
+import { buildAppMap, formatAppMap, readSchema } from "@windtunnel/explorer";
+import { findProjectDir, serveStdio, Workspace } from "@windtunnel/mcp";
 
 export interface Flags {
   cwd?: string;
@@ -24,6 +30,12 @@ export interface Flags {
   headed?: boolean;
   limit?: string;
   json?: boolean;
+  focus?: string;
+  base?: string;
+  "base-patch"?: string;
+  "no-schema"?: boolean;
+  out?: string;
+  prefix?: string;
   help?: boolean;
 }
 
@@ -33,8 +45,15 @@ Usage: windtunnel <command> [options]
 
 Commands
   run [experiment…]   Run experiments (default: all in .windtunnel/experiments)
-  validate [exp…]     Check experiment files, flows and rules without running them
+  validate [exp…]     Check experiment files and flows, and run the rules on the seed data
   runs                List recent runs
+  evidence <run>[/<n>/<part>]
+                      Evidence packet for a run, or one detail (steps, requests, diff[:table], rule:<id>, log…)
+  map                 App map from the code: handlers, risky patterns, pages, database schema
+  prove <experiment…> Prove a fix: fails on --base (default HEAD), passes on the working tree (or --patch)
+                      in every ordering, fails again on the base, other experiments don't get worse
+  mcp                 MCP server on stdin/stdout for coding agents (Claude Code, Codex, Muse Code)
+  skills --out <dir>  Copy the agent skills (init, hunt, prove, test) into <dir>, e.g. .agents/skills
   doctor              Check Node, git, the config file and Postgres
   prepare             Check out, install and build a code version, and seed its snapshot
   branch              Start an isolated branch (app + database copy) and keep it running
@@ -49,6 +68,12 @@ Options
   --headed            (run) show the browser
   --keep-db           (run, branch) keep run databases after stopping
   --limit <n>         (runs) how many to list (default 20)
+  --focus <text>      (map) only routes and pages whose path or file contains this
+  --no-schema         (map) skip the database schema (no build or database needed)
+  --base <git ref>    (prove) code with the bug (default HEAD)
+  --prefix <text>     (skills) prefix for skill names, e.g. windtunnel-
+  --base-patch <file> (prove) diff applied to --base (default: the working tree) to get the code with
+                      the bug; the fix is then --base itself unless --patch is given
   --all               (clean) also drop snapshots and delete worktrees
   --json              Machine-readable output
 `;
@@ -67,6 +92,17 @@ export async function main(args: string[], flags: Flags): Promise<number> {
         return await validate(args.slice(1), flags);
       case "runs":
         return await runs(flags);
+      case "evidence":
+        return await evidence(args.slice(1), flags);
+      case "map":
+        return await map(flags);
+      case "prove":
+        return await proveCommand(args.slice(1), flags);
+      case "skills":
+        return await skills(flags);
+      case "mcp":
+        await serveStdio(flags.cwd ? resolve(flags.cwd) : process.cwd());
+        return 0;
       case "doctor":
         return await doctor(flags);
       case "prepare":
@@ -217,11 +253,13 @@ async function validate(ids: string[], flags: Flags): Promise<number> {
   const runner = await Runner.open(flags.cwd);
   try {
     const experiments = await loadExperiments(runner.project, ids);
-    const { warnings } = await runner.validate(experiments);
+    const { rules, warnings } = await runner.validate(experiments);
+    const problems = await runner.checkRulesOnSeed(rules, await versionSpec(flags));
+    if (problems.length) throw new ConfigError(problems.join("\n"));
     print(
       flags,
-      { ok: true, experiments: experiments.map((e) => e.id), warnings },
-      [`ok: ${experiments.length} experiment(s)`, ...warnings.map((w) => `warning: ${w}`)].join("\n"),
+      { ok: true, experiments: experiments.map((e) => e.id), rules: rules.map((r) => r.id), warnings },
+      [`ok: ${experiments.length} experiment(s), ${rules.length} rule(s) hold on the seed data`, ...warnings.map((w) => `warning: ${w}`)].join("\n"),
     );
     return 0;
   } finally {
@@ -244,4 +282,78 @@ async function runs(flags: Flags): Promise<number> {
   } finally {
     await runner.close();
   }
+}
+
+async function evidence(args: string[], flags: Flags): Promise<number> {
+  const [handle] = args;
+  if (!handle) throw new ConfigError("usage: windtunnel evidence <run>[/<n>/<part>] (see windtunnel runs)");
+  const workspace = new Workspace(flags.cwd ?? process.cwd());
+  try {
+    const runner = await workspace.open();
+    const text = await drillDown(runner.store, handle, {
+      rules: await loadRules(runner.project).catch(() => []),
+      handlerFor: await workspace.handlerResolver().catch(() => undefined),
+    });
+    process.stdout.write(`${text}\n`);
+    return 0;
+  } finally {
+    await workspace.close();
+  }
+}
+
+async function map(flags: Flags): Promise<number> {
+  const branches = await Branches.open(await findProjectDir(flags.cwd ?? process.cwd()));
+  try {
+    const schema = flags["no-schema"] ? undefined : await branches.withSeedCopy(await versionSpec(flags), readSchema);
+    const appMap = await buildAppMap(branches.project, { schema });
+    print(flags, appMap, formatAppMap(appMap, { focus: flags.focus, maxChars: flags.json ? undefined : 1_000_000 }));
+    return 0;
+  } finally {
+    await branches.close();
+  }
+}
+
+async function proveCommand(ids: string[], flags: Flags): Promise<number> {
+  if (ids.length === 0) throw new ConfigError("usage: windtunnel prove <experiment…> [--base <ref>] [--patch <fix.patch>] [--repeat <n>]");
+  const runner = await Runner.open(flags.cwd);
+  stopOnSignals(() => runner.close());
+  try {
+    const all = await loadExperiments(runner.project);
+    const repeat = flags.repeat === undefined ? undefined : Number(flags.repeat);
+    // With --base-patch the bug is a diff on top of --base (default: the working tree), and the fix is --base itself.
+    const basePatch = flags["base-patch"] ? await readFile(resolve(flags["base-patch"]), "utf8") : undefined;
+    const at = flags.base ? { ref: flags.base } : basePatch ? {} : { ref: "HEAD" };
+    const proof = await prove(runner, {
+      experiments: await loadExperiments(runner.project, ids),
+      base: { ...at, ...(basePatch ? { patch: basePatch } : {}) },
+      fix: flags.patch ? { ...at, patch: await readFile(resolve(flags.patch), "utf8") } : basePatch ? at : {},
+      repeat,
+      regression: all.filter((e) => !ids.includes(e.id)),
+    });
+    print(flags, proof, formatProof(proof));
+    return proof.verdict === "proven" ? 0 : 1;
+  } finally {
+    await runner.close();
+  }
+}
+
+/** The plugin's skills folder: next to the CLI in a checkout of the repository. */
+const SKILLS_DIR = join(dirname(import.meta.dirname), "..", "..", "plugins", "windtunnel", "skills");
+
+async function skills(flags: Flags): Promise<number> {
+  if (!flags.out) throw new ConfigError("usage: windtunnel skills --out <dir> [--prefix windtunnel-]");
+  const prefix = flags.prefix ?? "";
+  const written: string[] = [];
+  for (const name of (await readdir(SKILLS_DIR)).sort()) {
+    const target = join(resolve(flags.out), `${prefix}${name}`);
+    await mkdir(target, { recursive: true });
+    await cp(join(SKILLS_DIR, name), target, { recursive: true });
+    const skill = join(target, "SKILL.md");
+    const text = await readFile(skill, "utf8");
+    // The skill's own name and references to sibling skills get the prefix too.
+    await writeFile(skill, text.replace(/^name: (.+)$/m, `name: ${prefix}$1`).replace(/\b(init|hunt|prove|test) skill\b/g, `${prefix}$1 skill`));
+    written.push(target);
+  }
+  print(flags, written, written.map((w) => `wrote ${w}`).join("\n"));
+  return 0;
 }

@@ -1,0 +1,8 @@
+id: 04-early-webhook
+title: Early webhook
+summary: The payment webhook marks the order paid before the payment API answers; the checkout then moves it back to "processing" and it never completes.
+experiment: checkout-early-webhook
+perturbation: Payment webhook delivered before the app gets the charge response
+breaks: [paid-orders-are-marked-paid]
+handler: app/api/orders/route.ts
+fix: Only move an order forward (UPDATE … WHERE status = 'pending'), so a later step can't undo the webhook.

@@ -1,0 +1,12 @@
+--- a/zoo/shop/app/api/orders/route.ts
++++ b/zoo/shop/app/api/orders/route.ts
+@@ -77,8 +77,7 @@
+     { amountCents: order.total_cents, orderId: order.id },
+     { idempotencyKey: `order-${order.id}` },
+   );
+-  // The payment webhook may already have marked the order paid; only move it forward from pending.
+-  await query("UPDATE orders SET status = 'processing', charge_id = $2 WHERE id = $1 AND status = 'pending'", [
++  await query("UPDATE orders SET status = 'processing', charge_id = $2 WHERE id = $1", [
+     order.id,
+     charge.id,
+   ]);

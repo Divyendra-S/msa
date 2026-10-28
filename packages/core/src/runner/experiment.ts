@@ -42,6 +42,8 @@ const Perturbation = z.discriminatedUnion("do", [
   z.strictObject({ do: z.literal("expire-session"), step: Step, cookie: z.string().optional(), tab: Tab }),
   z.strictObject({ do: z.literal("advance-clock"), step: Step, by: Duration, tab: Tab }),
   z.strictObject({ do: z.literal("second-tab"), step: Step, tab: Tab }),
+  // App state: runs once, before the first tab reaches the step.
+  z.strictObject({ do: z.literal("sql"), step: Step, sql: z.string().min(1), tab: Tab }),
 ]);
 
 const RaceOrder = z.union([
@@ -84,7 +86,9 @@ const Webhooks = z.preprocess(
     times: z.number().int().min(1).max(5).default(1),
     /** For late events: deliver in the order they were sent, or newest first. */
     order: z.enum(["sent", "reverse"]).default("sent"),
-  }),
+    /** Extra wait before each delivery (normal: after the charge; late: after the step). */
+    delay: Duration.optional(),
+  }).refine((w) => !(w.timing === "early" && w.delay !== undefined), { message: "early webhooks can't also have a delay" }),
 );
 
 export const ExperimentSchema = z.strictObject({
@@ -233,13 +237,23 @@ export async function checkExperiment(experiment: Experiment, project: Project, 
     }
   }
 
-  const labels = tabLabels(users).map((t) => t.label);
+  const opened = tabLabels(users);
+  const labels = opened.map((t) => t.label);
+  // A second-tab perturbation opens `<user>#<n>` next to each tab it applies to.
+  const forks = new Set<string>();
+  for (const p of experiment.perturb) {
+    if (p.do !== "second-tab") continue;
+    for (const user of new Set(opened.filter((t) => !p.tab || t.label === p.tab).map((t) => t.user))) {
+      forks.add(`${user}#${opened.filter((t) => t.user === user).length + 1}`);
+    }
+  }
+  const known = [...labels, ...forks];
   const tabs = [...experiment.perturb.flatMap((p) => (p.tab ? [p.tab] : []))];
   if (Array.isArray(experiment.race?.order)) {
     for (const item of experiment.race.order) if (typeof item === "string") tabs.push(item);
   }
   for (const tab of new Set(tabs)) {
-    if (!labels.includes(tab)) errors.push(`unknown tab "${tab}" (tabs: ${labels.join(", ")})`);
+    if (!known.includes(tab)) errors.push(`unknown tab "${tab}" (tabs: ${known.join(", ")})`);
   }
   if (experiment.race && Array.isArray(experiment.race.order)) {
     const count = experiment.race.count ?? Math.max(2, labels.length);

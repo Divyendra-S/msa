@@ -1,0 +1,6 @@
+description: The session expires on the server while the user is on the cart page; they pay, log in again when asked, and pay.
+flow: checkout
+perturb:
+  - do: sql
+    step: pay
+    sql: UPDATE sessions SET expires_at = now()

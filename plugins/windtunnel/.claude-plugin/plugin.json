@@ -1,0 +1,10 @@
+{
+  "name": "windtunnel",
+  "displayName": "Wind Tunnel",
+  "version": "0.0.0",
+  "description": "Real-world failure experiments for web apps: hunt bugs (double clicks, lost responses, duplicate webhooks, races) against the real backend and database, and prove fixes.",
+  "author": { "name": "Wind Tunnel contributors" },
+  "repository": "https://github.com/Divyendra-S/msa",
+  "license": "MIT",
+  "keywords": ["testing", "playwright", "postgres", "race-conditions", "mcp"]
+}

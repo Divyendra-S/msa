@@ -15,6 +15,12 @@ const { values, positionals } = parseArgs({
     headed: { type: "boolean", default: false },
     limit: { type: "string" },
     json: { type: "boolean", default: false },
+    focus: { type: "string" },
+    base: { type: "string" },
+    "base-patch": { type: "string" },
+    "no-schema": { type: "boolean", default: false },
+    out: { type: "string" },
+    prefix: { type: "string" },
     help: { type: "boolean", short: "h", default: false },
   },
 });

@@ -1,7 +1,7 @@
 // Integration test: needs the development Postgres (`pnpm db:up`). Skipped when it is not reachable.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -151,10 +151,20 @@ parallel: 2
     await Promise.all([working.stop(), patched.stop()]);
   });
 
-  it("prunes the least recently used versions", async () => {
+  it("prunes the least recently used versions, but never one being prepared", async () => {
     const before = await branches.versions.listByLastUse();
     assert.ok(before.length >= 2);
-    const removed = await branches.prune(1, 0);
+    // A version another process is still building holds its lock.
+    const building = before.at(-1)!.id;
+    const lock = join(branches.versions.worktreesDir, `${building}.lock`);
+    await mkdir(lock);
+    await writeFile(join(lock, "pid"), String(process.pid));
+    assert.equal(await branches.versions.isBusy(building), true);
+    const first = await branches.prune(1, 0);
+    assert.ok(!first.includes(building));
+    await rm(lock, { recursive: true });
+
+    const removed = [...first, ...(await branches.prune(1, 0))];
     assert.deepEqual(removed.sort(), before.slice(1).map((v) => v.id).sort());
     assert.deepEqual(await branches.versions.list(), [before[0]!.id]);
     assert.equal(await branches.pg.exists(branches.snapshotName(removed[0]!)), false);

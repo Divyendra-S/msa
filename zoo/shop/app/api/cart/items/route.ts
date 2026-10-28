@@ -1,6 +1,6 @@
 import { getCurrentUser } from "@/lib/auth";
-import { getOrCreateOpenCart } from "@/lib/cart";
-import { query, queryOne } from "@/lib/db";
+import { lockOpenCart } from "@/lib/cart";
+import { queryOne, transaction } from "@/lib/db";
 
 export async function POST(req: Request) {
   const user = await getCurrentUser();
@@ -14,15 +14,19 @@ export async function POST(req: Request) {
   const product = await queryOne<{ id: number }>("SELECT id FROM products WHERE id = $1", [body.productId]);
   if (!product) return Response.json({ error: "No such product" }, { status: 404 });
 
-  const cart = await getOrCreateOpenCart(user.id);
-  await query(
-    `INSERT INTO cart_items (cart_id, product_id, quantity) VALUES ($1, $2, $3)
-     ON CONFLICT (cart_id, product_id) DO UPDATE SET quantity = cart_items.quantity + EXCLUDED.quantity`,
-    [cart.id, product.id, quantity],
-  );
-  const count = await queryOne<{ count: number }>(
-    "SELECT coalesce(sum(quantity), 0)::int AS count FROM cart_items WHERE cart_id = $1",
-    [cart.id],
-  );
-  return Response.json({ cartId: cart.id, count: count?.count ?? 0 });
+  const added = await transaction(async (db) => {
+    // A checkout running now orders this cart either before or after the item goes in, never without it.
+    const cart = await lockOpenCart(db, user.id);
+    await db.query(
+      `INSERT INTO cart_items (cart_id, product_id, quantity) VALUES ($1, $2, $3)
+       ON CONFLICT (cart_id, product_id) DO UPDATE SET quantity = cart_items.quantity + EXCLUDED.quantity`,
+      [cart.id, product.id, quantity],
+    );
+    const count = await db.query<{ count: number }>(
+      "SELECT coalesce(sum(quantity), 0)::int AS count FROM cart_items WHERE cart_id = $1",
+      [cart.id],
+    );
+    return { cartId: cart.id, count: count.rows[0]?.count ?? 0 };
+  });
+  return Response.json(added);
 }

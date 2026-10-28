@@ -12,6 +12,7 @@ if (!url) {
 const users = [
   { email: "alice@example.test", name: "Alice", password: "test" },
   { email: "bob@example.test", name: "Bob", password: "test" },
+  { email: "sam@example.test", name: "Sam", password: "test", staff: true },
 ];
 
 const products = [
@@ -35,10 +36,11 @@ try {
   await client.query("BEGIN");
   await client.query(await readFile(new URL("../db/schema.sql", import.meta.url), "utf8"));
   for (const u of users) {
-    await client.query("INSERT INTO users (email, name, password_hash) VALUES ($1, $2, $3)", [
+    await client.query("INSERT INTO users (email, name, password_hash, is_staff) VALUES ($1, $2, $3, $4)", [
       u.email,
       u.name,
       hashPassword(u.email, u.password),
+      !!u.staff,
     ]);
   }
   for (const p of products) {

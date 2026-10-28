@@ -1,9 +1,9 @@
 --- a/zoo/shop/app/api/orders/route.ts
 +++ b/zoo/shop/app/api/orders/route.ts
-@@ -24,20 +24,12 @@
-   let order: Order;
-   try {
-     order = await transaction(async (db) => {
+@@ -31,20 +31,12 @@
+       await db.query("SELECT id FROM carts WHERE id = $1 FOR UPDATE", [cart.id]);
+       const items = await getCartItems(cart.id, db);
+       if (items.length === 0) throw new EmptyCartError();
 -      // One order per cart: a repeated or concurrent checkout gets the existing order back.
        const created = await db.query<Order>(
          `INSERT INTO orders (user_id, cart_id, total_cents) VALUES ($1, $2, $3)
@@ -22,7 +22,7 @@
        for (const item of items) {
          const reserved = await db.query("UPDATE products SET stock = stock - $1 WHERE id = $2 AND stock >= $1", [
            item.quantity,
-@@ -58,10 +50,6 @@
+@@ -68,10 +60,6 @@
      throw err;
    }
  
@@ -33,17 +33,9 @@
    // Keyed by order, so a retried checkout gets the first charge back instead of a second one.
    const charge = await createCharge(
      { amountCents: order.total_cents, orderId: order.id },
-@@ -72,5 +60,7 @@
-     order.id,
-     charge.id,
-   ]);
-+  // This cart is done; checking it out again finds no open cart.
-+  await query("UPDATE carts SET status = 'checked_out' WHERE id = $1", [cart.id]);
-   return Response.json({ orderId: order.id, status: "processing" });
- }
 --- a/zoo/shop/components/PayButton.tsx
 +++ b/zoo/shop/components/PayButton.tsx
-@@ -28,7 +28,7 @@
+@@ -37,7 +37,7 @@
  
    return (
      <div className="row">
@@ -54,7 +46,7 @@
        {error && (
 --- a/zoo/shop/db/schema.sql
 +++ b/zoo/shop/db/schema.sql
-@@ -41,7 +41,7 @@
+@@ -55,7 +55,7 @@
  CREATE TABLE orders (
    id          serial PRIMARY KEY,
    user_id     integer NOT NULL REFERENCES users (id),

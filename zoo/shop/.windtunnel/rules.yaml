@@ -30,3 +30,42 @@ stock-non-negative:
   description: Stock never goes below zero.
   sql: SELECT id, stock FROM products WHERE stock < 0
   expect: empty
+
+orders-need-a-live-session:
+  description: Every order was placed while its buyer had a live (unexpired) session.
+  sql: >-
+    SELECT o.id, o.user_id, o.created_at FROM orders o
+    WHERE NOT EXISTS (
+      SELECT 1 FROM sessions s
+      WHERE s.user_id = o.user_id AND o.created_at >= s.created_at AND o.created_at < s.expires_at)
+  expect: empty
+
+no-lost-update:
+  description: No two saved product edits start from the same version (the later one silently overwrote the earlier).
+  sql: >-
+    SELECT product_id, base_version, count(*) AS saves
+    FROM product_changes GROUP BY product_id, base_version HAVING count(*) > 1
+  expect: empty
+
+ordered-cart-matches-order:
+  description: Everything in a cart that became an order is in that order, in the same quantity.
+  sql: >-
+    SELECT c.id AS cart_id, ci.product_id, ci.quantity AS in_cart, oi.quantity AS in_order
+    FROM carts c
+    JOIN orders o ON o.cart_id = c.id
+    JOIN cart_items ci ON ci.cart_id = c.id
+    LEFT JOIN order_items oi ON oi.order_id = o.id AND oi.product_id = ci.product_id
+    WHERE oi.quantity IS DISTINCT FROM ci.quantity
+  expect: empty
+
+stock-matches-sales:
+  description: Stock taken since the seed equals the units in orders that didn't fail.
+  sql: >-
+    SELECT p.id, p.stock, s.stock - coalesce(sold.units, 0) AS expected
+    FROM products p
+    JOIN windtunnel_seed.products s ON s.id = p.id
+    LEFT JOIN (SELECT oi.product_id, sum(oi.quantity)::int AS units
+                 FROM order_items oi JOIN orders o ON o.id = oi.order_id
+                WHERE o.status <> 'failed' GROUP BY oi.product_id) sold ON sold.product_id = p.id
+    WHERE p.stock <> s.stock - coalesce(sold.units, 0)
+  expect: empty

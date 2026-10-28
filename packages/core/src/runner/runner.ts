@@ -44,6 +44,8 @@ export interface RepSummary {
   durationMs: number;
   /** Database changes, e.g. `orders +2 · products ~1`. */
   diff: string;
+  /** Parts of the experiment that never took effect (a perturbation matched nothing…). */
+  warnings?: string[];
 }
 
 export interface VariantResult {
@@ -71,6 +73,8 @@ export interface ExperimentResult {
   startedAt: string;
   durationMs: number;
   dir: string;
+  /** Warnings from its runs, each with the number of runs that had it. */
+  warnings?: string[];
 }
 
 /** Runs experiments: each repetition in its own branch, all at once up to `parallel`. */
@@ -108,6 +112,18 @@ export class Runner {
     }
     if (problems.length > 0) throw new ConfigError(`invalid experiments\n${problems.map((p) => `  ${p}`).join("\n")}`);
     return { rules, warnings: [...new Set(warnings)] };
+  }
+
+  /** Runs every rule on a fresh copy of the seed data, where each must hold; returns the problems. */
+  async checkRulesOnSeed(rules: Rule[], version: CodeVersionSpec | CodeVersion = {}): Promise<string[]> {
+    const results = await this.branches.withSeedCopy(version, (url) => checkRules(url, rules));
+    return results.flatMap((r) =>
+      r.error
+        ? [`rule ${r.id}: SQL error: ${r.error}`]
+        : r.ok
+          ? []
+          : [`rule ${r.id} already breaks on the seed data (${r.rows.length} row(s)): fix the SQL or the seed`],
+    );
   }
 
   async run(experiments: Experiment[], options: RunOptions = {}): Promise<ExperimentResult[]> {
@@ -156,6 +172,8 @@ export class Runner {
     );
 
     const variants = [...new Set(jobs.map((v) => v.name))].map((name) => summarizeVariant(name, reps));
+    const warned = new Map<string, number>();
+    for (const r of reps) for (const w of r.warnings ?? []) warned.set(w, (warned.get(w) ?? 0) + 1);
     const result: ExperimentResult = {
       runId,
       experiment: experiment.id,
@@ -166,6 +184,7 @@ export class Runner {
       startedAt,
       durationMs: Date.now() - started,
       dir,
+      ...(warned.size ? { warnings: [...warned].map(([w, n]) => `${w} (${n}/${reps.length} runs)`) } : {}),
     };
     await this.store.finish(dir, result, {
       id: runId,
@@ -227,6 +246,7 @@ export class Runner {
         variant: job.variant,
         browser: await this.launch(),
         baseUrl: branch.baseUrl,
+        databaseUrl: branch.database.url,
         tenant: branch.payments?.tenant,
         flow: job.flow,
         login: job.login,
@@ -258,6 +278,7 @@ export class Runner {
     const traces = rep ? await rep.close(keepTraces).catch(() => []) : [];
     await branch.stop().catch(() => undefined);
 
+    const warnings = rep?.warnings() ?? [];
     const summary: RepSummary = {
       rep: job.rep,
       variant: job.variant.name,
@@ -266,6 +287,7 @@ export class Runner {
       ...(error ? { error } : {}),
       durationMs: Date.now() - started,
       diff: diffSummary,
+      ...(warnings.length ? { warnings } : {}),
     };
     await writeJson(`${dir}/result.json`, {
       ...summary,
