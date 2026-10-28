@@ -28,19 +28,19 @@
 
 ## Phase 2 — Experiment engine
 
-- [ ] Flows: deterministic Playwright scripts with named steps
-- [ ] Experiment file format
-- [ ] Rules file format + SQL rules checker
-- [ ] Browser perturbations: double submit, refresh, back + resubmit, second tab, expired session
-- [ ] Network perturbations: delay, 5xx, lost response after save, duplicate request
-- [ ] Fake clock
-- [ ] Ordered races: hold and release requests in a chosen order
-- [ ] Webhook control: duplicate, out of order, early
-- [ ] Second user
-- [ ] Database diff (row-level, before/after)
-- [ ] Repeat N times + flake rate
-- [ ] Run store
-- [ ] `windtunnel run` CLI
+- [x] Flows: deterministic Playwright scripts with named steps
+- [x] Experiment file format
+- [x] Rules file format + SQL rules checker
+- [x] Browser perturbations: double submit, refresh, back + resubmit, second tab, expired session
+- [x] Network perturbations: delay, 5xx, lost response after save, duplicate request
+- [x] Fake clock
+- [x] Ordered races: hold and release requests in a chosen order
+- [x] Webhook control: duplicate, out of order, early
+- [x] Second user
+- [x] Database diff (row-level, before/after)
+- [x] Repeat N times + flake rate
+- [x] Run store
+- [x] `windtunnel run` CLI
 
 ## Phase 3 — Agent connection + hunting
 

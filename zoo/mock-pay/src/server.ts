@@ -110,6 +110,9 @@ export class MockPay {
         },
         key,
       );
+      if (result.event && tenant.config.webhooks === "early") {
+        await tenant.deliver(result.event.id, tenant.config.webhookTimes);
+      }
       if (tenant.config.chargeLatencyMs > 0) await sleep(tenant.config.chargeLatencyMs);
       res.setHeader("idempotent-replayed", String(result.replayed));
       return send(res, 200, result.charge);

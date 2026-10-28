@@ -1,7 +1,7 @@
 import { mkdir, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { sh } from "../exec.ts";
-import { addWorktree, commitPatch, removeWorktree, resolveRef, snapshotWorkingTree } from "../git.ts";
+import { addWorktree, commitPatch, removeWorktree, resolveRef, snapshotWorkingTree, withoutPaths } from "../git.ts";
 import { withLock } from "../lock.ts";
 import { exists, type Project } from "../project.ts";
 
@@ -46,10 +46,16 @@ export class CodeVersions {
     return join(this.project.cacheDir, "worktrees");
   }
 
+  /**
+   * Flows, experiments and rules (`.windtunnel/`) are left out of the version: they
+   * are read from the working tree, and editing them must not trigger a rebuild.
+   */
   async resolve(spec: CodeVersionSpec = {}): Promise<CodeVersion> {
     const root = this.project.repoRoot;
-    let base = spec.ref ? await resolveRef(root, spec.ref) : await snapshotWorkingTree(root);
+    const exclude = [[this.project.appSubdir, ".windtunnel"].filter(Boolean).join("/").split(sep).join("/")];
+    let base = spec.ref ? await resolveRef(root, spec.ref) : await snapshotWorkingTree(root, exclude);
     if (spec.patch) base = await commitPatch(root, base.commit, spec.patch);
+    if (spec.ref || spec.patch) base = await withoutPaths(root, base, exclude);
     const label = spec.label ?? [spec.ref ?? "working tree", spec.patch ? "+ patch" : ""].filter(Boolean).join(" ");
     return { id: base.tree.slice(0, 12), commit: base.commit, tree: base.tree, label };
   }

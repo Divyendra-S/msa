@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { addWorktree, commitPatch, git, removeWorktree, snapshotWorkingTree } from "../src/git.ts";
+import { addWorktree, commitPatch, git, removeWorktree, snapshotWorkingTree, withoutPaths } from "../src/git.ts";
 
 describe("git code versions", () => {
   let repo: string;
@@ -50,6 +50,23 @@ describe("git code versions", () => {
     const result = await commitPatch(repo, head, patch);
     assert.equal(await git(["show", `${result.commit}:a.txt`], repo), "patched");
     await assert.rejects(commitPatch(repo, head, "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-nope\n+x\n"));
+  });
+
+  it("leaves excluded paths out, so editing them keeps the same version", async () => {
+    await mkdir(join(repo, "app", ".windtunnel"), { recursive: true });
+    await writeFile(join(repo, "app", ".windtunnel", "exp.yaml"), "flow: a\n");
+    const exclude = ["app/.windtunnel"];
+    const first = await snapshotWorkingTree(repo, exclude);
+    await writeFile(join(repo, "app", ".windtunnel", "exp.yaml"), "flow: b\n");
+    const second = await snapshotWorkingTree(repo, exclude);
+    assert.equal(second.tree, first.tree);
+    await assert.rejects(git(["show", `${first.commit}:app/.windtunnel/exp.yaml`], repo));
+
+    const withTests = await snapshotWorkingTree(repo);
+    assert.notEqual(withTests.tree, first.tree);
+    assert.equal((await withoutPaths(repo, withTests, exclude)).tree, first.tree);
+    assert.equal(await withoutPaths(repo, first, exclude), first, "nothing to remove: same commit");
+    await rm(join(repo, "app"), { recursive: true, force: true });
   });
 
   it("checks a snapshot out into a worktree and removes it", async () => {

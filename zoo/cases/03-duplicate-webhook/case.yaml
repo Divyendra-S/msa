@@ -1,7 +1,7 @@
 id: 03-duplicate-webhook
 title: Duplicate webhook
 summary: The payment provider delivers the same event twice and the payment is recorded twice.
-scenario: duplicate-webhook
+experiment: checkout-duplicate-webhook
 perturbation: Payment webhook delivered twice
 breaks: [payment-recorded-once]
 handler: app/api/webhooks/payment/route.ts

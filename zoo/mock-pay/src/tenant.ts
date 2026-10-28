@@ -1,6 +1,6 @@
 import { createHmac } from "node:crypto";
 
-export type WebhookMode = "auto" | "manual";
+export type WebhookMode = "auto" | "manual" | "early";
 export type ChargeOutcome = "succeeded" | "failed";
 
 export interface TenantConfig {
@@ -8,9 +8,14 @@ export interface TenantConfig {
   webhookUrl?: string;
   /** Shared secret for the `MockPay-Signature` header. */
   webhookSecret: string;
-  /** `auto` delivers each event once after `webhookDelayMs`; `manual` queues it for the harness. */
+  /**
+   * `auto` delivers each event after `webhookDelayMs`; `manual` queues it for the harness;
+   * `early` delivers it before the charge API answers, so the webhook beats the app's own response.
+   */
   webhooks: WebhookMode;
   webhookDelayMs: number;
+  /** Deliveries per event in `auto` and `early` mode; more than 1 sends duplicates. */
+  webhookTimes: number;
   /** Delay before the charge API responds, like a real provider round trip. */
   chargeLatencyMs: number;
   chargeOutcome: ChargeOutcome;
@@ -20,6 +25,7 @@ export const defaultTenantConfig: TenantConfig = {
   webhookSecret: "whsec_test",
   webhooks: "auto",
   webhookDelayMs: 150,
+  webhookTimes: 1,
   chargeLatencyMs: 20,
   chargeOutcome: "succeeded",
 };
@@ -58,6 +64,8 @@ export interface CreateChargeInput {
 
 export interface CreateChargeResult {
   charge: Charge;
+  /** The event the new charge produced; absent on a replay. */
+  event?: MockEvent;
   /** True when an earlier request with the same idempotency key already created this charge. */
   replayed: boolean;
 }
@@ -71,6 +79,8 @@ export class Tenant {
   config: TenantConfig;
   readonly charges: Charge[] = [];
   readonly events: MockEvent[] = [];
+  /** Called for every new event, before any delivery. */
+  onEvent?: (event: MockEvent) => void;
   private readonly byIdempotencyKey = new Map<string, Charge>();
   private readonly timers = new Set<NodeJS.Timeout>();
   private readonly inflight = new Set<Promise<unknown>>();
@@ -112,8 +122,9 @@ export class Tenant {
       deliveries: [],
     };
     this.events.push(event);
+    this.onEvent?.(event);
     if (this.config.webhooks === "auto") this.schedule(event.id, this.config.webhookDelayMs);
-    return { charge, replayed: false };
+    return { charge, event, replayed: false };
   }
 
   getCharge(id: string): Charge | undefined {
@@ -148,6 +159,7 @@ export class Tenant {
 
   reset(): void {
     this.cancelTimers();
+    this.onEvent = undefined;
     this.charges.length = 0;
     this.events.length = 0;
     this.byIdempotencyKey.clear();
@@ -171,8 +183,7 @@ export class Tenant {
   private schedule(eventId: string, delayMs: number): void {
     const timer = setTimeout(() => {
       this.timers.delete(timer);
-      const event = this.getEvent(eventId);
-      if (event) void this.track(this.post(event));
+      if (this.getEvent(eventId)) void this.track(this.deliver(eventId, this.config.webhookTimes));
     }, delayMs);
     this.timers.add(timer);
   }

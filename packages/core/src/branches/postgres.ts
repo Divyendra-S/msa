@@ -1,6 +1,8 @@
 import pg from "pg";
 
 const NAME = /^[a-z_][a-z0-9_]{0,62}$/;
+
+type Queryable = Pick<pg.Pool, "query">;
 const READY_COMMENT = "windtunnel snapshot (ready)";
 
 /**
@@ -19,6 +21,8 @@ export class PgServer {
       max: 4,
       application_name: "windtunnel",
     });
+    // Idle connections can be closed by the server; the pool replaces them.
+    this.admin.on("error", () => undefined);
   }
 
   urlFor(database: string): string {
@@ -55,10 +59,11 @@ export class PgServer {
     return this.urlFor(name);
   }
 
-  async drop(name: string): Promise<void> {
-    if (!(await this.exists(name))) return;
-    await this.admin.query(`ALTER DATABASE ${ident(name)} WITH IS_TEMPLATE false`);
-    await this.admin.query(`DROP DATABASE IF EXISTS ${ident(name)} WITH (FORCE)`);
+  async drop(name: string, db: Queryable = this.admin): Promise<void> {
+    const { rowCount } = await db.query("SELECT 1 FROM pg_database WHERE datname = $1", [name]);
+    if (rowCount !== 1) return;
+    await db.query(`ALTER DATABASE ${ident(name)} WITH IS_TEMPLATE false`);
+    await db.query(`DROP DATABASE IF EXISTS ${ident(name)} WITH (FORCE)`);
   }
 
   async list(prefix: string): Promise<string[]> {
@@ -74,29 +79,32 @@ export class PgServer {
   }
 
   private async buildSnapshot(name: string, build: (url: string) => Promise<void>): Promise<void> {
+    if (await this.isReadySnapshot(this.admin, name)) return;
     // An advisory lock serialises builders across processes sharing this server.
-    const lock = await this.admin.connect();
+    // Every query below uses the locked connection, so concurrent builders can't
+    // exhaust the pool while they wait.
+    const db = await this.admin.connect();
     try {
-      await lock.query("SELECT pg_advisory_lock(hashtext($1))", [name]);
-      if (await this.isReadySnapshot(name)) return;
-      await this.drop(name);
-      await this.admin.query(`CREATE DATABASE ${ident(name)}`);
+      await db.query("SELECT pg_advisory_lock(hashtext($1))", [name]);
+      if (await this.isReadySnapshot(db, name)) return;
+      await this.drop(name, db);
+      await db.query(`CREATE DATABASE ${ident(name)}`);
       try {
         await build(this.urlFor(name));
       } catch (err) {
-        await this.drop(name).catch(() => undefined);
+        await this.drop(name, db).catch(() => undefined);
         throw err;
       }
-      await this.admin.query(`ALTER DATABASE ${ident(name)} WITH IS_TEMPLATE true`);
-      await this.admin.query(`COMMENT ON DATABASE ${ident(name)} IS '${READY_COMMENT}'`);
+      await db.query(`ALTER DATABASE ${ident(name)} WITH IS_TEMPLATE true`);
+      await db.query(`COMMENT ON DATABASE ${ident(name)} IS '${READY_COMMENT}'`);
     } finally {
-      await lock.query("SELECT pg_advisory_unlock(hashtext($1))", [name]).catch(() => undefined);
-      lock.release();
+      await db.query("SELECT pg_advisory_unlock(hashtext($1))", [name]).catch(() => undefined);
+      db.release();
     }
   }
 
-  private async isReadySnapshot(name: string): Promise<boolean> {
-    const { rows } = await this.admin.query<{ comment: string | null }>(
+  private async isReadySnapshot(db: Queryable, name: string): Promise<boolean> {
+    const { rows } = await db.query<{ comment: string | null }>(
       "SELECT shobj_description(oid, 'pg_database') AS comment FROM pg_database WHERE datname = $1",
       [name],
     );

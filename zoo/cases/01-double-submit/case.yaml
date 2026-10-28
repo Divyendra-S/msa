@@ -1,7 +1,7 @@
 id: 01-double-submit
 title: Double submit
 summary: Double-clicking "Pay now" sends two checkouts that both create an order and a charge for the same cart.
-scenario: double-submit
+experiment: checkout-double-submit
 perturbation: Double click "Pay now"
 breaks: [one-order-per-cart]
 handler: app/api/orders/route.ts

@@ -1,0 +1,9 @@
+description: The user double-clicks "Pay now"; any checkout requests that get through reach the app together.
+flow: checkout
+perturb:
+  - do: double-submit
+    step: pay
+race:
+  request: POST /api/orders
+  count: 2
+  timeout: 1s

@@ -1,0 +1,7 @@
+description: Checkout takes 3 seconds to answer; the user waits.
+flow: checkout
+perturb:
+  - do: delay
+    request: POST /api/orders
+    ms: 3s
+repeat: 1

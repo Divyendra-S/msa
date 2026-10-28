@@ -1,20 +1,24 @@
-// Verifies the Bug Zoo end to end: every scenario runs against the clean shop and
-// every case variant, each run in its own branch (worktree + database copy + app).
+// Verifies the Bug Zoo end to end: the shop's experiments (zoo/shop/.windtunnel)
+// run against the clean shop and every case variant, each run in its own branch.
 //
-//   pnpm zoo:verify [--repeat 3] [--case 02-lost-response-retry]
-//
-// Scenarios are plain Playwright for now; they become experiment files in Phase 2.
+//   pnpm zoo:verify [--repeat 3] [--case 02-lost-response-retry] [--experiment checkout-double-submit]
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { type Branch, Branches, type CodeVersion, checkRules, loadRules, stopOnSignals } from "@windtunnel/core";
-import { chromium, type Page, type Route } from "playwright";
+import {
+  type CodeVersion,
+  type Experiment,
+  type ExperimentResult,
+  loadExperiments,
+  Runner,
+  stopOnSignals,
+} from "@windtunnel/core";
 import { parse as parseYaml } from "yaml";
 
 interface Case {
   id: string;
   title: string;
-  scenario: string;
+  experiment: string;
   breaks: string[];
   handler: string;
   patch: string;
@@ -26,105 +30,6 @@ interface Variant {
   expected?: Case;
 }
 
-interface RunResult {
-  variant: string;
-  scenario: string;
-  broken: string[];
-  error?: string;
-}
-
-type Scenario = (ctx: { page: Page; branch: Branch }) => Promise<void>;
-
-const ORDER_PAGE = /\/orders\/\d+$/;
-
-const scenarios: Record<string, Scenario> = {
-  // Two "Pay now" clicks in a row. Both checkout requests are held until both
-  // have arrived, then released together (a lone request is released after 1 s).
-  "double-submit": async ({ page, branch }) => {
-    const checkout = await holdRequests(page, "**/api/orders", { count: 2, timeoutMs: 1_000 });
-    await openCart(page, branch);
-    await page.getByRole("button", { name: "Pay now" }).dblclick();
-    await page.waitForURL(ORDER_PAGE);
-    await checkout.done();
-    await page.getByText("Order confirmed").waitFor();
-  },
-
-  // The server saves the order, but the browser sees a network error; the user retries.
-  "lost-response-retry": async ({ page, branch }) => {
-    const tenant = branch.payments!.tenant;
-    tenant.configure({ webhooks: "manual" });
-    let dropped = false;
-    await page.route("**/api/orders", async (route) => {
-      const response = await route.fetch();
-      if (!dropped) {
-        dropped = true;
-        return route.abort("failed");
-      }
-      return route.fulfill({ response });
-    });
-    await openCart(page, branch);
-    await page.getByRole("button", { name: "Pay now" }).click();
-    await page.getByText("Network error").waitFor();
-    await page.getByRole("button", { name: "Pay now" }).click();
-    await page.waitForURL(ORDER_PAGE);
-    for (const event of tenant.pending()) await tenant.deliver(event.id);
-    await page.getByText("Order confirmed").waitFor();
-  },
-
-  // The payment provider delivers the same webhook twice.
-  "duplicate-webhook": async ({ page, branch }) => {
-    const tenant = branch.payments!.tenant;
-    tenant.configure({ webhooks: "manual" });
-    await openCart(page, branch);
-    await page.getByRole("button", { name: "Pay now" }).click();
-    await page.waitForURL(ORDER_PAGE);
-    for (const event of tenant.pending()) await tenant.deliver(event.id, 2);
-    await page.getByText("Order confirmed").waitFor();
-  },
-};
-
-/** Logs in as Alice and puts one item in her cart, then opens the cart page. */
-async function openCart(page: Page, branch: Branch): Promise<void> {
-  const login = await page.request.post(`${branch.baseUrl}/api/session`, {
-    data: { email: "alice@example.test", password: "test" },
-  });
-  if (!login.ok()) throw new Error(`login failed: ${login.status()}`);
-  const add = await page.request.post(`${branch.baseUrl}/api/cart/items`, { data: { productId: 1 } });
-  if (!add.ok()) throw new Error(`add to cart failed: ${add.status()}`);
-  await page.goto(`${branch.baseUrl}/cart`);
-}
-
-/**
- * Holds matching requests until `count` have arrived (or `timeoutMs` passed), then
- * sends them to the server at the same moment. done() resolves when every held
- * request has been answered by the server.
- */
-async function holdRequests(page: Page, pattern: string, options: { count: number; timeoutMs: number }) {
-  const held: Route[] = [];
-  const answered: Promise<unknown>[] = [];
-  let release: () => void = () => undefined;
-  const gate = new Promise<void>((resolve) => (release = resolve));
-  let timer: NodeJS.Timeout | undefined;
-
-  await page.route(pattern, async (route) => {
-    held.push(route);
-    if (held.length === 1) timer = setTimeout(release, options.timeoutMs);
-    if (held.length >= options.count) release();
-    await gate;
-    clearTimeout(timer);
-    const answer = route.fetch().then((response) => route.fulfill({ response }).catch(() => undefined));
-    answered.push(answer);
-    await answer.catch(() => undefined);
-  });
-
-  return {
-    done: async () => {
-      await gate;
-      await Promise.allSettled(answered);
-    },
-  };
-}
-
 async function loadCases(dir: string, only?: string): Promise<Case[]> {
   const cases: Case[] = [];
   const caseDirs = (await readdir(dir, { withFileTypes: true }))
@@ -134,101 +39,94 @@ async function loadCases(dir: string, only?: string): Promise<Case[]> {
   for (const name of caseDirs) {
     if (only && name !== only) continue;
     const meta = parseYaml(await readFile(join(dir, name, "case.yaml"), "utf8")) as Omit<Case, "patch">;
-    const patch = await readFile(join(dir, name, "bug.patch"), "utf8");
-    if (!scenarios[meta.scenario]) throw new Error(`${name}: unknown scenario ${meta.scenario}`);
-    cases.push({ ...meta, patch });
+    cases.push({ ...meta, patch: await readFile(join(dir, name, "bug.patch"), "utf8") });
   }
   if (only && cases.length === 0) throw new Error(`no case named ${only}`);
   return cases;
 }
 
+/** `pass`, `fail one-order-per-cart 3/3`, `error 3/3`… for one experiment on one variant. */
+function cell(result: ExperimentResult): string {
+  const runs = result.reps.length;
+  const rules = new Map<string, number>();
+  for (const v of result.variants) for (const [id, n] of Object.entries(v.rules)) rules.set(id, (rules.get(id) ?? 0) + n);
+  const errors = result.reps.filter((r) => r.outcome === "error").length;
+  const parts = [result.outcome, ...[...rules].map(([id, n]) => `${id} ${n}/${runs}`)];
+  if (errors && result.outcome !== "error") parts.push(`${errors} err`);
+  if (result.outcome === "error") parts.push(`${errors}/${runs}`);
+  return parts.join(" ");
+}
+
 async function main(): Promise<number> {
   const { values } = parseArgs({
-    options: { repeat: { type: "string", default: "3" }, case: { type: "string" } },
+    options: {
+      repeat: { type: "string", default: "3" },
+      case: { type: "string" },
+      experiment: { type: "string", multiple: true },
+    },
   });
   const repeat = Number(values.repeat);
   const casesDir = import.meta.dirname;
   const cases = await loadCases(casesDir, values.case);
 
-  const branches = await Branches.open(join(casesDir, "..", "shop"));
-  stopOnSignals(() => branches.close());
-  const rules = await loadRules(branches.project);
+  const runner = await Runner.open(join(casesDir, "..", "shop"));
+  stopOnSignals(() => runner.close());
+  try {
+    const experiments: Experiment[] = await loadExperiments(runner.project, values.experiment ?? []);
+    for (const c of cases) {
+      if (!experiments.some((e) => e.id === c.experiment)) throw new Error(`${c.id}: experiment ${c.experiment} not selected`);
+    }
 
-  const variants: Variant[] = [];
-  for (const spec of [{ id: "clean" }, ...cases.map((c) => ({ id: c.id, patch: c.patch, expected: c }))]) {
+    const variants: Variant[] = [];
+    for (const spec of [{ id: "clean" }, ...cases.map((c) => ({ id: c.id, patch: c.patch, expected: c }))]) {
+      const started = Date.now();
+      const version = await runner.branches.versions.resolve({ patch: "patch" in spec ? spec.patch : undefined, label: spec.id });
+      await runner.branches.prepare(version);
+      console.log(`prepared ${spec.id.padEnd(24)} version ${version.id}  ${Date.now() - started} ms`);
+      variants.push({ id: spec.id, version, expected: "expected" in spec ? spec.expected : undefined });
+    }
+
     const started = Date.now();
-    const version = await branches.versions.resolve({ patch: "patch" in spec ? spec.patch : undefined, label: spec.id });
-    await branches.prepare(version);
-    console.log(`prepared ${spec.id.padEnd(24)} version ${version.id}  ${Date.now() - started} ms`);
-    variants.push({ id: spec.id, version, expected: "expected" in spec ? spec.expected : undefined });
-  }
+    const results = await Promise.all(variants.map((v) => runner.run(experiments, { version: v.version, repeat })));
+    const seconds = ((Date.now() - started) / 1000).toFixed(1);
 
-  const scenarioIds = [...new Set(cases.map((c) => c.scenario))];
-  const browser = await chromium.launch();
-  const started = Date.now();
-  const jobs = variants.flatMap((variant) =>
-    scenarioIds.flatMap((scenario) => Array.from({ length: repeat }, () => ({ variant, scenario }))),
-  );
-
-  const results = await Promise.all(
-    jobs.map(async ({ variant, scenario }): Promise<RunResult> => {
-      const branch = await branches.create(variant.version);
-      const context = await browser.newContext();
-      context.setDefaultTimeout(10_000);
-      let error: string | undefined;
-      try {
-        await scenarios[scenario]!({ page: await context.newPage(), branch });
-        await branch.payments?.tenant.settle();
-      } catch (err) {
-        error = (err as Error).message.split("\n")[0];
-      } finally {
-        await context.close();
-      }
-      try {
-        const broken = (await checkRules(branch.database.url, rules)).filter((r) => !r.ok).map((r) => r.id);
-        return { variant: variant.id, scenario, broken, error };
-      } finally {
-        await branch.stop();
-      }
-    }),
-  );
-  await browser.close();
-  await branches.close();
-
-  // Matrix: one row per variant, one column per scenario.
-  const failures: string[] = [];
-  const width = Math.max(...scenarioIds.map((s) => s.length), 28);
-  console.log(`\n${"variant".padEnd(24)} ${scenarioIds.map((s) => s.padEnd(width)).join(" ")}`);
-  for (const variant of variants) {
-    const cells = scenarioIds.map((scenario) => {
-      const runs = results.filter((r) => r.variant === variant.id && r.scenario === scenario);
-      const errors = runs.filter((r) => r.error);
-      const counts = new Map<string, number>();
-      for (const r of runs) for (const id of r.broken) counts.set(id, (counts.get(id) ?? 0) + 1);
-
-      if (variant.id === "clean" && (counts.size > 0 || errors.length > 0)) {
-        failures.push(`clean shop: ${scenario} broke ${[...counts.keys()].join(", ") || "nothing"}${errors.length ? `; error: ${errors[0]!.error}` : ""}`);
-      }
-      if (variant.expected?.scenario === scenario) {
-        for (const id of variant.expected.breaks) {
-          const n = counts.get(id) ?? 0;
-          if (n !== runs.length) failures.push(`${variant.id}: expected ${id} to break in ${runs.length}/${runs.length} runs, got ${n}`);
+    // Matrix: one row per experiment, one column per variant.
+    const failures: string[] = [];
+    const header = ["experiment", ...variants.map((v) => v.id)];
+    const rows = experiments.map((experiment) => [
+      experiment.id,
+      ...variants.map((variant, i) => {
+        const result = results[i]!.find((r) => r.experiment === experiment.id)!;
+        if (variant.id === "clean" && result.outcome !== "pass") {
+          failures.push(`clean shop: ${experiment.id} is ${cell(result)} (run ${result.runId})`);
         }
-      }
-      const text = counts.size === 0 ? `ok ${runs.length - errors.length}/${runs.length}` : [...counts].map(([id, n]) => `${id} ${n}/${runs.length}`).join(", ");
-      return `${text}${errors.length ? ` (${errors.length} err)` : ""}`.padEnd(width);
-    });
-    console.log(`${variant.id.padEnd(24)} ${cells.join(" ")}`);
-  }
+        if (variant.expected?.experiment === experiment.id) {
+          const runs = result.reps.length;
+          for (const id of variant.expected.breaks) {
+            const n = result.reps.filter((r) => r.broken.includes(id)).length;
+            if (n !== runs) failures.push(`${variant.id}: expected ${id} to break in ${runs}/${runs} runs, got ${n} (run ${result.runId})`);
+          }
+        }
+        return cell(result);
+      }),
+    ]);
+    const widths = header.map((_, c) => Math.max(...[header, ...rows].map((r) => r[c]!.length)));
+    console.log(`\n${[header, ...rows].map((r) => r.map((s, c) => s.padEnd(widths[c]!)).join("  ")).join("\n")}`);
 
-  console.log(`\n${results.length} runs in ${((Date.now() - started) / 1000).toFixed(1)} s`);
-  for (const r of results.filter((r) => r.error)) console.log(`  error  ${r.variant} / ${r.scenario}: ${r.error}`);
-  if (failures.length > 0) {
-    console.log(`\nFAIL\n${failures.map((f) => `  - ${f}`).join("\n")}`);
-    return 1;
+    const runs = results.flat().reduce((n, r) => n + r.reps.length, 0);
+    console.log(`\n${runs} runs in ${seconds} s`);
+    for (const r of results.flat()) {
+      for (const v of r.variants) if (v.firstError) console.log(`  error  ${r.version.label} / ${r.experiment}: ${v.firstError.message}`);
+    }
+    if (failures.length > 0) {
+      console.log(`\nFAIL\n${failures.map((f) => `  - ${f}`).join("\n")}`);
+      return 1;
+    }
+    console.log("\nPASS: the clean shop passes every experiment; each case breaks its rules in every run.");
+    return 0;
+  } finally {
+    await runner.close();
   }
-  console.log("\nPASS: the clean shop holds every rule; each case breaks its rule in every run.");
-  return 0;
 }
 
 process.exitCode = await main();

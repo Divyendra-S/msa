@@ -1,6 +1,17 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { Branches, type CodeVersionSpec, clean, ConfigError, openProject, stopOnSignals } from "@windtunnel/core";
+import {
+  Branches,
+  type CodeVersionSpec,
+  clean,
+  ConfigError,
+  formatResults,
+  loadExperiments,
+  openProject,
+  Runner,
+  stopOnSignals,
+  type TraceMode,
+} from "@windtunnel/core";
 
 export interface Flags {
   cwd?: string;
@@ -8,6 +19,10 @@ export interface Flags {
   patch?: string;
   "keep-db"?: boolean;
   all?: boolean;
+  repeat?: string;
+  trace?: string;
+  headed?: boolean;
+  limit?: string;
   json?: boolean;
   help?: boolean;
 }
@@ -17,6 +32,9 @@ const HELP = `windtunnel — real-world failure experiments for web apps
 Usage: windtunnel <command> [options]
 
 Commands
+  run [experiment…]   Run experiments (default: all in .windtunnel/experiments)
+  validate [exp…]     Check experiment files, flows and rules without running them
+  runs                List recent runs
   doctor              Check Node, git, the config file and Postgres
   prepare             Check out, install and build a code version, and seed its snapshot
   branch              Start an isolated branch (app + database copy) and keep it running
@@ -26,7 +44,11 @@ Options
   --cwd <dir>         Project folder (default: current folder)
   --ref <git ref>     Code version to use (default: the working tree, uncommitted changes included)
   --patch <file>      Unified diff applied on top of the code version
-  --keep-db           (branch) keep the run database after stopping
+  --repeat <n>        (run) repetitions per variant, overriding the experiment's repeat
+  --trace <mode>      (run) Playwright traces: failures (default: runs that broke a rule or errored), on, off
+  --headed            (run) show the browser
+  --keep-db           (run, branch) keep run databases after stopping
+  --limit <n>         (runs) how many to list (default 20)
   --all               (clean) also drop snapshots and delete worktrees
   --json              Machine-readable output
 `;
@@ -39,6 +61,12 @@ export async function main(args: string[], flags: Flags): Promise<number> {
   }
   try {
     switch (command) {
+      case "run":
+        return await run(args.slice(1), flags);
+      case "validate":
+        return await validate(args.slice(1), flags);
+      case "runs":
+        return await runs(flags);
       case "doctor":
         return await doctor(flags);
       case "prepare":
@@ -153,5 +181,67 @@ async function cleanCommand(flags: Flags): Promise<number> {
     return 0;
   } finally {
     await branches.close();
+  }
+}
+
+async function run(ids: string[], flags: Flags): Promise<number> {
+  const trace = flags.trace ?? "failures";
+  if (!["off", "failures", "on"].includes(trace)) throw new ConfigError(`--trace must be off, failures or on`);
+  const repeat = flags.repeat === undefined ? undefined : Number(flags.repeat);
+  if (repeat !== undefined && !(Number.isInteger(repeat) && repeat >= 1 && repeat <= 100)) {
+    throw new ConfigError("--repeat must be a whole number from 1 to 100");
+  }
+  const runner = await Runner.open(flags.cwd);
+  stopOnSignals(() => runner.close());
+  try {
+    const experiments = await loadExperiments(runner.project, ids);
+    if (experiments.length === 0) throw new ConfigError(`no experiments in ${runner.project.stateDir}/experiments`);
+    const results = await runner.run(experiments, {
+      version: await versionSpec(flags),
+      repeat,
+      trace: trace as TraceMode,
+      headed: flags.headed,
+      keepDatabase: flags["keep-db"],
+      onRep: flags.json
+        ? undefined
+        : (r) => process.stderr.write(`  ${r.outcome.padEnd(6)} ${r.experiment}${r.variant === "default" ? "" : ` [${r.variant}]`} #${r.rep}  ${r.durationMs} ms\n`),
+    });
+    print(flags, results, `\n${formatResults(results)}`);
+    return results.every((r) => r.outcome === "pass") ? 0 : 1;
+  } finally {
+    await runner.close();
+  }
+}
+
+async function validate(ids: string[], flags: Flags): Promise<number> {
+  const runner = await Runner.open(flags.cwd);
+  try {
+    const experiments = await loadExperiments(runner.project, ids);
+    const { warnings } = await runner.validate(experiments);
+    print(
+      flags,
+      { ok: true, experiments: experiments.map((e) => e.id), warnings },
+      [`ok: ${experiments.length} experiment(s)`, ...warnings.map((w) => `warning: ${w}`)].join("\n"),
+    );
+    return 0;
+  } finally {
+    await runner.close();
+  }
+}
+
+async function runs(flags: Flags): Promise<number> {
+  const runner = await Runner.open(flags.cwd);
+  try {
+    const entries = await runner.store.list(flags.limit ? Number(flags.limit) : 20);
+    print(
+      flags,
+      entries,
+      entries.length === 0
+        ? "no runs yet"
+        : entries.map((e) => `${e.id}  ${e.experiment.padEnd(28)} ${e.version}  ${e.headline}`).join("\n"),
+    );
+    return 0;
+  } finally {
+    await runner.close();
   }
 }

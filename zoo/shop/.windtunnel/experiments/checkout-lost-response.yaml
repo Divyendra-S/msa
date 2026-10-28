@@ -1,0 +1,10 @@
+description: The app saves the order but the browser never gets the answer, so the user clicks "Pay now" again.
+flow: checkout
+perturb:
+  - do: lose-response
+    request: POST /api/orders
+    step: pay
+  - do: repeat
+    step: pay
+# The payment webhook arrives after the user's retry, as it would with a slow provider.
+webhooks: late

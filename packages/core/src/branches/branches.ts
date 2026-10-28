@@ -12,6 +12,10 @@ import { PgServer } from "./postgres.ts";
 export interface CreateBranchOptions {
   /** Keep the run database after stop() for inspection. */
   keepDatabase?: boolean;
+  /** Where the app log goes (default `.windtunnel/logs/branches/<id>`). */
+  logDir?: string;
+  /** Runs after the database copy exists and before the app starts. */
+  beforeStart?: (database: { name: string; url: string }) => Promise<void>;
 }
 
 export interface BranchInfo {
@@ -142,12 +146,13 @@ export class Branches {
       const prepared = await this.prepare(spec);
       const { version } = prepared;
       const id = newBranchId();
-      const logDir = join(this.project.stateDir, "logs", "branches", id);
+      const logDir = options.logDir ?? join(this.project.stateDir, "logs", "branches", id);
       await mkdir(logDir, { recursive: true });
 
       const dbName = `${this.dbPrefix}run_${id}`;
       const dbUrl = await this.pg.clone(this.snapshotName(version.id), dbName);
       if (!options.keepDatabase) cleanup.push(() => this.pg.drop(dbName));
+      await options.beforeStart?.({ name: dbName, url: dbUrl });
 
       const port = await allocatePort();
       cleanup.push(() => releasePort(port));

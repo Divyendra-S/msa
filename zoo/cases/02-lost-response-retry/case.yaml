@@ -1,7 +1,7 @@
 id: 02-lost-response-retry
 title: Lost response, user retries
 summary: The checkout succeeds but the response is lost; the retry charges the same order a second time.
-scenario: lost-response-retry
+experiment: checkout-lost-response
 perturbation: Response dropped after the server saved the order; the user clicks "Pay now" again
 breaks: [one-charge-per-order]
 handler: app/api/orders/route.ts

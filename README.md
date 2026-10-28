@@ -9,22 +9,27 @@ and database, traces what broke, and proves a fix by re-running the experiment.
 - Product plan: [`plan.md`](plan.md)
 - Build plan by phase: [`execution-plan.md`](execution-plan.md)
 
-**Status:** Phase 1 (foundation) is done: isolated branches, the Bug Zoo shop, the mock
-payment provider and Bug Zoo cases 1–3.
+**Status:** Phases 1–2 are done: isolated branches, the Bug Zoo shop with cases 1–3,
+and the experiment engine (flows, perturbations, ordered races, webhook control, rules,
+database diff, repeat runs, run store, `windtunnel run`).
 
 ## Layout
 
 ```
 packages/
-  core/       config, isolated branches (worktree + Postgres copy + app process), rules
+  core/       config, isolated branches (worktree + Postgres copy + app process),
+              experiment runner (flows, perturbations, races, webhooks), rules, DB diff, run store
   cli/        `windtunnel` CLI
   explorer/   (later phase) static index, crawler, decider
   mcp/        (later phase) MCP server
   viewer/     (later phase) web viewer
 zoo/
-  shop/       Bug Zoo demo shop: Next.js + Postgres, standalone app with its own lockfile
+  shop/       Bug Zoo demo shop: Next.js + Postgres, standalone app with its own lockfile;
+              its .windtunnel/ holds the reference flows, experiments and rules
   mock-pay/   mock payment provider: idempotent charges, signed webhooks, harness control
   cases/      one bug patch per case + expected results + verifier
+docs/
+  experiments.md   flow, experiment and rules reference
 ```
 
 ## Development setup
@@ -35,15 +40,15 @@ Requirements: Node 22.18+ (`nvm use` picks Node 24), pnpm 10, Docker.
 pnpm install                 # workspace packages
 pnpm zoo:install             # the shop (standalone, own lockfile)
 pnpm db:up                   # Postgres 17 on localhost:55432 (docker compose)
-pnpm --dir zoo/cases exec playwright install --only-shell chromium
+pnpm --dir packages/core exec playwright install --only-shell chromium
 ```
 
 Checks:
 
 ```sh
-pnpm typecheck
-pnpm test                    # unit tests + branch integration test (needs pnpm db:up)
-pnpm zoo:verify              # every Bug Zoo case against the clean shop and its bug variant
+pnpm typecheck               # packages, tests and the shop's flow files
+pnpm test                    # unit + integration tests (branches, runner; need pnpm db:up)
+pnpm zoo:verify              # every shop experiment against the clean shop and each bug variant
 ```
 
 TypeScript runs directly on Node (type stripping), so there is no build step in
@@ -66,3 +71,44 @@ pnpm wt --cwd zoo/shop clean [--all] # leftover processes and run databases (--a
 
 Worktrees live outside the repo in `~/.cache/windtunnel/` (override with
 `WINDTUNNEL_CACHE_DIR`); the 10 most recently used versions are kept.
+
+## Experiments
+
+An experiment is a flow (a Playwright script split into named steps) plus perturbations,
+races and webhook timing, checked against SQL rules after every run. Each run gets its own
+branch; runs go in parallel up to `parallel` in the config.
+
+```yaml
+# zoo/shop/.windtunnel/experiments/checkout-lost-response.yaml
+description: The app saves the order but the browser never gets the answer, so the user clicks "Pay now" again.
+flow: checkout
+perturb:
+  - do: lose-response
+    request: POST /api/orders
+    step: pay
+  - do: repeat
+    step: pay
+webhooks: late
+```
+
+```sh
+pnpm wt --cwd zoo/shop run                          # every experiment, 3 runs each
+pnpm wt --cwd zoo/shop run checkout-lost-response --patch zoo/cases/02-lost-response-retry/bug.patch
+pnpm wt --cwd zoo/shop validate                     # check files without running
+pnpm wt --cwd zoo/shop runs                         # recent runs
+```
+
+With the case 02 bug patched in:
+
+```
+version 75d73172bd48 (working tree + patch)
+
+experiment              result  runs      rules broken              run
+checkout-lost-response  FAIL    3 broken  one-charge-per-order 3/3  261028-121415-381c
+
+1 experiment(s) · 3 run(s) · 2.5 s · details in zoo/shop/.windtunnel/runs/<run>
+```
+
+Each run leaves steps, a request log, rule results, a row-level database diff, the app log
+and (for failures) a Playwright trace in `.windtunnel/runs/<run>/`. See
+[`docs/experiments.md`](docs/experiments.md) for the full format.

@@ -91,6 +91,19 @@ describe("mock-pay", () => {
     assert.equal(t.pending().length, 0);
   });
 
+  it("delivers early webhooks before the charge call answers, and duplicates on request", async () => {
+    received.length = 0;
+    const t = pay.tenant("early", { webhookUrl, webhooks: "early", webhookTimes: 2, chargeLatencyMs: 0 });
+    const seen: string[] = [];
+    t.onEvent = (event) => seen.push(event.id);
+    await charge("early", 500);
+    assert.equal(received.length, 2, "both deliveries finished before the charge response");
+    assert.deepEqual(seen, ["evt_0001"]);
+    await charge("early", 500, "k");
+    await charge("early", 500, "k");
+    assert.equal(received.length, 4, "a replayed charge sends no new event");
+  });
+
   it("keeps tenants isolated", async () => {
     pay.tenant("iso-a", { webhooks: "manual", chargeLatencyMs: 0 });
     pay.tenant("iso-b", { webhooks: "manual", chargeLatencyMs: 0 });

@@ -47,6 +47,8 @@ export async function loadRules(project: Project): Promise<Rule[]> {
 /** Runs each rule's query read-only against a database. */
 export async function checkRules(databaseUrl: string, rules: Rule[]): Promise<RuleResult[]> {
   const client = new pg.Client({ connectionString: databaseUrl, application_name: "windtunnel-rules" });
+  // A dropped connection fails the running query; without a listener it would crash the process.
+  client.on("error", () => undefined);
   await client.connect();
   try {
     await client.query("SET statement_timeout = '5s'");

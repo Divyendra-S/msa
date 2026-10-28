@@ -1,0 +1,3 @@
+description: The payment provider delivers the payment webhook twice.
+flow: checkout
+webhooks: duplicate

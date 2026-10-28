@@ -1,0 +1,11 @@
+{
+  // Flow files are loaded as ES modules whatever the app's package.json says, and
+  // their "windtunnel" import is pointed at the flow API, so check them that way.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "paths": { "windtunnel": ["./packages/core/src/flow-api.ts"] }
+  },
+  "include": ["zoo/shop/.windtunnel/flows/*.ts"]
+}

@@ -52,16 +52,17 @@ export async function resolveRef(root: string, ref: string): Promise<CommitTree>
 
 /**
  * Captures the working tree (staged, unstaged and untracked files, minus ignored
- * ones) as a commit on top of HEAD. Uses a throwaway index, so the user's index
- * and files are never touched.
+ * ones and `exclude`d paths) as a commit on top of HEAD. Uses a throwaway index,
+ * so the user's index and files are never touched.
  */
-export async function snapshotWorkingTree(root: string): Promise<CommitTree> {
+export async function snapshotWorkingTree(root: string, exclude: string[] = []): Promise<CommitTree> {
   const head = await git(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"], root).catch(() => "");
   return withTempIndex(async (env, indexPath) => {
     const realIndex = resolvePath(root, await git(["rev-parse", "--git-path", "index"], root));
     // Starting from a copy of the real index lets git skip rehashing unchanged files.
     await copyFile(realIndex, indexPath).catch(() => undefined);
     await git(["add", "--all", "--", "."], root, env);
+    if (exclude.length > 0) await git(["rm", "-r", "--cached", "--ignore-unmatch", "-q", "--", ...exclude], root, env);
     const tree = await git(["write-tree"], root, env);
     if (head && tree === (await git(["rev-parse", `${head}^{tree}`], root))) return { commit: head, tree };
     const commit = await git(["commit-tree", tree, ...(head ? ["-p", head] : []), "-m", "windtunnel: working tree snapshot"], root, {
@@ -81,6 +82,22 @@ export async function commitPatch(root: string, base: string, patch: string): Pr
     await git(["apply", "--cached", "--whitespace=nowarn", patchFile], root, env);
     const tree = await git(["write-tree"], root, env);
     const commit = await git(["commit-tree", tree, "-p", base, "-m", "windtunnel: patched version"], root, {
+      ...env,
+      ...SNAPSHOT_ENV,
+    });
+    return { commit, tree };
+  });
+}
+
+/** The same commit without `paths`; returns `base` itself when none of them are in it. */
+export async function withoutPaths(root: string, base: CommitTree, paths: string[]): Promise<CommitTree> {
+  if (paths.length === 0) return base;
+  return withTempIndex(async (env) => {
+    await git(["read-tree", base.tree], root, env);
+    await git(["rm", "-r", "--cached", "--ignore-unmatch", "-q", "--", ...paths], root, env);
+    const tree = await git(["write-tree"], root, env);
+    if (tree === base.tree) return base;
+    const commit = await git(["commit-tree", tree, "-p", base.commit, "-m", "windtunnel: without test files"], root, {
       ...env,
       ...SNAPSHOT_ENV,
     });

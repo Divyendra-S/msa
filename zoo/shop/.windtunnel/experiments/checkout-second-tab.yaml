@@ -1,0 +1,8 @@
+description: The user opens the cart in a second tab and pays in both.
+flow: checkout
+perturb:
+  - do: second-tab
+    step: pay
+race:
+  request: POST /api/orders
+  step: pay
