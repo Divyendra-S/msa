@@ -1,0 +1,115 @@
+# Software Wind Tunnel — Execution Plan
+
+## Tech stack
+
+- **Language:** TypeScript (Node 22+), pnpm workspaces
+- **Browser automation:** Playwright
+- **Agent integration:** MCP TypeScript SDK (`@modelcontextprotocol/sdk`); plugins for Claude Code, Codex and Muse Code
+- **Database:** Postgres (Docker)
+- **Bug Zoo app:** Next.js + Postgres, mock payment provider
+- **Viewer:** Vite + React
+- **Accessibility checks:** axe-core
+- **Models (development):** Claude Opus 5.5 (main) + Claude Haiku 5.5 (helper) via local Claude Code
+- **Models (submission):** Muse Wonder 1.0 (main) + Muse Spark 1.3 (helper and quick decisions) via Meta Model API
+- **Optional quick-decision model:** Jev (via `jev-use`)
+- **Mac app (stretch):** Swift / SwiftUI
+- **License:** MIT
+
+---
+
+## Phase 1 — Foundation
+
+- [ ] Monorepo scaffold: `core`, `explorer`, `mcp`, `viewer`, `cli`
+- [ ] Bug Zoo shop app (Next.js + Postgres) with seed data
+- [ ] Mock payment provider (checkout + controllable webhooks)
+- [ ] Bug Zoo cases 1–3: double submit, lost response + retry, duplicate webhook
+- [ ] Config file (`windtunnel.config.yaml`)
+- [ ] Isolated branches: git worktree per code version, Postgres copy per run, app pool, port allocation, cleanup
+
+## Phase 2 — Experiment engine
+
+- [ ] Flows: deterministic Playwright scripts with named steps
+- [ ] Experiment file format
+- [ ] Rules file format + SQL rules checker
+- [ ] Browser perturbations: double submit, refresh, back + resubmit, second tab, expired session
+- [ ] Network perturbations: delay, 5xx, lost response after save, duplicate request
+- [ ] Fake clock
+- [ ] Ordered races: hold and release requests in a chosen order
+- [ ] Webhook control: duplicate, out of order, early
+- [ ] Second user
+- [ ] Database diff (row-level, before/after)
+- [ ] Repeat N times + flake rate
+- [ ] Run store
+- [ ] `windtunnel run` CLI
+
+## Phase 3 — Agent connection + hunting
+
+- [ ] MCP server (7 tools: map, validate, run, evidence, branch, prove, decide)
+- [ ] Shared skills: `init`, `hunt`, `prove`, `test`
+- [ ] Claude Code plugin with helper subagent
+- [ ] Codex plugin
+- [ ] Muse Code packaging
+- [ ] Evidence packets + drill-down
+- [ ] App map: static index (Next.js routes and handlers, Postgres schema)
+- [ ] Hunt loop: risky code patterns → experiments → findings
+- [ ] Bug Zoo cases 4–7: early webhook, oversell, session expiry, lost update
+
+## Phase 4 — Fix proof
+
+- [ ] Prover: patch in worktree, full matrix × N, revert check, regression set
+- [ ] Branch output with regression experiments + `EVIDENCE.md`
+- [ ] Trace chain: request → handler file → SQL → row changes
+- [ ] Re-test only what changed (affected experiments, results cached by code hash)
+
+## Phase 5 — Efficiency layer
+
+- [ ] Crawler (page snapshot, rules mode)
+- [ ] Free sweep: console errors, failed requests, broken links, accessibility, slow pages
+- [ ] Decider: rules → Muse Spark or Jev → hand back to agent
+- [ ] Selector repair (healed selector written back to the flow)
+- [ ] Failure sorting: bug / flaky / outdated test / environment
+- [ ] Usage meter + per-job budgets
+
+## Phase 6 — Local API + viewer
+
+- [ ] Local API (HTTP + event stream)
+- [ ] Web viewer: runs list, aligned timelines, first divergence, trace chain, DB diff, rule results, usage meter
+- [ ] "Run hunt" button (`muse exec --json`)
+- [ ] "Open in Claude Code" button (deep link)
+
+## Phase 7 — Bug Zoo + benchmark
+
+- [ ] Bug Zoo cases 8–10: back + resubmit, another user's order, success before confirmation
+- [ ] Clean controls C1–C3
+- [ ] Benchmark harness: setups A (no Wind Tunnel), B (rules only), C (with Muse Spark) on Muse Wonder
+- [ ] Usage measurement per setup
+- [ ] Scoreboard
+
+## Phase 8 — Submission
+
+- [ ] Muse setup: Muse Code host, Muse Wonder + Spark, `scripts/muse-env.sh`
+- [ ] `npx windtunnel install`
+- [ ] README with install steps + benchmark table
+- [ ] Demo script + video
+
+## Stretch
+
+- [ ] S1 Proof gate (`Stop` hook)
+- [ ] S3 Shrinking (minimal failing experiment)
+- [ ] S4 Headless `claude -p` / `codex exec` with API keys
+- [ ] S5 Cross-agent check
+- [ ] S6 Express support
+- [ ] S7 Visual fallback (Muse Spark on cropped screenshot)
+- [ ] S8 Swift Mac app (menu bar, notifications, Run hunt, viewer window)
+
+## Later (after the hackathon)
+
+- [ ] Database-level pause points for races inside one handler
+- [ ] OpenTelemetry tracing
+- [ ] Proxy for calls from our server to other servers
+- [ ] More stacks: Django, Rails, Laravel, Remix, SvelteKit; MySQL, SQLite
+- [ ] Community experiment packs
+- [ ] CI mode (GitHub Action)
+- [ ] Reproduce a Sentry issue as an experiment
+- [ ] Channels; Codex app-server; mobile apps
+- [ ] Fully native Swift views in the Mac app
