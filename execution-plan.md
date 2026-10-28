@@ -44,7 +44,7 @@
 
 ## Phase 3 — Agent connection + hunting
 
-- [x] MCP server (7 tools: map, validate, run, evidence, branch, prove, decide) — six now; `decide` comes with the Decider in Phase 5
+- [x] MCP server (7 tools: map, validate, run, evidence, branch, prove, decide; `decide` came with the Decider in Phase 5)
 - [x] Shared skills: `init`, `hunt`, `prove`, `test`
 - [x] Claude Code plugin with helper subagent
 - [x] Codex plugin
@@ -64,12 +64,13 @@
 
 ## Phase 5 — Efficiency layer
 
-- [ ] Crawler (page snapshot, rules mode)
-- [ ] Free sweep: console errors, failed requests, broken links, accessibility, slow pages
-- [ ] Decider: rules → Muse Spark or Jev → hand back to agent
-- [ ] Selector repair (healed selector written back to the flow)
-- [ ] Failure sorting: bug / flaky / outdated test / environment
-- [ ] Usage meter + per-job budgets
+- [x] Crawler (page snapshot, rules mode): links only, as a visitor and test users, one `ariaSnapshotJSON` per page; real control names in the map, page locators by drill-down; cached per code version
+- [x] Free sweep: console errors, failed requests, broken links, accessibility (axe-core), slow pages, during the crawl, 0 tokens
+- [x] Decider: rules → Muse Spark (JSON schema, minimal reasoning) or Jev (OpenRouter Decisions API) → hand back to agent (`windtunnel_decide`, the seventh tool); redaction, confidence threshold, per-job budget
+- [x] Selector repair (healed selector written back to the flow): candidates from the failure snapshot, every literal copy of the call rewritten, checked by a run without perturbations, experiment re-run; checks of what the page shows never healed by rules
+- [x] Failure sorting: bug / flaky / outdated test / environment, with a run without perturbations to separate a broken flow from a perturbation-only failure
+- [x] Usage meter + per-job budgets (tool output tokens per MCP session, Level 1 spend; meter line on run and prove)
+- [x] Bug Zoo healing check: `pnpm zoo:heal` (renamed button and label healed and re-run; a changed confirmation, a real bug and a perturbation-only failure not healed)
 
 ## Phase 6 — Local API + viewer
 
@@ -80,7 +81,7 @@
 
 ## Phase 7 — Bug Zoo + benchmark
 
-- [ ] Bug Zoo cases 8–10: back + resubmit, another user's order, success before confirmation
+- [ ] Bug Zoo cases 8–10: back + resubmit, another user's order, success before confirmation (case 9 changes no data, so SQL rules can't see it: today a flow throws on a 200 for someone else's order and the agent sorts the error; a first-class response check would let it count as a broken rule)
 - [ ] Clean controls C1–C3
 - [ ] Benchmark harness: setups A (no Wind Tunnel), B (rules only), C (with Muse Spark) on Muse Wonder
 - [ ] Usage measurement per setup

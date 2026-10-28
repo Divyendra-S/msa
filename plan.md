@@ -258,18 +258,20 @@ Level 2  main agent   hypotheses, rules, root cause, fixes               Muse Wo
          (routine leftovers go to the helper subagent: Muse Spark, or Haiku on Claude)
 ```
 
-The daemon calls a Level 1 model only with a key we configure (Meta or Jev). It never calls the user's subscription. When Level 1 isn't confident, the decision goes back to the agent in a tool result.
+The daemon calls a Level 1 model only with a key we configure (Meta or Jev). It never calls the user's subscription. When Level 1 isn't confident, the decision goes back to the agent in a tool result, and the agent answers with `windtunnel_decide`.
 
-**Muse Spark as Level 1 (submission default):** ask with a JSON schema for the answer and `reasoning_effort: "minimal"`; measure latency against Jev in the benchmark.
+**Built (Phase 5):** decisions are multiple choice: which candidate a broken locator meant (selector repair) and how to sort a failure (bug / flaky / outdated test / environment). Rules answer first; `decider.confidence` (0.8) decides when an answer is good enough; `budget.usd` caps Level 1 spend per job; `WINDTUNNEL_DECIDER=rules|spark|jev|auto` picks the level (setups B and C of the benchmark). Passwords from the config, keys and connection strings are removed from a question before it leaves the machine.
+
+**Muse Spark as Level 1 (submission default):** `POST https://api.meta.ai/v1/chat/completions` with `MODEL_API_KEY`, a JSON schema for the answer (`response_format: json_schema`, `{choice: enum, confidence}`) and `reasoning_effort: "minimal"`; cost from the reported prices. Measure latency against Jev in the benchmark.
 
 **Jev (optional alternative)**
-- **What it is:** TypeSafe's decision model. It returns typed answers with confidence and writes no text. It's hosted only and needs a TypeSafe, OpenRouter or Vercel key.
+- **What it is:** TypeSafe's decision model. It returns typed answers with confidence and writes no text. It's hosted only and needs a TypeSafe, OpenRouter or Vercel key. **Built:** called through OpenRouter's Decisions API (`POST https://openrouter.ai/api/alpha/decisions`, model `typesafe/jev-1.14`, a `choice` question; `OPENROUTER_API_KEY`), which returns the choice, its confidence and the cost.
 - **Used for:** choosing the next crawl action (action and target in one request), repairing selectors, checking screens ("is a confirmation visible?"), sorting failures, and trimming evidence.
 - **Never used for:** writing tests, rules or fixes. Form values come from code (generated from the field type).
-- **Code we reuse:**
-  - [jev-use](https://github.com/shitianfang/jev-use) (MIT): `check` / `pick` / `rate`, escalation when unsure, redaction, test mode with no key.
-  - The page-snapshot approach from [jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (MIT; keep its license notice): one browser call per snapshot, a numbered list of controls, and freshness and occlusion checks.
-- **Behind an interface:** a `Decider` interface, so Jev can be removed without changes elsewhere.
+- **Code we planned to reuse, and what we did instead:**
+  - [jev-use](https://github.com/shitianfang/jev-use) (MIT) offers `check` / `pick` / `rate`, escalation and redaction. We call the Decisions API directly (one small request), with our own redaction and escalation, so there is no extra dependency.
+  - The page-snapshot approach from [jev-ultrafast](https://github.com/browser-use/jev-ultrafast) (one browser call per snapshot, a list of controls): Playwright now ships this as `page.ariaSnapshotJSON()` (about 10 ms a page, only visible elements, the same accessible names `getByRole` matches), so we use that and copy no code.
+- **Behind an interface:** a `LevelOne` interface inside the `Decider`, so Jev or Spark can be removed without changes elsewhere.
 
 **Targets (to measure, not claims)**
 
@@ -406,6 +408,9 @@ users:
   alice: { email: alice@example.test, password: test }
   bob:   { email: bob@example.test,   password: test }
 parallel: 4
+crawl: { users: [alice], maxPages: 40 }   # optional; slowPageMs, slowRequestMs, skip
+decider: { use: auto, confidence: 0.8 }   # auto: Muse Spark if MODEL_API_KEY, else Jev if OPENROUTER_API_KEY, else rules
+budget: { tokens: 150000, usd: 0.5 }      # per job: tool output (warn past it), Level 1 spend (then hand back)
 ```
 
 **Flow:** `.windtunnel/flows/checkout.ts`
@@ -457,7 +462,7 @@ stock-non-negative:
 | `windtunnel_evidence` | Evidence packet for a run; drill-down by handle (step, request, SQL, diff) |
 | `windtunnel_branch` | Creates an isolated branch from a code ref or patch plus a snapshot |
 | `windtunnel_prove` | Proof matrix result: base / patch / revert / regression |
-| `windtunnel_decide` | Answers a decision the daemon handed back (selector, triage). Added with the Decider (Phase 5); the first six tools shipped in Phase 3 |
+| `windtunnel_decide` | Answers a decision the daemon handed back (selector, triage); without an id, lists the open ones |
 
 **Skills:** `init`, `hunt`, `prove`, `test`, shared by all hosts. **Subagent:** `windtunnel-helper` for routine leftovers (Muse Spark in the submission, Haiku on Claude). **Hook (opt-in):** Stop proof gate.
 

@@ -7,6 +7,7 @@ import type { Experiment } from "./experiment.ts";
 import type { RaceRecord, RequestRecord } from "./network.ts";
 import type { ConsoleRecord, FlowError, StepRecord, WebhookRecord } from "./rep.ts";
 import type { ExperimentResult, RepSummary } from "./runner.ts";
+import { CONTROL_ROLES, describeElement, formatSnapshot, type PageSnapshot } from "./snapshot.ts";
 import type { RunStore } from "./store.ts";
 import {
   attribute,
@@ -82,11 +83,34 @@ export async function evidencePacket(store: RunStore, runId: string, options: Ev
     `Showing run #${focus.rep}${focus.variant !== "default" ? ` [${focus.variant}]` : ""} (${focus.outcome})${rep.detail.error ? `: ${rep.detail.error}` : ""}`,
   ]);
 
+  const triage = JSON.parse(await readFile(join(dir, "triage.json"), "utf8").catch(() => "null")) as {
+    label?: string;
+    reason: string;
+    by: string;
+    decision?: string;
+    rerun?: { runId: string; outcome: string };
+  } | null;
+  if (triage) {
+    add(0, [
+      `Sorted as: ${triage.label ? triage.label.replace("-", " ") : "undecided"} — ${triage.reason} [${triage.by}]${triage.decision && !triage.label ? ` (windtunnel_decide id=${triage.decision})` : ""}`,
+      triage.rerun && `Re-ran after healing: run ${triage.rerun.runId} ${triage.rerun.outcome}`,
+    ]);
+  }
+
   for (const e of rep.detail.errors.filter((e) => e.page)) {
     const page = e.page!;
+    const snapshot = e.snapshot ? await readSnapshot(store, runId, focus.rep, e.snapshot) : undefined;
     add(1, [
       `Page when ${e.tab}${e.step ? ` / ${e.step}` : ""} failed: ${page.path}${page.alerts.length ? ` · alert: ${page.alerts.map((a) => `"${a}"`).join(", ")}` : ""}`,
       `  text: "${page.text}"`,
+      e.locator &&
+        `  ${e.locator.action} waited for ${e.locator.locator}${e.locator.matched ? ` and found ${e.locator.matched} elements` : ", not on the page"}`,
+      snapshot &&
+        `  controls there: ${snapshot.elements
+          .filter((x) => CONTROL_ROLES.has(x.role) || x.clickable)
+          .slice(0, 14)
+          .map(describeElement)
+          .join(" · ") || "none"} (all, with locators: drill down "${runId}/${focus.rep}/page")`,
     ]);
   }
 
@@ -154,7 +178,7 @@ export async function evidencePacket(store: RunStore, runId: string, options: Ev
 
   const h = `${runId}/${focus.rep}`;
   add(0, [
-    `Drill down: windtunnel_evidence handle "${h}/<part>", part = steps · requests · sql · sql:<table> · trace · diff · diff:<table> · rule:<id> · log · console · webhooks (other runs: ${runId}/1…${run.reps.length})`,
+    `Drill down: windtunnel_evidence handle "${h}/<part>", part = steps · requests · sql · sql:<table> · trace · diff · diff:<table> · rule:<id> · page · log · console · webhooks (other runs: ${runId}/1…${run.reps.length})`,
     rep.detail.traces.length > 0 && `Playwright trace: ${rep.detail.traces.map((t) => `npx playwright show-trace ${t}`).join(" · ")}`,
   ]);
 
@@ -163,7 +187,7 @@ export async function evidencePacket(store: RunStore, runId: string, options: Ev
 
 /**
  * Detail behind a packet: `<run>`, `<run>/<rep>`,
- * `<run>/<rep>/steps|requests|sql|sql:<table>|trace|diff|diff:<table>|rule:<id>|log|console|webhooks`.
+ * `<run>/<rep>/steps|requests|sql|sql:<table>|trace|diff|diff:<table>|rule:<id>|page|log|console|webhooks`.
  */
 export async function drillDown(store: RunStore, handle: string, options: EvidenceOptions = {}): Promise<string> {
   const [runId, repText, what = "", ...rest] = handle.split("/");
@@ -184,7 +208,7 @@ export async function drillDown(store: RunStore, handle: string, options: Eviden
   } else if (item === "steps") {
     text = rep.detail.steps
       .map((s) => [
-        `${s.tab} ${s.step}${s.attempt ? ` (${s.attempt})` : ""} ${s.start}–${s.end}${s.quiet ? "" : " (network never went quiet)"}${s.error ? ` ERROR ${s.error}` : ""}`,
+        `${s.tab}${s.as ? ` (as ${s.as})` : ""} ${s.step}${s.attempt ? ` (${s.attempt})` : ""} ${s.start}–${s.end}${s.quiet ? "" : " (network never went quiet)"}${s.error ? ` ERROR ${s.error}` : ""}`,
         ...(s.harness ?? []).map((n) => `  [harness] ${n}`),
         ...s.actions.map((a) => `  ${a.at} ${a.action}`),
       ].join("\n"))
@@ -228,6 +252,15 @@ export async function drillDown(store: RunStore, handle: string, options: Eviden
         ...result.rows.map((r) => `  ${inline(r)}`),
       ].filter(Boolean).join("\n");
     }
+  } else if (item === "page") {
+    const pages = await Promise.all(
+      rep.detail.errors.filter((e) => e.snapshot).map(async (e) => ({ e, snapshot: await readSnapshot(store, runId, repNo, e.snapshot!) })),
+    );
+    text =
+      pages
+        .filter((p) => p.snapshot)
+        .map(({ e, snapshot }) => [`${e.tab}${e.step ? ` / ${e.step}` : ""}: ${e.message}`, formatSnapshot(snapshot!, { max: 150 })].join("\n"))
+        .join("\n\n") || "no page snapshot: the flow did not fail on a page in this run";
   } else if (item === "log") {
     const log = await readFile(join(store.repDir(join(store.dir, runId), repNo), "app.log"), "utf8").catch(() => "");
     text = log.trim().split("\n").slice(-120).join("\n") || "app log is empty";
@@ -239,7 +272,7 @@ export async function drillDown(store: RunStore, handle: string, options: Eviden
       ...rep.detail.webhooks.map((w) => `event ${w.event} ${w.type} ${w.charge}: ${w.deliveries.map((d) => `${d.at} → ${d.status ?? d.error}`).join(", ") || "not delivered"}`),
     ].join("\n") || "no payments in this run";
   } else {
-    throw new Error(`unknown handle part "${item}": use steps, requests, sql, sql:<table>, trace, diff, diff:<table>, rule:<id>, log, console or webhooks`);
+    throw new Error(`unknown handle part "${item}": use steps, requests, sql, sql:<table>, trace, diff, diff:<table>, rule:<id>, page, log, console or webhooks`);
   }
   return cut(text, options.maxChars ?? DRILL_CHARS, handle);
 }
@@ -263,6 +296,11 @@ async function loadRep(store: RunStore, runId: string, rep: number): Promise<Loa
     diff: await read<DbDiff>("db-diff.json"),
     sql: sql && attribute(sql.statements, requests, detail.webhooks, detail.startedAt),
   };
+}
+
+async function readSnapshot(store: RunStore, runId: string, rep: number, file: string): Promise<PageSnapshot | undefined> {
+  const text = await readFile(join(store.repDir(join(store.dir, runId), rep), file), "utf8").catch(() => undefined);
+  return text ? (JSON.parse(text) as PageSnapshot) : undefined;
 }
 
 function resultLine(run: ExperimentResult): string {
@@ -314,7 +352,7 @@ function timeline(rep: LoadedRep, options: EvidenceOptions): string[] {
   for (const s of rep.detail.steps) {
     const reqs = rep.requests.filter((r) => r.tab === s.tab && r.start >= s.start && r.start < (s.end || Infinity) && interesting(r));
     lines.push(
-      `  ${s.tab} ${s.step}${s.attempt ? ` (${s.attempt})` : ""} ${s.start}–${s.end}${(s.harness ?? []).map((h) => ` [harness] ${h}`).join("")}${s.error ? ` ERROR ${s.error}` : ""}`,
+      `  ${s.tab}${s.as ? ` (as ${s.as})` : ""} ${s.step}${s.attempt ? ` (${s.attempt})` : ""} ${s.start}–${s.end}${(s.harness ?? []).map((h) => ` [harness] ${h}`).join("")}${s.error ? ` ERROR ${s.error}` : ""}`,
       ...reqs.map((r) => `    ${requestLine(r, options, false, counts)}`),
     );
   }

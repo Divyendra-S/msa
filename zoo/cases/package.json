@@ -2,15 +2,17 @@
   "name": "@windtunnel/zoo-cases",
   "version": "0.0.0",
   "private": true,
-  "description": "Bug Zoo cases: bug patches, expected results and the verifier",
+  "description": "Bug Zoo cases: bug patches, expected results, the verifier, the prover check and the healing check",
   "license": "MIT",
   "type": "module",
   "scripts": {
     "verify": "node verify.ts",
-    "prove": "node prove.ts"
+    "prove": "node prove.ts",
+    "heal": "node heal.ts"
   },
   "dependencies": {
     "@windtunnel/core": "workspace:*",
+    "@windtunnel/explorer": "workspace:*",
     "yaml": "^2.9.1"
   }
 }

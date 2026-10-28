@@ -54,9 +54,15 @@ importers:
       '@windtunnel/core':
         specifier: workspace:*
         version: link:../core
+      axe-core:
+        specifier: 4.11.1
+        version: 4.11.1
       pg:
         specifier: ^8.23.1
         version: 8.23.1
+      playwright:
+        specifier: 1.64.1
+        version: 1.64.1
       typescript:
         specifier: ~6.0.3
         version: 6.0.3
@@ -87,6 +93,9 @@ importers:
       '@windtunnel/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@windtunnel/explorer':
+        specifier: workspace:*
+        version: link:../../packages/explorer
       yaml:
         specifier: ^2.9.1
         version: 2.9.1
@@ -131,6 +140,10 @@ packages:
 
   ajv@8.20.0:
     resolution: {integrity: sha512-Thbli+OlOj+iMPYFBVBfJ3OmCAnaSyNn4M1vz9T6Gka5Jt9ba/HIR56joy65tY6kx/FCF5VXNB819Y7/GUrBGA==}
+
+  axe-core@4.11.1:
+    resolution: {integrity: sha512-BASOg+YwO2C+346x3LZOeoovTIoTrRqEsqMa6fmfAV0P+U9mFr9NsyOEpiYvFjbc64NMrSswhV50WdXzdb/Z5A==}
+    engines: {node: '>=4'}
 
   body-parser@2.4.0:
     resolution: {integrity: sha512-Ifk1KcLrxaGt1occQagQNFNNOqRt1LFuehEnHHzB8Z6cRgIxRU1TBaiIsUiCdA+gy5PL7Y1IX31DNKkRmxtXjQ==}
@@ -605,6 +618,8 @@ snapshots:
       fast-uri: 3.1.9
       json-schema-traverse: 1.0.0
       require-from-string: 2.0.2
+
+  axe-core@4.11.1: {}
 
   body-parser@2.4.0:
     dependencies:

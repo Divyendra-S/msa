@@ -37,12 +37,47 @@ const MockPaySchema = z.object({
 
 const UserSchema = z.object({ email: z.string(), password: z.string() });
 
+const CrawlSchema = z.object({
+  /** Users to crawl as, besides an anonymous visitor (default: the first user in `users`). */
+  users: z.array(z.string()).optional(),
+  maxPages: z.number().int().positive().default(40),
+  /** Paths not to visit (regular expressions); logout links are always skipped. */
+  skip: z.array(z.string()).default([]),
+  /** Pages and API calls slower than these are reported by the free sweep. */
+  slowPageMs: z.number().int().positive().default(2_000),
+  slowRequestMs: z.number().int().positive().default(1_000),
+});
+
+/**
+ * Small decisions (a renamed button, why a run failed): rules first, then a small model
+ * with a key we set (never the user's agent subscription), then the agent.
+ */
+const DeciderSchema = z.object({
+  /** auto: Muse Spark when MODEL_API_KEY is set, else Jev when OPENROUTER_API_KEY is set, else rules only. */
+  use: z.enum(["auto", "rules", "spark", "jev"]).default("auto"),
+  /** Answers below this confidence go to the next level. */
+  confidence: z.number().min(0).max(1).default(0.8),
+  spark: z.object({ model: z.string().default("muse-spark-1.3"), baseUrl: z.string().default("https://api.meta.ai/v1") }).prefault({}),
+  jev: z.object({ model: z.string().default("typesafe/jev-1.14"), baseUrl: z.string().default("https://openrouter.ai/api/alpha") }).prefault({}),
+});
+
+/** Per job (one agent session with the MCP server, or one day of CLI use). */
+const BudgetSchema = z.object({
+  /** Estimated tokens of tool output; past it, results start with a warning. */
+  tokens: z.number().int().positive().default(150_000),
+  /** USD for Level 1 decisions; past it, decisions go to the agent. */
+  usd: z.number().nonnegative().default(0.5),
+});
+
 export const ConfigSchema = z.object({
   app: AppSchema,
   db: DbSchema,
   mockPay: MockPaySchema.optional(),
   users: z.record(z.string(), UserSchema).default({}),
   parallel: z.number().int().min(1).max(32).default(4),
+  crawl: CrawlSchema.prefault({}),
+  decider: DeciderSchema.prefault({}),
+  budget: BudgetSchema.prefault({}),
 });
 
 export type WindtunnelConfig = z.infer<typeof ConfigSchema>;

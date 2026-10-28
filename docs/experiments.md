@@ -173,6 +173,11 @@ Per variant: **pass** (every run ok), **fail** (a rule broke in every run), **er
 (every run errored) or **flaky** (mixed; `flakeRate` is the share of runs that disagree
 with the most common result).
 
+Then each experiment that didn't pass is sorted as a **bug**, **flaky**, **outdated test** or
+**environment** failure, and renamed buttons, links and labels are healed in the flow file and
+the experiment re-run (see [Failure sorting](agents.md#failure-sorting-and-selector-repair)).
+`run` exits with 0 when every failure was healed and its re-run passed.
+
 ## Run store
 
 ```
@@ -182,6 +187,7 @@ with the most common result).
     run.json                         summary: outcome, variants, rule counts, every run, code tree,
                                      inputs hash and the requests the app received (for --affected)
     experiment.json                  the experiment as run
+    triage.json                      how the failure was sorted (label, reason, who decided, re-run)
     reps/<n>/
       result.json                    steps, actions, harness notes, rules, race, webhooks, charges, console
       requests.json                  request log: tab, step, timing (sent to the app, answered), status, harness notes
@@ -190,15 +196,24 @@ with the most common result).
       app.log                        the app's output
       trace-<user>.zip               Playwright trace (runs that broke a rule or errored)
       screens/<tab>.jpg              screenshot when the flow failed
+      snapshot-<tab>.json            the page's controls and texts when the flow failed (selector repair)
 ```
 
-The newest 100 runs are kept.
+The newest 100 runs are kept. Other local state, all ignored by git:
+
+```
+.windtunnel/cache/crawl/<version>.json      live crawl and free sweep of one code version
+.windtunnel/cache/decisions/<id>.json       decisions handed back to the agent, and their answers
+.windtunnel/cache/proofs/<key>.json         saved proofs
+.windtunnel/logs/usage/<job>.jsonl          usage meter: tool results and decisions per job
+```
 
 ## CLI
 
 ```sh
 windtunnel run [experiment…]   # all experiments by default
   --affected                   # only those whose code changed since their last result; reuse the rest
+  --no-triage                  # don't sort failures or heal flows
   --repeat <n>                 # override repeat
   --ref <ref> --patch <file>   # code version (default: the working tree)
   --trace failures|on|off      # Playwright traces (default: failures)
@@ -208,8 +223,12 @@ windtunnel run [experiment…]   # all experiments by default
 windtunnel validate [experiment…]  # also runs every rule on the seed data (each must hold there)
 windtunnel affected [experiment…]  # which experiments the working tree's changes affect, and why
 windtunnel runs [--limit n]
-windtunnel evidence <run>[/<n>/<part>]   # evidence packet, or steps|requests|sql[:table]|trace|diff[:table]|rule:<id>|log|console|webhooks
-windtunnel map [--focus text] [--no-schema]
+windtunnel evidence <run>[/<n>/<part>]   # evidence packet, or steps|requests|sql[:table]|trace|diff[:table]|rule:<id>|page|log|console|webhooks
+windtunnel evidence crawl|crawl:<path>|sweep|usage|decisions
+windtunnel map [--focus text] [--no-schema] [--crawl]
+windtunnel crawl [--users alice,sam]   # run the app, crawl it, free sweep
+windtunnel decide [id] [answer…]       # decisions handed back; answer one
+windtunnel usage [--limit n]           # per job: tool output, decisions, Level 1 spend
 windtunnel prove <experiment…> [--base ref] [--base-patch file] [--patch file] [--repeat n]
   --branch <name> [--message text]   # when proven: a branch with the fix, regression experiments and evidence
 ```

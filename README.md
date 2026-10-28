@@ -9,12 +9,16 @@ and database, traces what broke, and proves a fix by re-running the experiment.
 - Product plan: [`plan.md`](plan.md)
 - Build plan by phase: [`execution-plan.md`](execution-plan.md)
 
-**Status:** Phases 1–4 are done: isolated branches; the experiment engine (flows,
+**Status:** Phases 1–5 are done: isolated branches; the experiment engine (flows,
 perturbations, ordered races, webhook control, rules, database diff, repeat runs, run
 store); the agent connection (an MCP server, skills and a plugin for Claude Code, Codex
-and Muse Code, the static app map, evidence packets, Bug Zoo cases 1–7); and fix proof (the
+and Muse Code, the static app map, evidence packets, Bug Zoo cases 1–7); fix proof (the
 prover with the project's tests in its regression set, proof branches with `EVIDENCE` files,
-the SQL trace chain, and re-running only the experiments a change affects).
+the SQL trace chain, and re-running only the experiments a change affects); and the
+efficiency layer (a live crawl with a free sweep for console errors, failed requests, broken
+links, accessibility and slow pages; failure sorting; selector repair written back to the
+flow; a Decider that answers small decisions with rules, then Muse Spark or Jev, then the
+agent; and a usage meter with per-job budgets).
 
 ## Layout
 
@@ -23,9 +27,10 @@ packages/
   core/       config, isolated branches (worktree + Postgres copy + app process),
               experiment runner (flows, perturbations, races, webhooks), rules, DB diff, SQL log,
               run store, evidence packets and trace chain, prover and proof branches
-  explorer/   static app map: Next.js routes, what each handler does, risky patterns, pages, schema;
-              which experiments a code change affects
-  mcp/        MCP server (map, validate, run, evidence, branch, prove)
+  explorer/   app map: Next.js routes, what each handler does, risky patterns, pages, schema, and a
+              live crawl with the free sweep; which experiments a code change affects; the Decider
+              (rules → Muse Spark or Jev → agent), selector repair and failure sorting
+  mcp/        MCP server (map, validate, run, evidence, branch, prove, decide) with the usage meter
   cli/        `windtunnel` CLI
   viewer/     (later phase) web viewer
 plugins/
@@ -36,10 +41,11 @@ zoo/
   shop/       Bug Zoo demo shop: Next.js + Postgres, standalone app with its own lockfile;
               its .windtunnel/ holds the reference flows, experiments and rules
   mock-pay/   mock payment provider: idempotent charges, signed webhooks, harness control
-  cases/      one bug patch per case + expected results + verifier; prover check
+  cases/      one bug patch per case + expected results + verifier; prover and healing checks
 docs/
   experiments.md   flow, experiment and rules reference
-  agents.md        skills, MCP tools, app map, evidence packets, trace chain, affected runs, proof
+  agents.md        skills, MCP tools, app map, live crawl and sweep, evidence packets, trace chain,
+                   affected runs, failure sorting and repair, the Decider, usage meter, proof
 ```
 
 ## Development setup
@@ -60,6 +66,7 @@ pnpm typecheck               # packages, tests and the shop's flow files
 pnpm test                    # unit + integration tests (branches, runner; need pnpm db:up)
 pnpm zoo:verify              # every shop experiment against the clean shop and each bug variant
 pnpm zoo:prove               # the prover: proves each case's real fix, rejects the wrong fixes
+pnpm zoo:heal                # failure sorting and selector repair on a copy of the shop, rules only
 ```
 
 TypeScript runs directly on Node (type stripping), so there is no build step in
@@ -142,6 +149,7 @@ The same steps from the shell:
 
 ```sh
 pnpm wt --cwd zoo/shop map --focus orders           # what each handler does, flagged patterns, schema
+pnpm wt --cwd zoo/shop crawl --users alice,sam      # real control names per page, free sweep
 pnpm wt --cwd zoo/shop evidence <run>               # evidence packet; <run>/1/trace or /1/diff:orders to drill down
 pnpm wt --cwd zoo/shop prove checkout-two-buyers --base-patch zoo/cases/05-oversell/bug.patch
 pnpm wt --cwd zoo/shop prove checkout-two-buyers --branch windtunnel/fix-oversell   # bug in HEAD, fix in the working tree

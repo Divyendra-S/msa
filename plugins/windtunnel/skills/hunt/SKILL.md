@@ -13,6 +13,8 @@ Input: an area (`checkout`, `orders`, `admin`), or nothing for the whole app.
 
 Call `windtunnel_map` (with `focus` for an area: it matches paths, files, handler comments, tables, requests and page text; if nothing matches it lists the routes). For each API handler it lists what the handler does in order (auth, SELECT, INSERT, UPDATE, `tx{…}`, external calls) and flags patterns with `!` (`✓` marks a guard it saw). Then read the handler files of the routes in your area, and any helper they call that matters (auth, payments, stock). Flags are hints, not findings: the code decides.
 
+If the map ends with "no live crawl yet" (or says the code changed since), call it once more with `crawl: true`: Wind Tunnel runs the app and visits its pages as a visitor and a test user, adding the exact names of buttons, links and fields per page, and a free sweep (console errors, failed requests, broken links, accessibility, slow pages) found with no model. Sweep findings with severity `high` are often real bugs worth a line in the report.
+
 ## 2. Hypotheses
 
 For each suspicious spot write one line: the real-world event, the perturbation that recreates it, and the rule that would catch the damage.
@@ -36,7 +38,7 @@ A rule is an invariant about the data: SQL that lists the rows breaking it (no r
 
 ## 4. Experiments and flows
 
-Reuse the flows listed in the map. Write a new flow only when no flow reaches the code you're testing; use the buttons, labels and requests the map lists for each page. Read `reference.md` (next to this file) for the exact flow, experiment and rule formats.
+Reuse the flows listed in the map. Write a new flow only when no flow reaches the code you're testing; use the control names the live crawl lists for each page (`windtunnel_evidence` with handle `crawl:/cart` gives one page with ready-made locators). Read `reference.md` (next to this file) for the exact flow, experiment and rule formats.
 
 Propose all new rules and experiments to the user in one short list (id, what it simulates, rule it targets) and ask once. In a non-interactive run, go ahead.
 
@@ -48,7 +50,7 @@ Call `windtunnel_run` with your new experiments (all at once: they run in parall
 
 - **pass**: hypothesis ruled out, unless the result lists it under "not exercised" (a perturbation matched no request, a race held only one request, out-of-order webhooks had one event): then the experiment tested nothing; fix it and run again. Keep passing experiments; they guard against regressions.
 - **fail / flaky**: call `windtunnel_evidence` with the run id. Check that the broken rule's rows, the step timeline and the database changes really show the bug. Its trace lists the statements that wrote the rule's tables (and what those requests read first), with parameters, results and the handler. Drill down (`<run>/1/sql:<table>`, `<run>/1/requests`, `<run>/1/diff:<table>`, `<run>/1/log`) only for what the packet doesn't answer. Then read the handler file it names and find the line.
-- **error**: the flow couldn't finish. Read the step error. Usually the flow needs fixing: a selector, or an ending it should accept (the losing buyer sees "sold out", the second editor sees "changed by someone else"). Fix it and run again. It can also be a real UI bug: the data ends up right but the page never gets there (a spinner that never stops, a confirmation that never shows). Report that as a UI bug only when the evidence shows it: the database reached the final state, and the requests show the page stopped asking.
+- **error**: the flow couldn't finish. The run's `Failure sorting` says why: a renamed button or label is healed in the flow file and re-run for you; a line marked **for you** is a small decision to answer with `windtunnel_decide` from its options alone. Otherwise read the step error and the page shown in the evidence (its controls are listed). Usually the flow needs fixing: an ending it should accept (the losing buyer sees "sold out", the second editor sees "changed by someone else"). Fix it and run again. It can also be a real UI bug: the data ends up right but the page never gets there (a spinner that never stops, a confirmation that never shows). Report that as a UI bug only when the evidence shows it: the database reached the final state, and the requests show the page stopped asking.
 
 A failure caused by a wrong rule or a broken flow is not a bug: fix the experiment, run again. Flaky results: run that experiment again with `repeat: 10` before reporting.
 
@@ -65,4 +67,4 @@ Where: <file>:<line>
 Fix: <the smallest correct fix>
 ```
 
-Then list the experiments that passed (what you ruled out). Don't change application code during a hunt; offer the prove skill to fix and prove each bug.
+Then list the experiments that passed (what you ruled out), and any `high` free-sweep findings in one line each. Don't change application code during a hunt; offer the prove skill to fix and prove each bug.

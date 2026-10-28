@@ -33,33 +33,34 @@ schemas load on demand). Check with `claude --plugin-dir ./plugins/windtunnel pl
 
 | Skill | What the agent does |
 |---|---|
-| `init` | Reads the repo, writes `windtunnel.config.yaml` and a login flow after one confirmation, validates, maps the app |
+| `init` | Reads the repo, writes `windtunnel.config.yaml` and a login flow after one confirmation, validates, maps and crawls the app (with the free sweep) |
 | `hunt` | Reads the map, turns flagged code patterns into hypotheses, writes rules and experiments after one approval, runs them, confirms bugs with evidence, reports each with a reproducing run |
 | `prove` | Fixes a reproduced bug, proves the fix with `windtunnel_prove`, and (with the user's yes) makes a branch with the fix, regression experiments and evidence |
-| `test` | Re-runs only the experiments the code changes affect; looks at evidence only for failures |
+| `test` | Re-runs only the experiments the code changes affect; reports the failure sorting (healed flows included), answers handed-back decisions, reads evidence only for bugs |
 
 In Claude Code they are `/windtunnel:init`, `/windtunnel:hunt checkout`, and so on. The
 `windtunnel-helper` subagent (Haiku on Claude, Muse Spark on Muse) handles routine
-follow-ups: validating, re-running, summarising evidence.
+follow-ups: validating, re-running, summarising evidence, answering obvious decisions.
 
 ## MCP tools
 
 | Tool | Input | Returns |
 |---|---|---|
-| `windtunnel_map` | `focus?` | The app map (below), under about 3k tokens |
+| `windtunnel_map` | `focus?`, `crawl?` | The app map (below), under about 3k tokens; with `crawl`, first runs the app and crawls it (live crawl and free sweep) |
 | `windtunnel_validate` | `experiments?` | `ok`, or every problem in config, flows and experiments, plus rules that error or already break on the seed data |
-| `windtunnel_run` | `experiments?`, `affected?`, `repeat?`, `ref?`, `patch?` | Result table: outcome per experiment and ordering, rules broken N/N, run ids; with `affected`, which results were reused and why the rest ran |
-| `windtunnel_evidence` | `handle` | Evidence packet for a run id, or one detail: `<run>/<n>/steps`, `requests`, `sql`, `sql:<table>`, `trace`, `diff`, `diff:<table>`, `rule:<id>`, `log`, `console`, `webhooks` |
+| `windtunnel_run` | `experiments?`, `affected?`, `repeat?`, `ref?`, `patch?` | Result table: outcome per experiment and ordering, rules broken N/N, run ids; with `affected`, which results were reused and why the rest ran; then the failure sorting (healed flows, re-runs, decisions for the agent) and the usage line |
+| `windtunnel_evidence` | `handle` | Evidence packet for a run id, or one detail: `<run>/<n>/steps`, `requests`, `sql`, `sql:<table>`, `trace`, `diff`, `diff:<table>`, `rule:<id>`, `page`, `log`, `console`, `webhooks`; or `crawl`, `crawl:<path>`, `sweep`, `usage`, `decisions` |
 | `windtunnel_branch` | `action` (`start`/`list`/`stop`), `ref?`, `patch?`, `id?` | A running copy of the app with its own database and mock payments, to try things by hand |
 | `windtunnel_prove` | `experiments`, `base?`, `patch?`, `repeat?`, `branch?`, `message?` | The proof matrix and a verdict; with `branch`, the branch it created |
+| `windtunnel_decide` | `id?`, `answer?` | Open decisions Wind Tunnel handed back; with `id` and `answer`, applies the answer (a selector is written into the flow file and checked with a run) |
 
 `patch` is a unified diff or the path to one. Long runs send MCP progress notifications
 when the client asks for them.
 
 ## The app map
 
-Built from the code in about 50 ms, plus the schema from a copy of the seed snapshot: no
-model, no crawling.
+Built from the code in about 50 ms, plus the schema from a copy of the seed snapshot, plus
+the latest live crawl (below): no model.
 
 ```
 POST /api/orders  app/api/orders/route.ts
@@ -93,6 +94,36 @@ requests) or page text contain it; when nothing matches, the map says so and lis
 routes and pages. `windtunnel map` prints the same thing (`--no-schema` skips the build and
 database).
 
+## Live crawl and free sweep
+
+`windtunnel_map` with `crawl: true` (CLI: `windtunnel crawl`, or `map --crawl`) starts a copy
+of the app and visits it as an anonymous visitor and as test users (`crawl.users`, default the
+first user, logged in with `flows/login.ts`). It follows links only: no form is submitted and no
+button pressed, and the copy has its own database anyway. It starts from `/` and every page
+route without parameters, visits at most two pages per route and `crawl.maxPages` (40) per
+user, and skips logout links. Each page costs one accessibility-tree snapshot (about 10 ms),
+so the shop's 17 pages as three users take 17 s, most of it starting the app.
+
+```
+Live crawl (version 5b1f0a08c0e5, 17 pages as anonymous, alice, sam, 17.2 s): controls as getByRole sees them
+/cart → /login?next=/cart (anonymous, 200)  textbox "Email" · textbox "Password" · button "Log in" · 2 links
+/admin/products/1 (sam, 200)  button "Log out" · textbox "Name" · textbox "Description" · spinbutton "Price in cents" · button "Save" · 4 links
+free sweep: nothing found (console, requests, links, accessibility, speed)
+```
+
+The map shows the newest crawl unless files of the app changed since (it then says so).
+`windtunnel_evidence` with `crawl:/cart` gives one page with a ready-made locator per control
+(`page.getByRole("button", { name: "Add to cart" }).nth(1)`, `exact: true` where a name is a
+prefix of another); `crawl` lists every page.
+
+The **free sweep** runs during the crawl, with no model: console errors and uncaught
+exceptions; same-origin requests that failed or answered 4xx/5xx; links to pages that answer
+4xx/5xx (unvisited ones are checked with a plain request; a 4xx on a page the user has no link
+to is access control, not a finding); accessibility problems from axe-core (WCAG 2.0/2.1 A and
+AA, once per route and user); pages slower than `crawl.slowPageMs` (2 s) and API calls slower than
+`crawl.slowRequestMs` (1 s). Findings are grouped across pages and users; `windtunnel_evidence`
+with `sweep` lists them all.
+
 ## Evidence packets
 
 `windtunnel_evidence <run>` answers in about 600–1,300 tokens (hard cap 2k; drill-downs cap at
@@ -114,7 +145,10 @@ database).
   code), with its database changes and a note when that run used another version of the
   experiment file;
 - what the page showed when a flow failed (path, `role="alert"` texts, the start of the
-  visible text), so a UI bug can be confirmed without opening the trace;
+  visible text), so a UI bug can be confirmed without opening the trace; when a locator failed,
+  what it waited for and the controls that were on the page instead (`<run>/<n>/page` lists
+  them all with ready-made locators);
+- how the failure was sorted (bug, flaky, outdated test, environment) and by whom;
 - error lines from the app log and the browser console;
 - handles to drill down, and the Playwright trace command.
 
@@ -187,6 +221,89 @@ product-edit-two-tabs  affected  changed since run 261028-154134-9e84, version 0
   compared with `git diff` between the two snapshots, so this takes well under a second.
 - Limit: packages of a monorepo imported by name are followed only when the app's
   `package.json` uses `workspace:` dependencies, and then every change outside the app counts.
+
+## Failure sorting and selector repair
+
+After a run, every experiment that didn't pass is sorted, cheapest way first:
+
+- **bug**: a rule broke. Not in every run: still a bug, timing-dependent.
+- **environment**: the copy couldn't start, Postgres refused or ran out of connections, the
+  browser is missing, the disk is full.
+- **flaky**: some runs errored and others passed on the same code and ordering.
+- Otherwise the flow failed in every run, and one more run **without perturbations** (no faults,
+  race or webhook control; set-up SQL kept) tells the rest apart:
+  - it finishes there: the failure only happens under the perturbation, so whether the app is
+    wrong or the flow expects too much is a judgement call, a **decision** (below);
+  - it fails there on a locator: the flow is **out of date**. The locator is looked up in the
+    flow's files (TypeScript AST: every literal copy of that exact call), candidates come from the
+    page snapshot taken at the failure, and the chosen one is written in, checked with another run
+    without perturbations (the whole flow must now finish, or every edit is put back), repeated for
+    the next locator if the flow now gets further (up to three), and the experiment re-run; the
+    result table then shows the re-run.
+
+```
+Failure sorting (decided by rules, then you):
+  checkout-slow-payment   outdated test  the flow's locators no longer matched the app; a run without perturbations now finishes [by rules]
+                                         healed .windtunnel/flows/checkout.ts:27,31  getByRole('button', { name: 'Pay now' }) → getByRole("button", { name: "Place order" })
+                                         re-ran the whole experiment: PASS 2/2 runs ok (run 261028-172903-70c2; first run 261028-172838-9d31)
+  checkout-double-submit  outdated test  its flow was healed for another experiment above; a run without perturbations now finishes [by rules]
+                                         re-ran the whole experiment: PASS 2/2 runs ok (run 261028-172910-4e02; first run 261028-172838-aa7f)
+```
+
+Rules pick a candidate only for an action (click, fill, check…) and only when it is clearly
+ahead: the same words, a clear lead in similarity, or the only control of that role left on the
+page. Log-out and delete-like controls are never offered in place of something else. A wait for
+text (`getByText("Order confirmed").waitFor()`) checks what the app shows, so rules never heal it
+unless the words are the same; a model or the agent is told to answer "none" when the page shows
+a different outcome. `or()`/`and()` locators and locators built from variables are not
+rewritten. `--no-triage` (CLI) skips all of this. `pnpm zoo:heal` checks it on a copy of the shop.
+
+## Small decisions: rules, then a small model, then the agent
+
+Choosing a candidate and sorting a failure are small multiple-choice decisions. The Decider
+answers each at the cheapest level that is sure enough (`decider.confidence`, 0.8):
+
+1. **Rules** (plain code, free).
+2. **Level 1 model**, only with a key Wind Tunnel is given: **Muse Spark** (`MODEL_API_KEY`, Meta's
+   chat completions with a JSON schema for the answer and `reasoning_effort: minimal`) or **Jev**
+   (`OPENROUTER_API_KEY`, OpenRouter's Decisions API with a choice question). Passwords from the
+   config, keys and connection strings are removed from the question first. It never uses the
+   agent's own subscription.
+3. **The agent**: the decision is saved and shown in the tool result with its options; the agent
+   answers with `windtunnel_decide` (CLI `windtunnel decide <id> <answer>`), without opening the
+   page. One decision serves every experiment stuck on the same locator.
+
+```
+decision d4efb (selector): In a run without perturbations, the flow's click on getByRole('button', { name: 'Pay now' }) (step pay) found nothing on /cart. Which element did it mean?
+  …
+  options:
+    c1: button "Place order" (under "Cart") → page.getByRole("button", { name: "Place order" })
+    none: none of these: it isn't on the page (the app changed what users see, or is broken)
+    or: Playwright code for the right element, e.g. page.getByRole("link", { name: "Checkout" })
+  answer with windtunnel_decide id=d4efb answer=<option>
+```
+
+`decider.use` (`auto`, `rules`, `spark`, `jev`) or `WINDTUNNEL_DECIDER` picks the level; `auto`
+uses whichever key is set. Each job may spend `budget.usd` (0.50) on Level 1; after that,
+decisions go to the agent.
+
+## Usage meter and budgets
+
+Every MCP result is counted (an estimate: 4 characters per token; "so far" leaves out the result it is in) per job, which is one MCP
+session (CLI: one per day, or `WINDTUNNEL_JOB`), in `.windtunnel/logs/usage/<job>.jsonl`, with
+each decision, who made it and what a Level 1 call cost. Run and prove results end with one
+line:
+
+```
+usage so far (job cli-2026-10-28): 7 tool output(s) ≈ 2.9k tokens (budget 150.0k) · decisions: 2 by rules, 5 for you
+```
+
+With a Level 1 key the decisions part also counts its answers and their cost, e.g.
+`1 by Muse Spark ($0.0006 of $0.5)`.
+
+`windtunnel_evidence` with `usage` breaks it down per tool and lists earlier jobs (CLI
+`windtunnel usage`). Past `budget.tokens` (150k) every result starts with a warning to wrap up;
+no result is ever longer than about 6k tokens.
 
 ## Proof
 

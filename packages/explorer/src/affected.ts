@@ -132,7 +132,7 @@ export function formatAffectedRun(entries: AffectedEntry[], results: ExperimentR
     lines.push(
       "",
       `reused ${cached.length} result(s), no change in the code they use:`,
-      ...cached.map((e) => `  ${e.experiment.padEnd(width)}  ${e.last!.outcome.toUpperCase().padEnd(5)}  run ${e.last!.runId} (${e.reason})`),
+      ...cached.map((e) => `  ${e.experiment.padEnd(width)}  ${e.last!.outcome.toUpperCase().padEnd(5)}  run ${e.last!.runId} (${e.reason.replace(`run ${e.last!.runId}, `, "")})`),
     );
   }
   return lines.join("\n");

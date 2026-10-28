@@ -32,6 +32,8 @@ users:                                      # test accounts that exist after the
   alice: { email: alice@example.test, password: test }
   bob: { email: bob@example.test, password: test }
 parallel: 4
+crawl:                                      # optional: who the crawl visits as (default: the first user)
+  users: [alice]
 ```
 
 Rules for a good config:
@@ -64,6 +66,6 @@ Use the real labels and button names from the login page.
 
 1. Call `windtunnel_validate`. The first call builds the app and the seed snapshot, which can take a minute. Fix what it reports.
 2. Call `windtunnel_branch` with `action: "start"`, open the printed app URL with curl (or log in with the login flow through a run), then stop the branch.
-3. Call `windtunnel_map` and summarise it for the user in a few lines: routes, the flagged patterns, tables.
+3. Call `windtunnel_map` with `crawl: true`. It runs the app and visits its pages as an anonymous visitor and as a test user (links only: no forms submitted, and on a database copy anyway), so the map gains the real names of buttons, links and fields, and the free sweep: console errors, failed requests, broken links, accessibility problems and slow pages, found with no model. Summarise for the user in a few lines: routes, flagged patterns, tables, and any sweep findings (`windtunnel_evidence` with handle `sweep` lists them all).
 
 Finish by suggesting the hunt skill on the riskiest area the map shows (often checkout or anything that takes payments).

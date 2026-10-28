@@ -81,8 +81,36 @@ products (~1):
   1034 bob|alice POST /api/orders → app/api/orders/route.ts:86: UPDATE products SET stock = stock - $1 WHERE id = $2 [1, 6] → UPDATE 1 (c2, no tx)
 ```
 
+## Heal
+
+`pnpm zoo:heal` checks failure sorting and selector repair, rules only (no model, whatever
+keys are set), on a throwaway copy of the shop. Each scenario changes the copy, runs one
+experiment, sorts the failure and puts the copy back:
+
+| Scenario | Expected |
+|---|---|
+| "Pay now" renamed "Place order" | outdated test; both calls in `checkout.ts` healed, checked, re-run passes |
+| login label "Email" renamed "E-mail" | outdated test; `login.ts` and `checkout.ts` healed (still `getByLabel`), re-run passes |
+| "Order confirmed" changed to "Order received" | a check of what the app shows: not healed, a decision for the agent |
+| case 05's bug | bug (a rule broke), nothing healed |
+| a 503 on `POST /api/orders` | fails only under the perturbation: a decision for the agent, nothing healed |
+
+```
+ok   renamed form label
+     Failure sorting (decided by rules, then you):
+       checkout-slow-payment  outdated test  the flow's locators no longer matched the app; a run without perturbations now finishes [by rules]
+                                             healed .windtunnel/flows/checkout.ts:11,37  getByLabel('Email') → getByLabel("E-mail")
+                                             healed .windtunnel/flows/login.ts:6  getByLabel('Email') → getByLabel("E-mail")
+                                             re-ran the whole experiment: PASS 1/1 runs ok (run 261028-173156-4b82; first run 261028-173132-87e8)
+
+5 scenario(s) in 130.3 s
+PASS: renamed controls are healed and re-run, checks and bugs are not papered over.
+```
+
+`--keep` leaves the copy in place for a look.
+
 ## Patches
 
 Patches are made against the clean shop with repository-relative paths
 (`a/zoo/shop/...`); `wrong-fix.patch` too (it contains the bug). `pnpm zoo:verify` and
-`pnpm zoo:prove` fail if a patch no longer applies.
+`pnpm zoo:prove` fail if a patch no longer applies (`zoo:heal` applies case 05's).

@@ -9,6 +9,8 @@ import { isNetworkPerturbation } from "./experiment.ts";
 import type { LoadedFlow } from "./flows.ts";
 import { type ActionCall, describeAction, instrumentPage } from "./instrument.ts";
 import { Network, type RaceRecord, type RequestRecord } from "./network.ts";
+import { type LocatorFailure, locatorFailure, snapshotPage } from "./snapshot.ts";
+import { writeJson } from "./store.ts";
 import { sleep, within } from "./time.ts";
 
 export type TraceMode = "off" | "failures" | "on";
@@ -24,6 +26,8 @@ export interface StepRecord {
   actions: { at: number; action: string }[];
   /** What the harness did around this step. */
   harness?: string[];
+  /** The user the tab was logged in as, when the flow switched to another (`login("bob")`). */
+  as?: string;
   error?: string;
   /** False when the network never went quiet after the step. */
   quiet: boolean;
@@ -35,6 +39,10 @@ export interface FlowError {
   message: string;
   /** What the page showed when the flow failed. */
   page?: PageState;
+  /** The locator the failing action waited for, when it was one. */
+  locator?: LocatorFailure;
+  /** File in the run's folder with the page's controls and texts at the failure (a PageSnapshot). */
+  snapshot?: string;
 }
 
 export interface PageState {
@@ -322,8 +330,16 @@ export class Rep {
       } catch (err) {
         if (this.closing) return;
         const page = await pageState(tab.page);
-        this.errors.push({ tab: tab.label, step: tab.lastStep, message: firstLine(err), ...(page ? { page } : {}) });
-        await this.screenshot(tab);
+        const locator = locatorFailure((err as Error)?.message ?? "");
+        const snapshot = await this.capture(tab);
+        this.errors.push({
+          tab: tab.label,
+          step: tab.lastStep,
+          message: firstLine(err),
+          ...(page ? { page } : {}),
+          ...(locator ? { locator } : {}),
+          ...(snapshot ? { snapshot } : {}),
+        });
       }
     })();
     this.running.add(run);
@@ -338,19 +354,23 @@ export class Rep {
       if (!done) {
         this.timedOut = true;
         this.errors.push({ tab: "*", message: `timed out after ${this.input.experiment.timeout} ms` });
-        for (const tab of this.tabs) await this.screenshot(tab);
+        for (const tab of this.tabs) await this.capture(tab);
         return;
       }
       if (this.running.size === pending.length) return;
     }
   }
 
-  private async screenshot(tab: Tab): Promise<void> {
+  /** A screenshot and a snapshot of the tab's page; returns the snapshot's file name. */
+  private async capture(tab: Tab): Promise<string | undefined> {
     const dir = join(this.input.dir, "screens");
+    const name = tab.label.replace(/[^\w-]/g, "_");
     await mkdir(dir, { recursive: true });
-    await tab.page
-      .screenshot({ path: join(dir, `${tab.label.replace(/[^\w-]/g, "_")}.jpg`), type: "jpeg", quality: 60, timeout: 3_000 })
-      .catch(() => undefined);
+    await tab.page.screenshot({ path: join(dir, `${name}.jpg`), type: "jpeg", quality: 60, timeout: 3_000 }).catch(() => undefined);
+    const snapshot = await snapshotPage(tab.page);
+    if (!snapshot) return undefined;
+    await writeJson(join(this.input.dir, `snapshot-${name}.json`), snapshot);
+    return `snapshot-${name}.json`;
   }
 
   private login(tab: Tab, name?: string): Promise<void> {
@@ -474,6 +494,7 @@ export class Rep {
       }
       tab.current = undefined;
       this.network.refreshArmed = this.tabs.some((t) => t.current?.refreshPending);
+      if (tab.session.loggedInAs && tab.session.loggedInAs !== tab.user.name) record.as = tab.session.loggedInAs;
       record.end = this.now();
       this.steps.push(record);
     }

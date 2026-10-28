@@ -14,6 +14,7 @@
     "zoo:install": "pnpm --dir zoo/shop install --frozen-lockfile --ignore-workspace",
     "zoo:verify": "node zoo/cases/verify.ts",
     "zoo:prove": "node zoo/cases/prove.ts",
+    "zoo:heal": "node zoo/cases/heal.ts",
     "wt": "node packages/cli/src/bin.ts"
   },
   "devDependencies": {

@@ -29,3 +29,8 @@ Codex plugin in [`../windtunnel`](../windtunnel).
 
 Models: Muse Wonder for the main loop. Keep the Meta key in a shell of its own so it never
 reaches other tools.
+
+With `MODEL_API_KEY` set in that shell, Wind Tunnel's own small decisions (which button a renamed
+locator means, how to sort a failure) go to Muse Spark before they reach the agent: one short
+structured request each, billed to the same key and capped per session by `budget.usd` in
+`windtunnel.config.yaml`. `WINDTUNNEL_DECIDER=rules` turns that off.

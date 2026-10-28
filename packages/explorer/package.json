@@ -1,7 +1,7 @@
 {
   "name": "@windtunnel/explorer",
   "version": "0.0.0",
-  "description": "Wind Tunnel explorer: static app index (routes, handlers, schema); crawler, decider and free sweep later",
+  "description": "Wind Tunnel explorer: app map (static index + crawler), free sweep, affected experiments, Decider, selector repair, failure sorting",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -10,7 +10,9 @@
   },
   "dependencies": {
     "@windtunnel/core": "workspace:*",
+    "axe-core": "4.11.1",
     "pg": "^8.23.1",
+    "playwright": "1.64.1",
     "typescript": "~6.0.3"
   },
   "devDependencies": {

@@ -45,7 +45,8 @@ describe("mcp server", { skip: !(await pgAvailable()) && "Postgres not reachable
       command: process.execPath,
       args: [CLI, "mcp"],
       cwd: repo,
-      env: { ...(process.env as Record<string, string>), WINDTUNNEL_CACHE_DIR: cache },
+      // Rules only: a Level 1 key in the environment must not make the test call a model.
+      env: { ...(process.env as Record<string, string>), WINDTUNNEL_CACHE_DIR: cache, WINDTUNNEL_DECIDER: "rules" },
       stderr: "ignore",
     });
     client = new Client({ name: "test", version: "0" });
@@ -58,10 +59,11 @@ describe("mcp server", { skip: !(await pgAvailable()) && "Postgres not reachable
     await rm(cache, { recursive: true, force: true });
   });
 
-  it("offers six tools with short descriptions", async () => {
+  it("offers seven tools with short descriptions", async () => {
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map((t) => t.name).sort(), [
       "windtunnel_branch",
+      "windtunnel_decide",
       "windtunnel_evidence",
       "windtunnel_map",
       "windtunnel_prove",
@@ -82,12 +84,24 @@ describe("mcp server", { skip: !(await pgAvailable()) && "Postgres not reachable
     assert.match(text, /POST \/api\/send {2}app\/api\/send\/route\.ts/);
     assert.match(text, /INSERT hits/);
     assert.match(text, /hits\(id PK, who text\) 0 rows/);
+    assert.match(text, /no live crawl yet: crawl=true/);
+
+    const crawled = await call("windtunnel_map", { crawl: true });
+    assert.equal(crawled.isError, false, crawled.text);
+    assert.match(crawled.text, /Live crawl \(version \w+, \d+ pages as anonymous, alice/);
+    assert.match(crawled.text, /\/ \(alice, 200\) {2}button "Send"/);
+    assert.match((await call("windtunnel_evidence", { handle: "crawl:/" })).text, /page\.getByRole\("button", \{ name: "Send" \}\)/);
+    assert.match((await call("windtunnel_evidence", { handle: "sweep" })).text, /a11y/);
+    // Cached for this code version: the next map shows it without crawling.
+    assert.match((await call("windtunnel_map")).text, /Live crawl/);
   });
 
   it("runs an experiment and returns evidence with the handler file", async () => {
     const run = await call("windtunnel_run", { experiments: ["double-submit"], repeat: 1 });
     assert.equal(run.isError, false, run.text);
     assert.match(run.text, /double-submit\s+FAIL\s+1 broken\s+at-most-one-hit 1\/1/);
+    assert.match(run.text, /Failure sorting \(decided by rules, then you\):\n\s+double-submit\s+bug\s+rules broke: at-most-one-hit 1\/1 \[by rules\]/);
+    assert.match(run.text, /usage so far \(job mcp-[\d-]+\): \d+ tool output\(s\) ≈ [\d.k]+ tokens \(budget 150\.0k\) · decisions: 1 by rules/);
     const id = /Evidence: windtunnel_evidence handle=<run> \(e\.g\. (\S+)\)/.exec(run.text)?.[1];
     assert.ok(id, run.text);
 
@@ -99,6 +113,11 @@ describe("mcp server", { skip: !(await pgAvailable()) && "Postgres not reachable
 
     const missing = await call("windtunnel_evidence", { handle: "999999-999999-zzzz" });
     assert.equal(missing.isError, true);
+
+    const usage = await call("windtunnel_evidence", { handle: "usage" });
+    assert.match(usage.text, /windtunnel_run\s+1 call\(s\) ≈ \d+ tokens/);
+    assert.match(usage.text, /Level 1: rules → agent/);
+    assert.equal((await call("windtunnel_decide")).text, "no open decisions");
   });
 
   it("starts, lists and stops a branch by hand", async () => {

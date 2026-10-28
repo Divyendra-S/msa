@@ -28,14 +28,27 @@ export {
 } from "./runner/experiment.ts";
 export { type DbDiff, diffSnapshots, snapshotDatabase } from "./runner/db-diff.ts";
 export { DRILL_CHARS, drillDown, type EvidenceOptions, evidencePacket, PACKET_CHARS } from "./runner/evidence.ts";
-export { FLOWS_DIR, loadFlow, stepNames } from "./runner/flows.ts";
+export { findFlowFile, FLOWS_DIR, LOGIN_FLOW, type LoadedFlow, loadFlow, stepNames } from "./runner/flows.ts";
 export { formatProof, type ProofResult, prove, type ProveOptions, type RegressionResult } from "./runner/prove.ts";
 export { matchesRequest, parseRequestPattern, type RequestPattern } from "./runner/match.ts";
 export { experimentInputs, flowFiles } from "./runner/inputs.ts";
 export { type ProofBranch, type ProofBranchOptions, writeProofBranch } from "./runner/proof-branch.ts";
 export { formatResults } from "./runner/report.ts";
 export { type RequestRecord } from "./runner/network.ts";
-export { type StepRecord, type TraceMode } from "./runner/rep.ts";
+export { type FlowError, type PageState, type StepRecord, type TraceMode } from "./runner/rep.ts";
+export {
+  CONTROL_ROLES,
+  describeElement,
+  flattenAria,
+  formatSnapshot,
+  type LocatorFailure,
+  locatorFailure,
+  locatorFor,
+  type PageSnapshot,
+  type SnapshotElement,
+  snapshotPage,
+} from "./runner/snapshot.ts";
+export { type DecidedBy, estimateTokens, formatUsage, listUsage, totalsOf, type UsageEvent, UsageMeter, type UsageTotals } from "./usage.ts";
 export {
   type ExperimentResult,
   headline,

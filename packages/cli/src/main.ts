@@ -5,19 +5,38 @@ import {
   type CodeVersionSpec,
   clean,
   ConfigError,
-  drillDown,
   formatProof,
   formatResults,
+  formatUsage,
+  listUsage,
   loadExperiments,
-  loadRules,
   openProject,
   prove,
   Runner,
   writeProofBranch,
   stopOnSignals,
   type TraceMode,
+  UsageMeter,
 } from "@windtunnel/core";
-import { buildAppMap, findAffected, formatAffected, formatAffectedRun, formatAppMap, readSchema } from "@windtunnel/explorer";
+import {
+  afterTriage,
+  answerDecision,
+  buildAppMap,
+  crawl,
+  Decider,
+  DecisionStore,
+  findAffected,
+  formatAffected,
+  formatAffectedRun,
+  formatAppMap,
+  formatCrawl,
+  formatDecision,
+  formatSweep,
+  formatTriage,
+  readCrawl,
+  readSchema,
+  sortFailures,
+} from "@windtunnel/explorer";
 import { findProjectDir, serveStdio, Workspace } from "@windtunnel/mcp";
 
 export interface Flags {
@@ -40,6 +59,9 @@ export interface Flags {
   affected?: boolean;
   branch?: string;
   message?: string;
+  crawl?: boolean;
+  users?: string;
+  "no-triage"?: boolean;
   help?: boolean;
 }
 
@@ -55,6 +77,13 @@ Commands
   evidence <run>[/<n>/<part>]
                       Evidence packet for a run, or one detail (steps, requests, diff[:table], rule:<id>, log…)
   map                 App map from the code: handlers, risky patterns, pages, database schema
+                      (plus the live crawl of this code version, if there is one)
+  crawl               Run the app and crawl it as a visitor and test users: real control names, and the
+                      free sweep (console errors, failed requests, broken links, accessibility, slow pages)
+  decide [id] [answer…]
+                      Open decisions Wind Tunnel handed back, or answer one (an option id, or Playwright code
+                      for a selector decision)
+  usage               What Wind Tunnel returned to agents per job, and what small-model decisions cost
   prove <experiment…> Prove a fix: fails on --base (default HEAD), passes on the working tree (or --patch)
                       in every ordering, fails again on the base, other experiments don't get worse
   mcp                 MCP server on stdin/stdout for coding agents (Claude Code, Codex, Muse Code)
@@ -70,12 +99,16 @@ Options
   --patch <file>      Unified diff applied on top of the code version
   --repeat <n>        (run) repetitions per variant, overriding the experiment's repeat
   --affected          (run) only experiments whose code changed since their last result; reuse the rest
+  --no-triage         (run) don't sort failures or heal renamed locators in flow files
   --trace <mode>      (run) Playwright traces: failures (default: runs that broke a rule or errored), on, off
   --headed            (run) show the browser
   --keep-db           (run, branch) keep run databases after stopping
   --limit <n>         (runs) how many to list (default 20)
   --focus <text>      (map) only routes and pages whose path or file contains this
   --no-schema         (map) skip the database schema (no build or database needed)
+  --crawl             (map) crawl the running app first (see crawl)
+  --users <a,b>       (crawl) test users to crawl as, besides an anonymous visitor (default: crawl.users,
+                      else the first user)
   --base <git ref>    (prove) code with the bug (default HEAD)
   --branch <name>     (prove) when proven, create this branch: the fix + the experiments as regression
                       tests + .windtunnel/evidence/<id>.md (the working tree is not touched)
@@ -107,6 +140,12 @@ export async function main(args: string[], flags: Flags): Promise<number> {
         return await evidence(args.slice(1), flags);
       case "map":
         return await map(flags);
+      case "crawl":
+        return await crawlCommand(flags);
+      case "decide":
+        return await decide(args.slice(1), flags);
+      case "usage":
+        return await usage(flags);
       case "prove":
         return await proveCommand(args.slice(1), flags);
       case "skills":
@@ -141,8 +180,25 @@ async function versionSpec(flags: Flags): Promise<CodeVersionSpec> {
   };
 }
 
+/** Counts what the CLI prints for the project, as agents often read it (one job per day, or $WINDTUNNEL_JOB). */
+let meter: UsageMeter | undefined;
+const started = Date.now();
+
 function print(flags: Flags, data: unknown, text: string): void {
-  process.stdout.write(flags.json ? `${JSON.stringify(data, null, 2)}\n` : `${text}\n`);
+  const out = flags.json ? `${JSON.stringify(data, null, 2)}\n` : `${text}\n`;
+  process.stdout.write(out);
+  void meter?.tool(`cli ${process.argv[2] ?? ""}`.trim(), out, Date.now() - started).catch(() => undefined);
+}
+
+/** Progress lines on stderr: only for a person at a terminal (agents read the result). */
+function live(flags: Flags): boolean {
+  return !flags.json && !!process.stderr.isTTY;
+}
+
+async function metered(stateDir: string): Promise<UsageMeter> {
+  meter = UsageMeter.forCli(stateDir);
+  await meter.load();
+  return meter;
 }
 
 async function doctor(flags: Flags): Promise<number> {
@@ -241,29 +297,44 @@ async function run(ids: string[], flags: Flags): Promise<number> {
   }
   const runner = await Runner.open(flags.cwd);
   stopOnSignals(() => runner.close());
+  const usageMeter = await metered(runner.project.stateDir);
   try {
     const all = await loadExperiments(runner.project, ids);
     if (all.length === 0) throw new ConfigError(`no experiments in ${runner.project.stateDir}/experiments`);
     if (flags.affected && (flags.ref || flags.patch)) throw new ConfigError("--affected works on the working tree only (no --ref or --patch)");
     const statuses = flags.affected ? await findAffected(runner, all, { repeat }) : undefined;
     const experiments = statuses ? all.filter((e) => statuses.find((s) => s.experiment === e.id)?.status !== "cached") : all;
+    const version = await versionSpec(flags);
+    const decider = Decider.forProject(runner.project, usageMeter);
     const results = experiments.length === 0 ? [] : await runner.run(experiments, {
-      version: await versionSpec(flags),
+      version,
       repeat,
       trace: trace as TraceMode,
       headed: flags.headed,
       keepDatabase: flags["keep-db"],
-      onRep: flags.json
-        ? undefined
-        : (r) => process.stderr.write(`  ${r.outcome.padEnd(6)} ${r.experiment}${r.variant === "default" ? "" : ` [${r.variant}]`} #${r.rep}  ${r.durationMs} ms\n`),
+      onRep: live(flags)
+        ? (r) => process.stderr.write(`  ${r.outcome.padEnd(6)} ${r.experiment}${r.variant === "default" ? "" : ` [${r.variant}]`} #${r.rep}  ${r.durationMs} ms\n`)
+        : undefined,
     });
+    const failing = results.filter((r) => r.outcome !== "pass");
+    const sorted = failing.length && !flags["no-triage"]
+      ? await sortFailures(runner, failing, experiments, {
+          decider,
+          decisions: new DecisionStore(runner.project.stateDir),
+          version,
+          onProgress: live(flags) ? (m) => process.stderr.write(`  ${m}\n`) : undefined,
+        })
+      : [];
+    const tail = `${sorted.length ? `\n\n${formatTriage(sorted, decider.chain)}` : ""}\n\n${formatUsage(usageMeter.totals(), runner.project.config.budget)}`;
+    // Where things stand: a healed experiment by its re-run.
+    const final = afterTriage(results, sorted);
     if (statuses) {
       const cached = statuses.filter((s) => s.status === "cached");
-      print(flags, { results, cached }, `\n${formatAffectedRun(statuses, results)}`);
-      return [...results.map((r) => r.outcome), ...cached.map((c) => c.last!.outcome)].every((o) => o === "pass") ? 0 : 1;
+      print(flags, { results: final, cached, triage: sorted }, `\n${formatAffectedRun(statuses, final)}${tail}`);
+      return [...final.map((r) => r.outcome), ...cached.map((c) => c.last!.outcome)].every((o) => o === "pass") ? 0 : 1;
     }
-    print(flags, results, `\n${formatResults(results)}`);
-    return results.every((r) => r.outcome === "pass") ? 0 : 1;
+    print(flags, { results: final, triage: sorted }, `\n${formatResults(final)}${tail}`);
+    return final.every((r) => r.outcome === "pass") ? 0 : 1;
   } finally {
     await runner.close();
   }
@@ -322,13 +393,9 @@ async function evidence(args: string[], flags: Flags): Promise<number> {
   if (!handle) throw new ConfigError("usage: windtunnel evidence <run>[/<n>/<part>] (see windtunnel runs)");
   const workspace = new Workspace(flags.cwd ?? process.cwd());
   try {
-    const runner = await workspace.open();
-    const text = await drillDown(runner.store, handle, {
-      rules: await loadRules(runner.project).catch(() => []),
-      handlerFor: await workspace.handlerResolver().catch(() => undefined),
-      source: runner.project,
-    });
-    process.stdout.write(`${text}\n`);
+    await metered((await workspace.open()).project.stateDir);
+    const text = await workspace.evidence(handle);
+    print(flags, { text }, text);
     return 0;
   } finally {
     await workspace.close();
@@ -340,11 +407,70 @@ async function map(flags: Flags): Promise<number> {
   try {
     const schema = flags["no-schema"] ? undefined : await branches.withSeedCopy(await versionSpec(flags), readSchema);
     const appMap = await buildAppMap(branches.project, { schema });
-    print(flags, appMap, formatAppMap(appMap, { focus: flags.focus, maxChars: flags.json ? undefined : 1_000_000 }));
+    await metered(branches.project.stateDir);
+    const version = await branches.versions.resolve(await versionSpec(flags));
+    let found: Awaited<ReturnType<typeof readCrawl>> = await readCrawl(branches.project, version);
+    if (flags.crawl) {
+      const runner = new Runner(branches);
+      const onProgress = live(flags) ? (m: string) => process.stderr.write(`  ${m}\n`) : undefined;
+      found = { ...(await crawl(runner, { version: await versionSpec(flags), users: flags.users?.split(","), onProgress })), stale: false };
+    }
+    const text = [
+      formatAppMap(appMap, { focus: flags.focus, maxChars: flags.json ? undefined : 1_000_000 }),
+      found ? formatCrawl(found, 1_000_000, flags.focus) : "(no live crawl yet: windtunnel crawl, or map --crawl)",
+    ].join("\n\n");
+    print(flags, { ...appMap, crawl: found }, text);
     return 0;
   } finally {
     await branches.close();
   }
+}
+
+async function crawlCommand(flags: Flags): Promise<number> {
+  const runner = await Runner.open(flags.cwd);
+  stopOnSignals(() => runner.close());
+  try {
+    await metered(runner.project.stateDir);
+    const result = await crawl(runner, {
+      version: await versionSpec(flags),
+      users: flags.users?.split(","),
+      onProgress: live(flags) ? (m) => process.stderr.write(`  ${m}\n`) : undefined,
+    });
+    print(flags, result, `${formatCrawl(result, 1_000_000)}\n\n${formatSweep(result.sweep, 1_000)}`);
+    return 0;
+  } finally {
+    await runner.close();
+  }
+}
+
+async function decide(args: string[], flags: Flags): Promise<number> {
+  const [id, ...words] = args;
+  const runner = await Runner.open(flags.cwd);
+  stopOnSignals(() => runner.close());
+  try {
+    await metered(runner.project.stateDir);
+    const store = new DecisionStore(runner.project.stateDir);
+    if (!id) {
+      const open = await store.open();
+      print(flags, open, open.length ? open.map(formatDecision).join("\n\n") : "no open decisions");
+    } else if (words.length === 0) {
+      const d = await store.get(id);
+      print(flags, d, formatDecision(d));
+    } else {
+      const text = await answerDecision(runner, store, id, words.join(" "), await loadExperiments(runner.project));
+      print(flags, { id, result: text }, text);
+    }
+    return 0;
+  } finally {
+    await runner.close();
+  }
+}
+
+async function usage(flags: Flags): Promise<number> {
+  const project = await openProject(flags.cwd);
+  const jobs = await listUsage(project.stateDir, flags.limit ? Number(flags.limit) : 20);
+  print(flags, jobs, jobs.length ? jobs.map((t) => formatUsage(t)).join("\n") : "no usage recorded yet");
+  return 0;
 }
 
 async function proveCommand(ids: string[], flags: Flags): Promise<number> {
@@ -381,7 +507,7 @@ async function proveCommand(ids: string[], flags: Flags): Promise<number> {
       });
       text += `\n\n${formatBranch(branch)}`;
     } else if (flags.branch) text += "\n\nNo branch created: the fix is not proven.";
-    print(flags, { ...proof, branch }, text);
+    print(flags, { ...proof, branch }, `${text}\n\n${formatUsage((await metered(runner.project.stateDir)).totals(), runner.project.config.budget)}`);
     return proof.verdict === "proven" ? 0 : 1;
   } finally {
     await workspace.close();

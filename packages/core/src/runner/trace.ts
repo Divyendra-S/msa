@@ -188,12 +188,12 @@ export function traceLines(
       continue;
     }
     lines.push(`  ${table} (${change}):`);
-    // Calls to other services between the first and last statement shown: "then the payment, then the write".
-    const first = Math.min(...shown.map((s) => s.at));
-    const last = Math.max(...shown.map((s) => s.at));
+    // Calls to other services made in the middle of a request shown here: "read, then the payment, then the write".
+    const same = (x: Source, y: Source) => (x.request !== undefined ? x.request === y.request : x.label === y.label);
+    const during = (at: number) => shown.some((a) => a.at < at && a.sources.some((src) => shown.some((b) => b.at > at && b.sources.some((x) => same(x, src)))));
     const events = [
       ...shown.map((s) => ({ at: s.at, text: statementLine(s, ctx) })),
-      ...(ctx.externals ?? []).filter((e) => e.at > first && e.at < last).map((e) => ({ at: e.at, text: `${e.at} ${e.text}` })),
+      ...(ctx.externals ?? []).filter((e) => during(e.at)).map((e) => ({ at: e.at, text: `${e.at} ${e.text}` })),
     ].sort((a, b) => a.at - b.at);
     for (const e of events) lines.push(`    ${e.text}`);
     if (more > 0) lines.push(`    … ${more} more (drill down: sql:${table})`);

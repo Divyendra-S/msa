@@ -28,11 +28,13 @@ export default flow(async ({ page, step, login, params }) => {
 });
 ```
 
-- Context: `page` (Playwright, `baseURL` set), `step(name, fn)`, `login(user?)`, `user` / `users` (`name`, `email`, `password`), `params`, `tab` (string: `alice`, `bob`, `alice#2`), `clock`.
+- Context: `page` (Playwright, `baseURL` set), `step(name, fn)`, `login(name?)` (this tab's user, or another config user by name: `login("bob")` on the same browser, as on a shared computer; evidence then shows `alice (as bob)`), `user` / `users` (`name`, `email`, `password`), `params`, `tab` (string: `alice`, `bob`, `alice#2`), `clock`.
 - A flow can branch on the tab, e.g. a second tab that keeps shopping while the first pays: `if (tab.includes("#")) { … }`.
 - A step is one user action and ends when the network is quiet. Perturbations attach to step names. Keep every page action inside a step.
-- Flows act like a user; they don't check for bugs. Rules do that. Use `getByRole`, `getByLabel`, `getByText` with the names the map lists.
+- Flows act like a user; they don't check for bugs. Rules do that. Use `getByRole`, `getByLabel`, `getByText` with the names the map's live crawl lists. If a name changes later, the run heals the flow file itself.
 - One flow can serve many experiments through `params`.
+- A request the page itself wouldn't send (someone else's id, a tampered body): send it from the page, `await page.evaluate(() => fetch("/api/orders/1"))`, so it carries the browser's cookies, goes through the harness and shows in the evidence.
+- A bug that changes no data (another user's order is readable) breaks no SQL rule. There the flow checks the answer and throws: `if (res.status !== 404) throw new Error("bob can read alice's order 1")`. The run then errors with that message, and the failure sorting hands it to you to call a bug.
 
 ## Experiment: `.windtunnel/experiments/<id>.yaml`
 
