@@ -5,26 +5,23 @@ struct OverviewView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 16) {
+      VStack(alignment: .leading, spacing: 36) {
         Hero().rise()
-        HStack(alignment: .top, spacing: 16) {
-          AttentionPanel()
-          BrokenRulesPanel()
-        }
-        .rise(0.06)
-        HistoryPanel().rise(0.12)
+        AttentionPanel().rise(0.05)
+        HistoryPanel().rise(0.1)
       }
-      .padding(.horizontal, 22)
+      .padding(.horizontal, 28)
       .padding(.top, 4)
-      .padding(.bottom, 24)
-      .frame(maxWidth: 1180, alignment: .leading)
+      .padding(.bottom, 32)
+      .frame(maxWidth: 1100, alignment: .leading)
       .frame(maxWidth: .infinity)
     }
     .scrollIndicators(.never)
   }
 }
 
-/// How the project stands: how many experiments hold, split by outcome, with the orb.
+/// How the project stands: how many experiments hold, one bar split by outcome, and air running
+/// through the tunnel behind it.
 private struct Hero: View {
   @Environment(AppModel.self) private var model
   @State private var shown = 0
@@ -37,47 +34,37 @@ private struct Hero: View {
     let flaky = outcomes.filter { $0 == "flaky" }.count
     let other = outcomes.count - passing - failing - flaky
     ZStack(alignment: .leading) {
-      AsciiArt(scene: .orb(center: UnitPoint(x: 0.76, y: 0.5), radius: 0.3), fontSize: 7)
-        .mask(LinearGradient(stops: [.init(color: .clear, location: 0.38), .init(color: .black, location: 0.62)], startPoint: .leading, endPoint: .trailing))
+      AsciiArt(scene: .tunnel(throat: 0.72, squeeze: 0.56, spacing: 2.2), fontSize: 7)
+        .mask(LinearGradient(stops: [.init(color: .clear, location: 0.36), .init(color: .black, location: 0.7)], startPoint: .leading, endPoint: .trailing))
       VStack(alignment: .leading, spacing: 0) {
-        Text("Holding").label()
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
           Text("\(shown)")
-            .font(Theme.figure(60))
+            .font(Theme.figure(56))
             .foregroundStyle(Theme.text)
             .contentTransition(.numericText(value: Double(shown)))
-          Text(outcomes.isEmpty ? "no experiments yet" : "of \(outcomes.count)")
-            .font(Theme.sans(17)).foregroundStyle(Theme.faint)
+          Text(outcomes.isEmpty ? "no experiments yet" : "of \(outcomes.count) experiments holding")
+            .font(Theme.sans(16)).foregroundStyle(Theme.faint)
         }
-        .padding(.top, 2)
-        SplitBar(parts: [(passing, Theme.pass), (failing, Theme.fail), (flaky, Theme.flaky), (other, Color.white.opacity(0.14))])
-          .frame(width: 320)
+        SplitBar(parts: [(passing, Theme.accent), (failing, Theme.fail), (flaky, Theme.flaky), (other, Color.white.opacity(0.12))])
+          .frame(width: 340)
           .padding(.top, 14)
-        HStack(spacing: 16) {
-          if failing > 0 { legend(failing, "failing", Theme.fail) }
-          if flaky > 0 { legend(flaky, "flaky", Theme.flaky) }
-          if other > 0 { legend(other, "not run", Theme.ghost) }
-          if let last = model.runs.first {
-            Text("Last run \(Fmt.ago(last.started))").font(Theme.sans(12)).foregroundStyle(Theme.faint)
-          }
-        }
-        .padding(.top, 14)
+        Text(summary(failing: failing, flaky: flaky, other: other))
+          .font(Theme.sans(12.5)).foregroundStyle(Theme.faint)
+          .padding(.top, 12)
       }
-      .padding(26)
     }
-    .frame(height: 218)
-    .frame(maxWidth: .infinity)
-    .card(radius: 20)
-    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+    .frame(height: 170)
     .onAppear { withAnimation(.easeOut(duration: 0.8)) { shown = passing } }
     .onChange(of: passing) { withAnimation(Theme.spring) { shown = passing } }
   }
 
-  private func legend(_ n: Int, _ word: String, _ color: Color) -> some View {
-    HStack(spacing: 6) {
-      Circle().fill(color).frame(width: 6, height: 6)
-      Text("\(n) \(word)").font(Theme.sans(12, .medium)).foregroundStyle(Theme.dim)
-    }
+  private func summary(failing: Int, flaky: Int, other: Int) -> String {
+    var parts: [String] = []
+    if failing > 0 { parts.append("\(failing) failing") }
+    if flaky > 0 { parts.append("\(flaky) flaky") }
+    if other > 0 { parts.append("\(other) not run") }
+    if let last = model.runs.first { parts.append("last run \(Fmt.ago(last.started))") }
+    return parts.joined(separator: "  ·  ")
   }
 }
 
@@ -93,21 +80,16 @@ private struct AttentionPanel: View {
       if !bad.isEmpty { Text("\(bad.count)") }
     }) {
       if bad.isEmpty {
-        HStack(spacing: 8) {
-          Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.pass)
-          Text("Every rule held on the newest runs.").foregroundStyle(Theme.dim)
-        }
-        .font(Theme.sans(12.5))
+        Text("Every rule held on the newest runs.").font(Theme.sans(13)).foregroundStyle(Theme.dim)
       } else {
         VStack(spacing: 0) {
           ForEach(bad) { run in
             AttentionRow(run: run)
           }
         }
-        .padding(.horizontal, -8)
+        .padding(.horizontal, -10)
       }
     }
-    .frame(maxWidth: .infinity)
   }
 }
 
@@ -118,58 +100,23 @@ private struct AttentionRow: View {
 
   var body: some View {
     HStack(spacing: 12) {
-      Circle().fill(Tone(run.outcome).color).frame(width: 7, height: 7)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(run.experiment).font(Theme.sans(13, .medium)).foregroundStyle(Theme.text)
-        Text(run.brokenRules.isEmpty ? (run.headline ?? run.outcome) : run.brokenRules.joined(separator: ", "))
-          .font(Theme.mono(11)).foregroundStyle(Theme.faint).lineLimit(1)
-      }
-      Spacer()
-      Text(Fmt.ago(run.started)).font(Theme.sans(11.5)).foregroundStyle(Theme.faint)
-      Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(hovering ? Theme.dim : Theme.ghost)
+      Circle().fill(Tone(run.outcome).color).frame(width: 6, height: 6)
+      Text(run.experiment).font(Theme.sans(13)).foregroundStyle(Theme.text).lineLimit(1)
+      Text(run.brokenRules.isEmpty ? Tone.word(run.outcome).lowercased() : run.brokenRules.joined(separator: ", "))
+        .font(Theme.mono(11.5)).foregroundStyle(Theme.faint).lineLimit(1)
+      Spacer(minLength: 12)
+      Text(Fmt.ago(run.started)).font(Theme.sans(12)).monospacedDigit().foregroundStyle(Theme.ghost)
+      Image(systemName: "chevron.right").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(hovering ? Theme.dim : .clear)
     }
-    .padding(.horizontal, 8)
-    .padding(.vertical, 8)
-    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(hovering ? Color.white.opacity(0.05) : .clear))
+    .padding(.horizontal, 10)
+    .frame(height: 34)
+    .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(hovering ? Theme.hover : .clear))
     .contentShape(Rectangle())
     .onHover { hovering = $0 }
     .onTapGesture {
       model.selectedRun = run.id
       model.section = .runs
     }
-    .animation(Theme.snappy, value: hovering)
-  }
-}
-
-/// Which rules break most, across each experiment's newest run.
-private struct BrokenRulesPanel: View {
-  @Environment(AppModel.self) private var model
-
-  var body: some View {
-    var counts: [String: Int] = [:]
-    for run in model.latestByExperiment.values { for rule in run.brokenRules { counts[rule, default: 0] += 1 } }
-    let ranked = counts.sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
-    let top = ranked.first?.value ?? 1
-    return Panel("Rules broken") {
-      if ranked.isEmpty {
-        Text("None right now.").font(Theme.sans(12.5)).foregroundStyle(Theme.dim)
-      } else {
-        VStack(alignment: .leading, spacing: 14) {
-          ForEach(ranked, id: \.key) { rule, n in
-            VStack(alignment: .leading, spacing: 7) {
-              HStack {
-                Text(rule).font(Theme.mono(11.5)).foregroundStyle(Theme.text.opacity(0.9)).lineLimit(1)
-                Spacer()
-                Text("\(n)").font(Theme.sans(12, .semibold)).monospacedDigit().foregroundStyle(Theme.fail)
-              }
-              Meter(value: Double(n) / Double(top), color: Theme.fail, height: 3)
-            }
-            .help("Broken in the newest run of \(n) experiment\(n == 1 ? "" : "s")")
-          }
-        }
-      }
-    }
-    .frame(width: 340)
   }
 }
 
@@ -193,19 +140,19 @@ private struct HistoryPanel: View {
         let unit = max(1, Int((Double(tallest) / 12).rounded(.up)))
         let gap: CGFloat = 2.5
         let rows = min(12, tallest)
-        let dot = min(7, (86 - gap * CGFloat(rows - 1)) / CGFloat(rows))
+        let dot = min(6, (86 - gap * CGFloat(rows - 1)) / CGFloat(rows))
         HStack(alignment: .bottom, spacing: 5) {
           ForEach(batches) { batch in
             let sorted = batch.runs.sorted { rank($0.outcome) < rank($1.outcome) }
             let shown = stride(from: 0, to: sorted.count, by: unit).map { sorted[$0] }
             VStack(spacing: gap) {
               ForEach(shown) { run in
-                Circle()
-                  .fill(Tone(run.outcome).color.opacity(hover == nil || hover == batch ? 0.95 : 0.3))
+                RoundedRectangle(cornerRadius: 1)
+                  .fill(color(run.outcome).opacity(hover == nil || hover == batch ? 1 : 0.3))
                   .frame(width: dot, height: dot)
               }
             }
-            .frame(width: 7, height: 86, alignment: .bottom)
+            .frame(width: 6, height: 86, alignment: .bottom)
             .contentShape(Rectangle())
             .onHover { inside in withAnimation(Theme.snappy) { hover = inside ? batch : (hover == batch ? nil : hover) } }
             .onTapGesture {
@@ -218,6 +165,11 @@ private struct HistoryPanel: View {
         .clipped()
       }
     }
+  }
+
+  /// Held runs in the hue, so the chart shows how much passes; the rest in their colours.
+  private func color(_ outcome: String) -> Color {
+    outcome == "pass" ? Theme.accent.opacity(0.6) : Tone(outcome).color
   }
 
   private func rank(_ outcome: String) -> Int {

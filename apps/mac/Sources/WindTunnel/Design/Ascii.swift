@@ -2,7 +2,7 @@ import SwiftUI
 
 /// ⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏
 struct BrailleSpinner: View {
-  var color: Color = Theme.aqua
+  var color: Color = Theme.accent
   var size: CGFloat = 11
   private static let frames = Array("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏").map(String.init)
 
@@ -51,7 +51,7 @@ struct ScrambleText: View {
 /// A dot that breathes while something is live.
 struct LiveDot: View {
   var on: Bool
-  var color: Color = Theme.aqua
+  var color: Color = Theme.accent
 
   var body: some View {
     ZStack {
@@ -69,23 +69,23 @@ struct LiveDot: View {
   }
 }
 
-/// The mark: a small lit orb with air bending round it.
+/// The mark: three lines of air through a wind tunnel's narrow throat, deep to light.
 struct LogoMark: View {
   var size: CGFloat = 18
 
   var body: some View {
     Canvas { context, s in
       let w = s.width, h = s.height
-      let line = max(1.1, w * 0.07)
+      let line = max(1.2, w * 0.085)
       var p = Path()
-      p.move(to: CGPoint(x: 0.02 * w, y: 0.3 * h))
-      p.addCurve(to: CGPoint(x: 0.98 * w, y: 0.22 * h), control1: CGPoint(x: 0.42 * w, y: 0.3 * h), control2: CGPoint(x: 0.5 * w, y: 0.08 * h))
-      p.move(to: CGPoint(x: 0.02 * w, y: 0.7 * h))
-      p.addCurve(to: CGPoint(x: 0.98 * w, y: 0.78 * h), control1: CGPoint(x: 0.42 * w, y: 0.7 * h), control2: CGPoint(x: 0.5 * w, y: 0.92 * h))
-      context.stroke(p, with: .linearGradient(Gradient(colors: [Theme.lavender.opacity(0.5), Theme.aqua]), startPoint: .zero, endPoint: CGPoint(x: w, y: h)), style: StrokeStyle(lineWidth: line, lineCap: .round))
-      let r = 0.22 * w
-      let orb = CGRect(x: 0.5 * w - r, y: 0.5 * h - r, width: 2 * r, height: 2 * r)
-      context.fill(Path(ellipseIn: orb), with: .radialGradient(Gradient(colors: [.white, Theme.accent, Theme.accent.opacity(0.6)]), center: CGPoint(x: orb.minX + r * 0.7, y: orb.minY + r * 0.6), startRadius: 0, endRadius: r * 1.6))
+      for (y0, pinch) in [(0.2, 0.17), (0.5, 0.0), (0.8, -0.17)] {
+        p.move(to: CGPoint(x: 0.04 * w, y: y0 * h))
+        p.addCurve(to: CGPoint(x: 0.5 * w, y: (y0 + pinch) * h), control1: CGPoint(x: 0.26 * w, y: y0 * h), control2: CGPoint(x: 0.32 * w, y: (y0 + pinch) * h))
+        p.addCurve(to: CGPoint(x: 0.96 * w, y: y0 * h), control1: CGPoint(x: 0.68 * w, y: (y0 + pinch) * h), control2: CGPoint(x: 0.74 * w, y: y0 * h))
+      }
+      context.stroke(
+        p, with: .linearGradient(Gradient(colors: [Theme.accentDeep, Theme.accent, Theme.accentLight]), startPoint: .zero, endPoint: CGPoint(x: w, y: 0)),
+        style: StrokeStyle(lineWidth: line, lineCap: .round))
     }
     .frame(width: size, height: size)
   }

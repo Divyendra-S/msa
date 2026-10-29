@@ -53,28 +53,31 @@ Sources/WindTunnel/
   App/        the app, its state (AppModel: bridge, event stream, actions), snapshot mode
   Bridge/     Toolchain (login-shell PATH, Node, the CLI), Bridge (child process, API, events), Keychain
   Model/      the API's shapes, formatting
-  Design/     Theme (the glass backdrop, cards, capsule buttons, segmented control, meters),
-              Ascii (spinner, scramble text, live dot, the mark), AsciiArt (characters drawn
-              like a shader: the orb in its stream of air, the radar)
-  Views/      Shell (window, header, sidebar, status line, welcome), Overview, Runs, RunDetail,
+  Design/     Theme (backdrop, sections, buttons, tab strip, meters), Ascii (spinner, live dot,
+              the mark), AsciiArt (characters drawn like a shader: air through the tunnel)
+  Views/      Shell (window, top bar, sidebar, welcome), Overview, Runs, RunDetail,
               Timeline, Evidence (trace, database, network, log), Experiments, Hunt, Usage
 ```
 
-The look is dark glass: the window shows the desktop through it, blurred and tinted ink, with a
-faint wash of lavender and aqua; content sits on it in translucent cards with lit hairline edges.
-SF Pro for the interface, SF Mono only for data (rules, SQL, logs). On macOS 26 the sidebar and
-the floating controls are Liquid Glass.
+The look is quiet glass: the window shows the desktop through it, blurred and tinted ink. Content
+sits straight on it in sections split by hairlines, not boxed in cards, with small corners. One
+hue, a cool blue, for the brand, for what's live and for what holds; red and amber only where
+something failed or is flaky, and passing runs stay grey so failures are what you see. SF Pro for
+the interface, SF Mono only for data (rules, SQL, logs). Details live in tooltips.
 
 The ASCII is drawn like a shader: every cell of a monospaced grid samples a scene for a glyph
-and a brightness, a gradient colours the field, and the brightest cells are lit white. The orb is
-a sphere shaded with ordered dithering, turning slowly, with smoke lines of potential flow bending
-round it and rolling up into a vortex street behind; the hunt page has a radar whose afterglow is
-dithered dots. It steps at about 20 frames a second and holds still with Reduce Motion.
+and a brightness, the field is coloured through the hue, and the brightest cells are lit white.
+The one scene is a wind tunnel's test section seen from the side: smoke lines squeeze through
+the narrow throat and speed up, then spread out behind it and start to waver, with puffs
+travelling down each line and dust drifting between them. Flat stretches pick a low, middle or
+high stroke (`_ - ¯`) for where the line crosses the cell, so curves read smooth. On the hunt
+page a sensor sweeps along it. It steps at about 20 frames a second and holds still with Reduce
+Motion.
 
 For working on the views:
 
 ```sh
-.build/debug/WindTunnel --snapshot orb /tmp/orb.png 1000 640   # render a view to PNG (orb, scan, parts, icon)
+.build/debug/WindTunnel --snapshot tunnel /tmp/t.png 1000 640  # render a view to PNG (tunnel, probe, parts, icon)
 open "build/Wind Tunnel.app" --args --project <app folder> --pane runs --run <run id> --tab timeline
 open "build/Wind Tunnel.app" --args --welcome
 ```

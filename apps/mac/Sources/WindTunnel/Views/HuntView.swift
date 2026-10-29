@@ -29,7 +29,7 @@ struct HuntView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 16) {
+      VStack(alignment: .leading, spacing: 36) {
         composer.rise()
         if let hunt = current {
           HuntSession(hunt: hunt).id(hunt.id)
@@ -37,10 +37,10 @@ struct HuntView: View {
         ActivityPanel().rise(0.06)
         if !model.hunts.isEmpty { PastHunts().rise(0.1) }
       }
-      .padding(.horizontal, 22)
+      .padding(.horizontal, 28)
       .padding(.top, 4)
-      .padding(.bottom, 24)
-      .frame(maxWidth: 1180, alignment: .leading)
+      .padding(.bottom, 32)
+      .frame(maxWidth: 1100, alignment: .leading)
       .frame(maxWidth: .infinity)
     }
     .scrollIndicators(.automatic)
@@ -59,62 +59,61 @@ struct HuntView: View {
 
   private var composer: some View {
     ZStack(alignment: .topLeading) {
-      AsciiArt(scene: .scan(center: UnitPoint(x: 0.855, y: 0.5), radius: 0.42, speed: model.runningHunt != nil ? 2.4 : 1), fontSize: 7)
-        .mask(LinearGradient(stops: [.init(color: .clear, location: 0.62), .init(color: .black, location: 0.78)], startPoint: .leading, endPoint: .trailing))
-      VStack(alignment: .leading, spacing: 20) {
-        VStack(alignment: .leading, spacing: 6) {
-          Text("Send an agent to break your app")
-            .font(Theme.sans(22, .semibold)).tracking(-0.3).foregroundStyle(Theme.text)
-          Text("It finds the risky spots, writes experiments, and keeps the ones that break a rule.")
-            .font(Theme.sans(13)).foregroundStyle(Theme.dim)
-        }
+      AsciiArt(scene: .tunnel(throat: 0.74, squeeze: 0.5, spacing: 3, probe: true, speed: model.runningHunt != nil ? 2.2 : 1), fontSize: 7.5)
+        .mask(LinearGradient(stops: [.init(color: .clear, location: 0.6), .init(color: .black, location: 0.84)], startPoint: .leading, endPoint: .trailing))
+      VStack(alignment: .leading, spacing: 0) {
+        Text("Send an agent to break your app")
+          .font(Theme.sans(20, .semibold)).tracking(-0.2).foregroundStyle(Theme.text)
+        Text("It finds the risky spots, writes experiments, and keeps the ones that break a rule.")
+          .font(Theme.sans(13)).foregroundStyle(Theme.dim)
+          .padding(.top, 6)
         HStack(spacing: 10) {
-          Image(systemName: "scope").font(.system(size: 14, weight: .medium)).foregroundStyle(Theme.air)
           TextField("", text: $area, prompt: Text("The whole app, or an area like checkout").foregroundStyle(Theme.faint))
             .textFieldStyle(.plain)
-            .font(Theme.sans(15))
+            .font(Theme.sans(14))
             .foregroundStyle(Theme.text)
             .onSubmit(start)
-          Text(prompt).font(Theme.mono(10.5)).foregroundStyle(Theme.ghost).lineLimit(1)
+          Text(prompt).font(Theme.mono(11)).foregroundStyle(Theme.ghost).lineLimit(1)
         }
-        .padding(.horizontal, 16)
-        .frame(height: 48)
-        .frame(maxWidth: 640)
-        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.black.opacity(0.22)))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Theme.lineStrong, lineWidth: 1))
-        VStack(alignment: .leading, spacing: 10) {
-          HStack(spacing: 12) {
-            Segmented(items: HuntHost.allCases, selection: $host) { h, _ in
-              HStack(spacing: 6) {
-                Circle().fill(available(h) ? Theme.pass : Theme.ghost).frame(width: 5, height: 5)
-                Text(h.title)
+        .padding(.horizontal, 14)
+        .frame(height: 42)
+        .frame(maxWidth: 600)
+        .background(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).fill(Theme.well))
+        .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).strokeBorder(Theme.line, lineWidth: 1))
+        .padding(.top, 22)
+        HStack(spacing: 16) {
+          TabStrip(items: HuntHost.allCases, selection: $host, size: 12.5) { h, _ in
+            Text(h.title).opacity(available(h) ? 1 : 0.55)
+          }
+          if host == .claudeAPI, available(.claudeAPI) {
+            Picker("", selection: $model5) {
+              ForEach(models, id: \.self) { m in
+                Text(m.replacingOccurrences(of: "claude-", with: "").replacingOccurrences(of: "-5-5", with: " 5.5").capitalized).tag(m)
               }
             }
-            if host == .claudeAPI, available(.claudeAPI) {
-              Segmented(items: models, selection: $model5) { m, _ in
-                Text(m.replacingOccurrences(of: "claude-", with: "").replacingOccurrences(of: "-5-5", with: "").capitalized)
-              }
-              Stepper(value: $budget, in: 0.5...50, step: 0.5) {
-                Text("Cap \(Fmt.usd(budget))").font(Theme.sans(12, .medium)).monospacedDigit().foregroundStyle(Theme.dim)
-              }
-              .controlSize(.small)
-              .help("The most this hunt may spend")
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .controlSize(.small)
+            .fixedSize()
+            Stepper(value: $budget, in: 0.5...50, step: 0.5) {
+              Text("Cap \(Fmt.usd(budget))").font(Theme.sans(12)).monospacedDigit().foregroundStyle(Theme.dim)
             }
-            Spacer(minLength: 0)
+            .controlSize(.small)
+            .help("The most this hunt may spend")
           }
-          HStack(spacing: 14) {
-            Text(note).font(Theme.sans(12)).foregroundStyle(Theme.faint).lineLimit(1).help(host == .claudeCode ? "It runs on your own plan when you press Return." : note)
-            Spacer(minLength: 0)
-            action
-          }
-          .frame(maxWidth: 640)
         }
+        .padding(.top, 14)
+        HStack(spacing: 14) {
+          Text(note).font(Theme.sans(12)).foregroundStyle(Theme.faint).lineLimit(1).help(host == .claudeCode ? "It runs on your own plan when you press Return." : note)
+          Spacer(minLength: 0)
+          action
+        }
+        .frame(maxWidth: 600)
+        .padding(.top, 10)
       }
-      .padding(26)
+      .padding(.vertical, 8)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .card(radius: 20)
-    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
   }
 
   private var models: [String] {
@@ -150,14 +149,14 @@ struct HuntView: View {
       Button(action: start) {
         Label("Open in Claude Code", systemImage: "arrow.up.forward.app")
       }
-      .buttonStyle(GlassButtonStyle(prominent: true))
+      .buttonStyle(ActionButtonStyle(prominent: true))
       .help("Needs the plugin: windtunnel install --hosts claude")
     case .claudeAPI:
       if available(.claudeAPI) {
         HStack(spacing: 8) {
-          Button("Key…") { showKey = true }.buttonStyle(GlassButtonStyle())
+          Button("Key…") { showKey = true }.buttonStyle(ActionButtonStyle())
           Button(action: start) { Label("Start hunt", systemImage: "play.fill") }
-            .buttonStyle(GlassButtonStyle(prominent: true))
+            .buttonStyle(ActionButtonStyle(prominent: true))
             .disabled(model.runningHunt != nil)
         }
       } else {
@@ -166,11 +165,11 @@ struct HuntView: View {
         } label: {
           Label(model.hasAnthropicKey ? "Change key…" : "Add API key…", systemImage: "key")
         }
-        .buttonStyle(GlassButtonStyle(prominent: true))
+        .buttonStyle(ActionButtonStyle(prominent: true))
       }
     case .muse:
       Button(action: start) { Label("Start hunt", systemImage: "play.fill") }
-        .buttonStyle(GlassButtonStyle(prominent: true))
+        .buttonStyle(ActionButtonStyle(prominent: true))
         .disabled(!available(.muse) || model.runningHunt != nil)
     }
   }
@@ -198,8 +197,9 @@ private struct HuntSession: View {
     let events = model.huntEvents[hunt.id] ?? []
     let running = hunt.status == "running"
     VStack(alignment: .leading, spacing: 14) {
+      Hairline()
       HStack(spacing: 12) {
-        if running { BrailleSpinner(size: 13) } else { Circle().fill(Tone(hunt.status).color).frame(width: 8, height: 8) }
+        if running { BrailleSpinner(size: 12) } else { Circle().fill(Tone(hunt.status).color).frame(width: 6, height: 6) }
         VStack(alignment: .leading, spacing: 2) {
           Text(hunt.prompt).font(Theme.mono(12.5, .medium)).foregroundStyle(Theme.text).lineLimit(1)
           Text("\(hunt.host ?? "muse")\(hunt.model.map { " · \($0)" } ?? "") · \(Fmt.clock(ISO.date(hunt.startedAt)))")
@@ -209,12 +209,12 @@ private struct HuntSession: View {
         Metric(label: "Tokens", value: Fmt.kilo(hunt.usage.input + hunt.usage.output))
         Metric(label: "Cost", value: Fmt.usd(hunt.usage.usd))
         if let cap = hunt.budgetUsd {
-          Meter(value: hunt.usage.usd / cap, color: hunt.usage.usd / cap > 0.8 ? Theme.fail : Theme.aqua, height: 4)
+          Meter(value: hunt.usage.usd / cap, color: hunt.usage.usd / cap > 0.8 ? Theme.fail : Theme.accent)
             .frame(width: 70)
             .help("\(Fmt.usd(hunt.usage.usd)) of a \(Fmt.usd(cap)) cap")
         }
         if running {
-          Button("Stop") { model.stopHunt(hunt.id) }.buttonStyle(GlassButtonStyle(color: Theme.fail))
+          Button("Stop") { model.stopHunt(hunt.id) }.buttonStyle(ActionButtonStyle(color: Theme.fail))
         }
       }
       ScrollViewReader { proxy in
@@ -231,17 +231,15 @@ private struct HuntSession: View {
               .id(-1)
             }
           }
-          .padding(14)
+          .padding(16)
         }
         .frame(height: 340)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.well))
+        .background(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).fill(Theme.well))
         .onChange(of: events.count) {
           withAnimation(Theme.snappy) { proxy.scrollTo(running ? -1 : (events.last?.seq ?? 0), anchor: .bottom) }
         }
       }
     }
-    .padding(18)
-    .card(radius: 18, tint: running ? Theme.aqua : nil)
     .task(id: hunt.id) { await model.loadHunt(hunt.id) }
     .rise()
   }
@@ -253,8 +251,8 @@ private struct Metric: View {
 
   var body: some View {
     VStack(alignment: .trailing, spacing: 1) {
-      Text(value).font(Theme.sans(13, .semibold)).monospacedDigit().foregroundStyle(Theme.text).contentTransition(.numericText())
-      Text(label).label()
+      Text(value).font(Theme.sans(13, .medium)).monospacedDigit().foregroundStyle(Theme.text).contentTransition(.numericText())
+      Text(label).font(Theme.sans(11)).foregroundStyle(Theme.faint)
     }
     .animation(Theme.snappy, value: value)
   }
@@ -269,7 +267,7 @@ private struct EventLine: View {
       switch event.kind {
       case "tool":
         HStack(alignment: .firstTextBaseline, spacing: 6) {
-          Text(event.tool ?? "tool").foregroundStyle(Theme.accent)
+          Text(event.tool ?? "tool").foregroundStyle(Theme.accent.opacity(0.9))
           if let t = event.text { Text(t).foregroundStyle(Theme.faint).lineLimit(2) }
         }
         .font(Theme.mono(11))
@@ -303,10 +301,7 @@ private struct ActivityPanel: View {
       }
     }) {
       if model.activity.isEmpty {
-        HStack(spacing: 10) {
-          BrailleSpinner(color: Theme.faint)
-          Text("Runs your agent starts appear here, live.").font(Theme.sans(12.5)).foregroundStyle(Theme.dim)
-        }
+        Text("Runs your agent starts appear here as they happen.").font(Theme.sans(13)).foregroundStyle(Theme.dim)
         .help("When your agent calls windtunnel_run, here or in its own terminal, each run shows up as it starts.")
       } else {
         VStack(alignment: .leading, spacing: 0) {
@@ -315,7 +310,7 @@ private struct ActivityPanel: View {
               .transition(.move(edge: .top).combined(with: .opacity))
           }
         }
-        .padding(.horizontal, -8)
+        .padding(.horizontal, -10)
         .animation(Theme.spring, value: model.activity.first?.id)
       }
     }
@@ -334,16 +329,14 @@ private struct ActivityRow: View {
         if a.kind == .started { BrailleSpinner(size: 10) } else { Circle().fill(color).frame(width: 6, height: 6) }
       }
       .frame(width: 12)
-      Text(text).font(Theme.sans(12.5)).foregroundStyle(Theme.text.opacity(0.88)).lineLimit(1)
+      Text(text).font(Theme.sans(13)).foregroundStyle(Theme.text.opacity(0.88)).lineLimit(1)
       Spacer()
-      Text(Fmt.clock(a.at)).font(Theme.sans(11)).monospacedDigit().foregroundStyle(Theme.faint)
-      if a.run != nil {
-        Image(systemName: "chevron.right").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(hovering ? Theme.dim : Theme.ghost)
-      }
+      Text(Fmt.clock(a.at)).font(Theme.sans(12)).monospacedDigit().foregroundStyle(Theme.ghost)
+      Image(systemName: "chevron.right").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(hovering && a.run != nil ? Theme.dim : .clear)
     }
-    .padding(.horizontal, 8)
-    .padding(.vertical, 6)
-    .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(hovering && a.run != nil ? Color.white.opacity(0.05) : .clear))
+    .padding(.horizontal, 10)
+    .frame(height: 32)
+    .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(hovering && a.run != nil ? Theme.hover : .clear))
     .contentShape(Rectangle())
     .onHover { hovering = $0 }
     .onTapGesture {
@@ -356,7 +349,7 @@ private struct ActivityRow: View {
   private var color: Color {
     switch activity.kind {
     case .finished: Tone(activity.outcome).color
-    case .hunt: Theme.aqua
+    case .hunt: Theme.accent
     default: Theme.faint
     }
   }
@@ -377,25 +370,25 @@ private struct PastHunts: View {
     Panel("Past hunts", accessory: { Text("\(model.hunts.count)") }) {
       VStack(spacing: 0) {
         ForEach(model.hunts.prefix(12)) { h in
-          HStack(spacing: 11) {
+          HStack(spacing: 12) {
             Group {
               if h.status == "running" { BrailleSpinner(size: 10) } else { Circle().fill(Tone(h.status).color).frame(width: 6, height: 6) }
             }
-            .frame(width: 12)
-            Text(h.prompt).font(Theme.mono(11.5)).foregroundStyle(Theme.text.opacity(0.88)).lineLimit(1)
-            Text(h.host ?? "muse").font(Theme.sans(11.5)).foregroundStyle(Theme.faint)
+            .frame(width: 10)
+            Text(h.prompt).font(Theme.mono(12)).foregroundStyle(Theme.text.opacity(0.88)).lineLimit(1)
+            Text(h.host ?? "muse").font(Theme.sans(12)).foregroundStyle(Theme.faint)
             Spacer()
-            Text(Fmt.usd(h.usage.usd)).font(Theme.sans(11.5)).monospacedDigit().foregroundStyle(Theme.dim)
-            Text(Fmt.ago(ISO.date(h.startedAt))).font(Theme.sans(11.5)).foregroundStyle(Theme.faint)
+            Text(Fmt.usd(h.usage.usd)).font(Theme.sans(12)).monospacedDigit().foregroundStyle(Theme.dim)
+            Text(Fmt.ago(ISO.date(h.startedAt))).font(Theme.sans(12)).monospacedDigit().foregroundStyle(Theme.ghost)
           }
-          .padding(.horizontal, 8)
-          .padding(.vertical, 7)
-          .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(model.selectedHunt == h.id ? Color.white.opacity(0.07) : .clear))
+          .padding(.horizontal, 10)
+          .frame(height: 32)
+          .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(model.selectedHunt == h.id ? Theme.selection : .clear))
           .contentShape(Rectangle())
           .onTapGesture { withAnimation(Theme.spring) { model.selectedHunt = h.id } }
         }
       }
-      .padding(.horizontal, -8)
+      .padding(.horizontal, -10)
     }
   }
 }
@@ -416,10 +409,10 @@ struct KeySheet: View {
       SecureField("", text: $key, prompt: Text("sk-ant-…").foregroundStyle(Theme.ghost))
         .textFieldStyle(.plain)
         .font(Theme.mono(13))
-        .padding(.horizontal, 14)
-        .frame(height: 38)
-        .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(Color.black.opacity(0.25)))
-        .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous).strokeBorder(Theme.lineStrong, lineWidth: 1))
+        .padding(.horizontal, 12)
+        .frame(height: 36)
+        .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(Theme.well))
+        .overlay(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).strokeBorder(Theme.line, lineWidth: 1))
       Text("Your own Claude plan needs no key: pick Claude Code.").font(Theme.sans(12)).foregroundStyle(Theme.faint)
       HStack {
         if model.hasAnthropicKey {
@@ -427,15 +420,15 @@ struct KeySheet: View {
             model.saveAnthropicKey(nil)
             dismiss()
           }
-          .buttonStyle(GlassButtonStyle(color: Theme.fail))
+          .buttonStyle(ActionButtonStyle(color: Theme.fail))
         }
         Spacer()
-        Button("Cancel") { dismiss() }.buttonStyle(GlassButtonStyle()).keyboardShortcut(.cancelAction)
+        Button("Cancel") { dismiss() }.buttonStyle(ActionButtonStyle()).keyboardShortcut(.cancelAction)
         Button("Save") {
           model.saveAnthropicKey(key)
           dismiss()
         }
-        .buttonStyle(GlassButtonStyle(prominent: true))
+        .buttonStyle(ActionButtonStyle(prominent: true))
         .keyboardShortcut(.defaultAction)
         .disabled(!key.hasPrefix("sk-"))
       }

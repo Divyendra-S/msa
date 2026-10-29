@@ -27,10 +27,10 @@ enum Snapshot {
   @ViewBuilder
   static func content(_ name: String) -> some View {
     switch name {
-    case "orb":
-      AsciiArt(scene: .orb(radius: 0.3), fontSize: 8, time: 12.3)
-    case "scan":
-      AsciiArt(scene: .scan(radius: 0.44), fontSize: 7, time: 12.3)
+    case "tunnel":
+      AsciiArt(scene: .tunnel(throat: 0.6), fontSize: 9, lineHeight: 1.1, time: 12.3)
+    case "probe":
+      AsciiArt(scene: .tunnel(throat: 0.7, spacing: 3, probe: true), fontSize: 7.5, time: 21.4)
     case "icon":
       AppIcon()
     case "parts":
@@ -42,8 +42,8 @@ enum Snapshot {
           OutcomeBadge(outcome: "pass")
           OutcomeBadge(outcome: "flaky")
         }
-        SplitBar(parts: [(9, Theme.pass), (7, Theme.fail), (1, Theme.flaky)]).frame(width: 300)
-        Panel("Rules broken", accessory: { Text("3") }) {
+        SplitBar(parts: [(9, Theme.accent), (7, Theme.fail), (1, Theme.flaky)]).frame(width: 300)
+        Panel("Broken rule", accessory: { Text("3") }) {
           Text("one-order-per-cart").font(Theme.mono(12)).foregroundStyle(Theme.text)
         }
         .frame(width: 400)
@@ -55,20 +55,17 @@ enum Snapshot {
   }
 }
 
-/// The app icon: the orb in its stream of air, drawn in characters on a dark glass tile.
-/// Rendered to AppIcon.icns by build.sh.
+/// The app icon: the mark, three lines of air through the tunnel's throat, on a dark tile with a
+/// faint glow of the hue behind it. Rendered to AppIcon.icns by build.sh.
 struct AppIcon: View {
   var body: some View {
+    let tile = RoundedRectangle(cornerRadius: 185, style: .continuous)
     ZStack {
-      RoundedRectangle(cornerRadius: 185, style: .continuous)
-        .fill(LinearGradient(colors: [Color(hex: 0x1A1B24), Color(hex: 0x08090D)], startPoint: .top, endPoint: .bottom))
-      RadialGradient(colors: [Theme.lavender.opacity(0.18), .clear], center: UnitPoint(x: 0.3, y: 0.2), startRadius: 0, endRadius: 520)
-        .clipShape(RoundedRectangle(cornerRadius: 185, style: .continuous))
-      AsciiArt(scene: .orb(center: UnitPoint(x: 0.5, y: 0.5), radius: 0.31), fontSize: 17, lineHeight: 1.0, time: 7.4)
-        .padding(40)
-        .mask(RoundedRectangle(cornerRadius: 160, style: .continuous).padding(40))
-      RoundedRectangle(cornerRadius: 185, style: .continuous)
-        .strokeBorder(LinearGradient(colors: [.white.opacity(0.24), .white.opacity(0.04)], startPoint: .top, endPoint: .bottom), lineWidth: 5)
+      tile.fill(LinearGradient(colors: [Color(hex: 0x17181F), Color(hex: 0x0A0B0E)], startPoint: .top, endPoint: .bottom))
+      RadialGradient(colors: [Theme.accent.opacity(0.16), .clear], center: .center, startRadius: 0, endRadius: 380)
+        .clipShape(tile)
+      LogoMark(size: 520)
+      tile.strokeBorder(Color.white.opacity(0.1), lineWidth: 4)
     }
     .padding(100)
     .frame(width: 1024, height: 1024)

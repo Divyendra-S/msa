@@ -7,50 +7,54 @@ struct UsageView: View {
 
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 16) {
+      VStack(alignment: .leading, spacing: 36) {
         if let usage = model.usage {
           let latest = usage.jobs.first
-          HStack(spacing: 16) {
-            MetricCard(
+          HStack(alignment: .top, spacing: 0) {
+            Metric(
               title: "Tokens returned", value: Fmt.kilo(latest?.tokens ?? 0),
-              fraction: (latest?.tokens ?? 0) / max(1, usage.budget.tokens), color: Theme.accent,
+              fraction: (latest?.tokens ?? 0) / max(1, usage.budget.tokens),
               caption: "of \(Fmt.kilo(usage.budget.tokens)) per job",
               help: "Every tool result goes into your agent's context, so Wind Tunnel caps and counts it. This is the newest job.")
-            MetricCard(
+            Hairline(vertical: true).padding(.horizontal, 28)
+            Metric(
               title: "Small-model spend", value: Fmt.usd(latest?.usd ?? 0),
-              fraction: (latest?.usd ?? 0) / max(0.0001, usage.budget.usd), color: Theme.pass,
+              fraction: (latest?.usd ?? 0) / max(0.0001, usage.budget.usd),
               caption: "of \(Fmt.usd(usage.budget.usd)) per job",
               help: "Small decisions go to free rules first, then to a small model, then to your agent.")
-            MetricCard(
+            Hairline(vertical: true).padding(.horizontal, 28)
+            Metric(
               title: "Hunts", value: Fmt.usd(model.hunts.reduce(0) { $0 + $1.usage.usd }),
-              fraction: nil, color: Theme.aqua,
+              fraction: nil,
               caption: "\(Fmt.plural(model.hunts.count, "hunt")) · \(Fmt.kilo(model.hunts.reduce(0) { $0 + $1.usage.input + $1.usage.output })) tokens",
               help: "Hunts from this window, as the agents reported them.")
           }
+          .fixedSize(horizontal: false, vertical: true)
           .rise()
           Panel("Jobs", accessory: {
             HStack(spacing: 12) {
-              legend("Rules", Theme.pass)
-              legend("Small model", Theme.flaky)
-              legend("Jev", Theme.error)
-              legend("Agent", Theme.accent)
+              legend("Rules", Self.decisionColors[0])
+              legend("Small model", Self.decisionColors[1])
+              legend("Jev", Self.decisionColors[2])
+              legend("Agent", Self.decisionColors[3])
             }
           }) {
-            Grid(alignment: .leading, horizontalSpacing: 22, verticalSpacing: 10) {
+            Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 10) {
               GridRow {
                 ForEach(["Job", "Calls", "Tokens", "Largest", "Decisions", "Model", "Last"], id: \.self) { Text($0).label() }
               }
+              GridRow { Hairline().gridCellColumns(7) }
               ForEach(usage.jobs) { job in
                 GridRow {
-                  Text(job.job).font(Theme.mono(11.5)).foregroundStyle(Theme.text)
+                  Text(job.job).font(Theme.mono(12)).foregroundStyle(Theme.text)
                   Text("\(job.toolCalls)").foregroundStyle(Theme.dim)
                   Text(Fmt.kilo(job.tokens)).foregroundStyle(Theme.text)
                   Text(Fmt.kilo(job.maxTokens ?? 0)).foregroundStyle(Theme.faint)
                   DecisionBar(d: job.decisions).help(decisionText(job.decisions))
-                  Text(Fmt.usd(job.usd)).foregroundStyle(job.usd > 0 ? Theme.flaky : Theme.faint)
+                  Text(Fmt.usd(job.usd)).foregroundStyle(job.usd > 0 ? Theme.text : Theme.faint)
                   Text(Fmt.ago(ISO.date(job.last))).foregroundStyle(Theme.faint)
                 }
-                .font(Theme.sans(12))
+                .font(Theme.sans(12.5))
                 .monospacedDigit()
               }
             }
@@ -60,10 +64,10 @@ struct UsageView: View {
           EmptyState(title: "No usage yet", text: "Tokens and decisions show up after your agent's first job.").frame(height: 420)
         }
       }
-      .padding(.horizontal, 22)
-      .padding(.top, 4)
-      .padding(.bottom, 24)
-      .frame(maxWidth: 1180, alignment: .leading)
+      .padding(.horizontal, 28)
+      .padding(.top, 8)
+      .padding(.bottom, 32)
+      .frame(maxWidth: 1100, alignment: .leading)
       .frame(maxWidth: .infinity)
     }
   }
@@ -73,32 +77,33 @@ struct UsageView: View {
     return "\(d.rules ?? 0) by rules, \(d.spark ?? 0) by a small model, \(d.jev ?? 0) by jev, \(d.agent ?? 0) by the agent"
   }
 
+  /// Who decided, cheapest first, in shades of the hue.
+  static let decisionColors: [Color] = [Theme.accentLight, Theme.accent, Theme.accentDeep, Color.white.opacity(0.45)]
+
   private func legend(_ label: String, _ color: Color) -> some View {
     HStack(spacing: 5) {
-      Circle().fill(color).frame(width: 6, height: 6)
+      RoundedRectangle(cornerRadius: 1).fill(color).frame(width: 8, height: 4)
       Text(label)
     }
   }
 }
 
-private struct MetricCard: View {
+/// A figure with its title above and, under it, how full its budget is.
+private struct Metric: View {
   let title: String
   let value: String
   let fraction: Double?
-  let color: Color
   let caption: String
   let help: String
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      Text(title).label()
-      Text(value).font(Theme.figure(40)).foregroundStyle(Theme.text).contentTransition(.numericText()).padding(.top, 6)
-      Meter(value: fraction ?? 0, color: color, height: 4).padding(.top, 12).opacity(fraction == nil ? 0 : 1)
+      Text(title).font(Theme.sans(12.5)).foregroundStyle(Theme.faint)
+      Text(value).font(Theme.figure(36)).foregroundStyle(Theme.text).contentTransition(.numericText()).padding(.top, 6)
+      Meter(value: fraction ?? 0).padding(.top, 12).opacity(fraction == nil ? 0 : 1)
       Text(caption).font(Theme.sans(12)).foregroundStyle(Theme.faint).padding(.top, 10)
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .padding(20)
-    .card()
     .help(help)
   }
 }
@@ -107,8 +112,9 @@ private struct DecisionBar: View {
   let d: UsageTotals.Decisions?
 
   var body: some View {
-    let parts: [(Int, Color)] = [(d?.rules ?? 0, Theme.pass), (d?.spark ?? 0, Theme.flaky), (d?.jev ?? 0, Theme.error), (d?.agent ?? 0, Theme.accent)]
-    SplitBar(parts: parts, height: 5).frame(width: 130)
+    let c = UsageView.decisionColors
+    let parts: [(Int, Color)] = [(d?.rules ?? 0, c[0]), (d?.spark ?? 0, c[1]), (d?.jev ?? 0, c[2]), (d?.agent ?? 0, c[3])]
+    SplitBar(parts: parts).frame(width: 130)
   }
 }
 
@@ -125,7 +131,7 @@ struct SettingsView: View {
           Text(model.hasAnthropicKey ? "Saved in the keychain" : "None. Hunts run in your own Claude Code.")
             .font(Theme.sans(13)).foregroundStyle(Theme.text)
           Spacer()
-          Button(model.hasAnthropicKey ? "Change…" : "Add Key…") { showKey = true }.buttonStyle(GlassButtonStyle())
+          Button(model.hasAnthropicKey ? "Change…" : "Add Key…") { showKey = true }.buttonStyle(ActionButtonStyle())
         }
       }
       VStack(alignment: .leading, spacing: 8) {
@@ -133,10 +139,10 @@ struct SettingsView: View {
         TextField("", text: $model.cliPath, prompt: Text(model.toolchainDescription.isEmpty ? "windtunnel on PATH" : model.toolchainDescription).foregroundStyle(Theme.ghost))
           .textFieldStyle(.plain)
           .font(Theme.mono(12))
-          .padding(.horizontal, 12)
-          .frame(height: 34)
-          .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.black.opacity(0.25)))
-          .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Theme.lineStrong, lineWidth: 1))
+          .padding(.horizontal, 10)
+          .frame(height: 32)
+          .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(Theme.well))
+          .overlay(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).strokeBorder(Theme.line, lineWidth: 1))
         Text("Path to the CLI's bin.js. Empty: windtunnel on your PATH, else this checkout.")
           .font(Theme.sans(11.5)).foregroundStyle(Theme.faint)
       }
@@ -148,7 +154,7 @@ struct SettingsView: View {
       }
       HStack {
         Spacer()
-        Button("Reconnect") { model.reconnect() }.buttonStyle(GlassButtonStyle(prominent: true))
+        Button("Reconnect") { model.reconnect() }.buttonStyle(ActionButtonStyle(prominent: true))
       }
     }
     .padding(24)
@@ -185,7 +191,7 @@ struct MenuBarView: View {
       }
       if let job = model.runningJob {
         HStack(spacing: 8) {
-          BrailleSpinner(color: Theme.flaky)
+          BrailleSpinner()
           Text(job.experiments.isEmpty ? "Running all" : "Running \(job.experiments.joined(separator: ", "))").font(Theme.sans(12)).foregroundStyle(Theme.text).lineLimit(1)
         }
       }
@@ -202,16 +208,16 @@ struct MenuBarView: View {
           if batch.runs.count > 6 { Text("\(batch.runs.count - 6) more").font(Theme.sans(11)).foregroundStyle(Theme.faint) }
         }
       }
-      Rectangle().fill(Theme.line).frame(height: 1)
+      Hairline()
       HStack(spacing: 8) {
         Button("Open") {
           openWindow(id: "main")
           NSApp.activate()
         }
-        .buttonStyle(GlassButtonStyle(prominent: true))
-        Button("Run all") { model.runExperiments([]) }.buttonStyle(GlassButtonStyle()).disabled(model.api == nil || model.runningJob != nil)
+        .buttonStyle(ActionButtonStyle(prominent: true))
+        Button("Run all") { model.runExperiments([]) }.buttonStyle(ActionButtonStyle()).disabled(model.api == nil || model.runningJob != nil)
         Spacer()
-        Button("Quit") { NSApp.terminate(nil) }.buttonStyle(GlassButtonStyle())
+        Button("Quit") { NSApp.terminate(nil) }.buttonStyle(ActionButtonStyle())
       }
     }
     .padding(16)

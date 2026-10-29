@@ -1,42 +1,41 @@
 import AppKit
 import SwiftUI
 
-/// The look: dark glass. The window lets the desktop through, blurred and tinted ink, with a faint
-/// wash of colour; content sits on it in translucent cards with lit hairline edges. SF Pro for the
-/// interface, SF Mono only for data (ids, rules, SQL, logs). One cool gradient, lavender to
-/// periwinkle to aqua, stands for air and for what's live.
+/// The look: quiet glass. The window lets the desktop through, blurred and tinted ink. Content sits
+/// straight on it, in sections split by hairlines rather than boxed in cards. One hue, a cool blue,
+/// for the brand, for what's live and for what holds; red and amber only where something needs a
+/// look. SF Pro for the interface, SF Mono only for data (ids, rules, SQL, logs). Small radii.
 enum Theme {
   // Surfaces, over the glass.
-  static let ink = Color(hex: 0x090A10)
-  static let card = Color.white.opacity(0.035)
-  static let cardHover = Color.white.opacity(0.055)
-  static let selection = Color.white.opacity(0.085)
+  static let ink = Color(hex: 0x0B0C10)
   static let well = Color.black.opacity(0.22)
-  static let line = Color.white.opacity(0.07)
-  static let lineStrong = Color.white.opacity(0.12)
+  static let fill = Color.white.opacity(0.055)
+  static let hover = Color.white.opacity(0.04)
+  static let selection = Color.white.opacity(0.075)
+  static let line = Color.white.opacity(0.075)
+  static let lineStrong = Color.white.opacity(0.13)
 
   // Text.
-  static let text = Color(hex: 0xF3F4F8)
-  static let dim = Color.white.opacity(0.64)
-  static let faint = Color.white.opacity(0.42)
-  static let ghost = Color.white.opacity(0.24)
+  static let text = Color(hex: 0xEDEEF2)
+  static let dim = Color.white.opacity(0.6)
+  static let faint = Color.white.opacity(0.4)
+  static let ghost = Color.white.opacity(0.22)
 
-  // Colour.
-  static let accent = Color(hex: 0xA3B5FF)
-  static let lavender = Color(hex: 0xCDB8FF)
-  static let aqua = Color(hex: 0x8BE3DA)
-  static let pass = Color(hex: 0x7ADFA6)
-  static let fail = Color(hex: 0xFF7F8C)
-  static let flaky = Color(hex: 0xF4C978)
-  static let error = Color(hex: 0xC9A8FF)
+  // The one hue, light to deep.
+  static let accent = Color(hex: 0x8FA2FF)
+  static let accentLight = Color(hex: 0xCCD4FF)
+  static let accentDeep = Color(hex: 0x4D5FBF)
+  /// The hue as a gradient, deep to light: for ASCII art and the mark.
+  static let hue: [Color] = [accentDeep, accent, accentLight]
 
-  static let airGradient: [Color] = [lavender, accent, aqua]
-  /// The same air, a little deeper, for characters drawn thin on dark glass.
-  static let asciiGradient: [Color] = [Color(hex: 0xBBA1FF), Color(hex: 0x91A6FF), Color(hex: 0x72DCD2)]
-  static var air: LinearGradient { LinearGradient(colors: airGradient, startPoint: .topLeading, endPoint: .bottomTrailing) }
+  // Outcomes. Passing stays neutral so failures are what you see.
+  static let pass = Color.white.opacity(0.36)
+  static let fail = Color(hex: 0xF07D88)
+  static let flaky = Color(hex: 0xE6C17C)
+  static let error = Color(hex: 0xE6C17C)
 
-  /// Actors in a run (browser tabs, webhooks), in the order they appear.
-  static let actors: [Color] = [Color(hex: 0x9FC2FF), Color(hex: 0xF4A9D6), Color(hex: 0xB7EB8F), Color(hex: 0xFFC28A), Color(hex: 0xC4B5FF)]
+  /// Actors in a run (browser tabs, webhooks), in the order they appear: shades of the hue.
+  static let actors: [Color] = [Color(hex: 0xB9C5FF), Color(hex: 0xE4E6EC), Color(hex: 0x7E92F2), Color(hex: 0x9DA5BE), Color(hex: 0x6274D6)]
 
   static func actor(_ i: Int) -> Color { actors[((i % actors.count) + actors.count) % actors.count] }
 
@@ -53,7 +52,9 @@ enum Theme {
     .system(size: size, weight: weight, design: .default).monospacedDigit()
   }
 
-  static let radius: CGFloat = 16
+  /// Corners: wells and fields; controls are a little tighter.
+  static let radius: CGFloat = 8
+  static let controlRadius: CGFloat = 6
   static let spring = Animation.spring(response: 0.38, dampingFraction: 0.86)
   static let snappy = Animation.spring(response: 0.24, dampingFraction: 0.9)
 }
@@ -91,8 +92,8 @@ enum Tone {
     case .fail: Theme.fail
     case .flaky: Theme.flaky
     case .error: Theme.error
-    case .live: Theme.aqua
-    case .muted: Theme.faint
+    case .live: Theme.accent
+    case .muted: Theme.ghost
     }
   }
 
@@ -107,11 +108,13 @@ enum Tone {
     }
   }
 
-  /// An outcome as a word: `Held`, `Broke`, `Flaky`.
+  /// An outcome as a word: `Passed`, `Failed`, `Held`, `Broke`.
   static func word(_ outcome: String) -> String {
     switch outcome {
     case "ok": "Held"
     case "broken": "Broke"
+    case "pass": "Passed"
+    case "fail": "Failed"
     default: outcome.prefix(1).uppercased() + outcome.dropFirst()
     }
   }
@@ -119,16 +122,13 @@ enum Tone {
 
 // MARK: - Surfaces
 
-/// The window's backdrop: the desktop blurred behind it, tinted ink, with a faint wash of the air
-/// colours in two corners.
+/// The window's backdrop: the desktop blurred behind it, tinted ink, with one faint wash of the hue.
 struct Backdrop: View {
   var body: some View {
     ZStack {
       BehindWindowBlur()
-      Theme.ink.opacity(0.82)
-      RadialGradient(colors: [Theme.lavender.opacity(0.13), .clear], center: UnitPoint(x: 0.02, y: -0.05), startRadius: 0, endRadius: 780)
-      RadialGradient(colors: [Theme.aqua.opacity(0.08), .clear], center: UnitPoint(x: 1.02, y: 1.05), startRadius: 0, endRadius: 880)
-      RadialGradient(colors: [Theme.accent.opacity(0.05), .clear], center: UnitPoint(x: 0.72, y: 0.12), startRadius: 0, endRadius: 620)
+      Theme.ink.opacity(0.84)
+      RadialGradient(colors: [Theme.accent.opacity(0.07), .clear], center: UnitPoint(x: 0.85, y: -0.1), startRadius: 0, endRadius: 900)
     }
     .ignoresSafeArea()
     .allowsHitTesting(false)
@@ -149,34 +149,8 @@ struct BehindWindowBlur: NSViewRepresentable {
   func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }
 
-/// A translucent card with a lit hairline edge; tinted for a card that carries an outcome.
-struct CardBackground: ViewModifier {
-  var radius: CGFloat = Theme.radius
-  var tint: Color? = nil
-  var hover = false
-
-  func body(content: Content) -> some View {
-    let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-    content.background {
-      shape
-        .fill(tint.map { $0.opacity(hover ? 0.08 : 0.055) } ?? (hover ? Theme.cardHover : Theme.card))
-        .overlay(
-          shape.strokeBorder(
-            LinearGradient(
-              colors: [(tint ?? .white).opacity(tint == nil ? 0.11 : 0.34), (tint ?? .white).opacity(tint == nil ? 0.035 : 0.1)],
-              startPoint: .top, endPoint: .bottom),
-            lineWidth: 1)
-        )
-    }
-  }
-}
-
 extension View {
-  func card(radius: CGFloat = Theme.radius, tint: Color? = nil, hover: Bool = false) -> some View {
-    modifier(CardBackground(radius: radius, tint: tint, hover: hover))
-  }
-
-  /// Liquid Glass where there is some (macOS 26), a thin material before it.
+  /// Liquid Glass where there is some (macOS 26), a thin material before it. For things that float.
   @ViewBuilder
   func glass(_ shape: some Shape, interactive: Bool = false) -> some View {
     if #available(macOS 26.0, *) {
@@ -185,106 +159,103 @@ extension View {
       background(.ultraThinMaterial, in: shape).overlay(shape.stroke(Theme.line, lineWidth: 1))
     }
   }
+
+  /// A recessed block for code, tables and logs: a darker fill, no edge.
+  func well(padding: CGFloat = 12) -> some View {
+    self.padding(padding)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).fill(Theme.well))
+  }
+}
+
+/// A one-point rule across or down.
+struct Hairline: View {
+  var vertical = false
+
+  var body: some View {
+    Rectangle().fill(Theme.line).frame(width: vertical ? 1 : nil, height: vertical ? nil : 1)
+  }
 }
 
 // MARK: - Text styles
 
 extension View {
-  /// A small heading over a column or a group: `REPETITIONS`.
+  /// A small heading over a column: `Repetitions`.
   func label(_ color: Color = Theme.faint) -> some View {
-    font(Theme.sans(10.5, .semibold)).tracking(0.7).foregroundStyle(color).textCase(.uppercase)
+    font(Theme.sans(11.5, .medium)).foregroundStyle(color)
   }
 }
 
-/// A card with a title row: the title on the left, an accessory on the right.
+/// A section: a hairline, a title with an accessory on the right, then the content. No box.
 struct Panel<Content: View, Accessory: View>: View {
   let title: String
   var tint: Color? = nil
   var mono = false
-  var padding: CGFloat = 18
+  var rule = true
   @ViewBuilder var accessory: () -> Accessory
   @ViewBuilder var content: () -> Content
 
   init(
-    _ title: String, tint: Color? = nil, mono: Bool = false, padding: CGFloat = 18,
+    _ title: String, tint: Color? = nil, mono: Bool = false, rule: Bool = true,
     @ViewBuilder accessory: @escaping () -> Accessory = { EmptyView() },
     @ViewBuilder content: @escaping () -> Content
   ) {
     self.title = title
     self.tint = tint
     self.mono = mono
-    self.padding = padding
+    self.rule = rule
     self.accessory = accessory
     self.content = content
   }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 14) {
+      if rule { Hairline() }
       HStack(alignment: .firstTextBaseline, spacing: 8) {
         Text(title)
           .font(mono ? Theme.mono(12.5, .medium) : Theme.sans(13, .semibold))
-          .foregroundStyle(tint ?? Theme.text.opacity(0.92))
+          .foregroundStyle(tint ?? Theme.text)
         Spacer(minLength: 8)
-        accessory().font(Theme.sans(11.5)).foregroundStyle(Theme.faint)
+        accessory().font(Theme.sans(12)).foregroundStyle(Theme.faint)
       }
       content()
     }
     .frame(maxWidth: .infinity, alignment: .leading)
-    .padding(padding)
-    .card(tint: tint)
   }
 }
 
-/// `● Fail`: an outcome in a soft capsule.
+/// `● Failed`: an outcome as a word in its colour, with a dot. Passing reads quietly.
 struct OutcomeBadge: View {
   let outcome: String
   var large = false
 
   var body: some View {
     let tone = Tone(outcome)
-    HStack(spacing: large ? 6 : 5) {
+    HStack(spacing: 6) {
       if tone == .live {
-        BrailleSpinner(color: tone.color, size: large ? 11 : 9)
+        BrailleSpinner(color: tone.color, size: large ? 11 : 10)
       } else {
-        Circle().fill(tone.color).frame(width: large ? 6 : 5, height: large ? 6 : 5)
+        Circle().fill(tone.color).frame(width: 6, height: 6)
       }
       Text(Tone.word(outcome))
     }
-    .font(Theme.sans(large ? 12 : 10.5, .semibold))
-    .foregroundStyle(tone.color)
-    .padding(.horizontal, large ? 10 : 7)
-    .padding(.vertical, large ? 4.5 : 2.5)
-    .background(Capsule().fill(tone.color.opacity(0.13)))
+    .font(Theme.sans(large ? 12.5 : 11.5, .medium))
+    .foregroundStyle(tone == .pass ? Theme.dim : tone.color)
     .fixedSize()
   }
 }
 
-/// A quiet capsule of text.
-struct Chip: View {
-  let text: String
-  var color: Color = Theme.dim
-
-  var body: some View {
-    Text(text)
-      .font(Theme.sans(11.5))
-      .foregroundStyle(color)
-      .padding(.horizontal, 9)
-      .padding(.vertical, 3.5)
-      .background(Capsule().fill(Color.white.opacity(0.06)))
-  }
-}
-
-/// Capsule buttons. Prominent: a light pill (or a coloured one); otherwise a quiet glass pill.
-struct GlassButtonStyle: ButtonStyle {
+/// Buttons: small rounded rectangles. Prominent is light on dark; the rest a quiet fill.
+struct ActionButtonStyle: ButtonStyle {
   var prominent = false
   var color: Color? = nil
 
   func makeBody(configuration: Configuration) -> some View {
-    GlassButtonBody(configuration: configuration, prominent: prominent, color: color)
+    ActionButtonBody(configuration: configuration, prominent: prominent, color: color)
   }
 }
 
-private struct GlassButtonBody: View {
+private struct ActionButtonBody: View {
   let configuration: ButtonStyleConfiguration
   let prominent: Bool
   let color: Color?
@@ -292,25 +263,23 @@ private struct GlassButtonBody: View {
   @Environment(\.isEnabled) private var enabled
 
   var body: some View {
+    let shape = RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
     configuration.label
       .font(Theme.sans(12.5, .medium))
-      .labelStyle(PillLabelStyle())
+      .labelStyle(ActionLabelStyle())
       .foregroundStyle(foreground)
-      .padding(.horizontal, 14)
-      .frame(height: 30)
+      .padding(.horizontal, 12)
+      .frame(height: 28)
       .background {
         if prominent {
-          Capsule().fill(enabled ? (color ?? Theme.text).opacity(hovering ? 1 : 0.92) : Color.white.opacity(0.08))
-            .shadow(color: enabled ? (color ?? Theme.accent).opacity(hovering ? 0.35 : 0.16) : .clear, radius: hovering ? 14 : 8, y: 2)
+          shape.fill(enabled ? Theme.text.opacity(hovering ? 1 : 0.9) : Color.white.opacity(0.08))
         } else {
-          Capsule().fill(Color.white.opacity(hovering && enabled ? 0.11 : 0.065))
-            .overlay(Capsule().strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
+          shape.fill(Color.white.opacity(hovering && enabled ? 0.1 : 0.06))
         }
       }
-      .contentShape(Capsule())
-      .scaleEffect(configuration.isPressed ? 0.97 : 1)
+      .contentShape(shape)
+      .opacity(configuration.isPressed ? 0.8 : 1)
       .animation(Theme.snappy, value: hovering)
-      .animation(Theme.snappy, value: configuration.isPressed)
       .onHover { hovering = $0 }
   }
 
@@ -321,7 +290,7 @@ private struct GlassButtonBody: View {
   }
 }
 
-private struct PillLabelStyle: LabelStyle {
+private struct ActionLabelStyle: LabelStyle {
   func makeBody(configuration: Configuration) -> some View {
     HStack(spacing: 6) {
       configuration.icon.font(.system(size: 11, weight: .semibold))
@@ -330,83 +299,88 @@ private struct PillLabelStyle: LabelStyle {
   }
 }
 
-/// A row of options in a capsule track, the chosen one on a lit thumb that slides between them.
-struct Segmented<Item: Hashable, ItemLabel: View>: View {
+/// Options as a row of words, the chosen one bright and underlined; the line slides between them.
+struct TabStrip<Item: Hashable, ItemLabel: View>: View {
   let items: [Item]
   @Binding var selection: Item
+  var size: CGFloat = 13
   @ViewBuilder var label: (Item, Bool) -> ItemLabel
-  @Namespace private var thumb
+  @Namespace private var underline
+
+  init(items: [Item], selection: Binding<Item>, size: CGFloat = 13, @ViewBuilder label: @escaping (Item, Bool) -> ItemLabel) {
+    self.items = items
+    self._selection = selection
+    self.size = size
+    self.label = label
+  }
 
   var body: some View {
-    HStack(spacing: 2) {
+    HStack(spacing: size > 12 ? 22 : 16) {
       ForEach(items, id: \.self) { item in
         let on = item == selection
         Button {
           withAnimation(Theme.spring) { selection = item }
         } label: {
           label(item, on)
-            .font(Theme.sans(12, on ? .semibold : .medium))
-            .foregroundStyle(on ? Theme.text : Theme.dim)
-            .padding(.horizontal, 12)
-            .frame(height: 26)
-            .background {
+            .font(Theme.sans(size, on ? .medium : .regular))
+            .foregroundStyle(on ? Theme.text : Theme.faint)
+            .padding(.vertical, 7)
+            .overlay(alignment: .bottom) {
               if on {
-                Capsule().fill(Color.white.opacity(0.12))
-                  .overlay(Capsule().strokeBorder(Color.white.opacity(0.1), lineWidth: 1))
-                  .shadow(color: .black.opacity(0.25), radius: 4, y: 1)
-                  .matchedGeometryEffect(id: "thumb", in: thumb)
+                Rectangle().fill(Theme.accent).frame(height: 1.5)
+                  .matchedGeometryEffect(id: "line", in: underline)
+                  .offset(y: 0.5)
               }
             }
-            .contentShape(Capsule())
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
       }
     }
-    .padding(2)
-    .background(Capsule().fill(Color.black.opacity(0.18)))
-    .overlay(Capsule().strokeBorder(Theme.line, lineWidth: 1))
     .fixedSize()
   }
 }
 
-/// A thin capsule filled to a value.
+/// A thin bar filled to a value.
 struct Meter: View {
   let value: Double
   var color: Color = Theme.accent
-  var height: CGFloat = 4
+  var height: CGFloat = 3
 
   var body: some View {
     let v = min(1, max(0, value.isFinite ? value : 0))
     GeometryReader { geo in
       ZStack(alignment: .leading) {
-        Capsule().fill(Color.white.opacity(0.07))
+        Rectangle().fill(Color.white.opacity(0.08))
         if v > 0 {
-          Capsule().fill(color.gradient).frame(width: max(height, geo.size.width * v))
+          Rectangle().fill(color).frame(width: max(2, geo.size.width * v))
         }
       }
     }
     .frame(height: height)
+    .clipShape(RoundedRectangle(cornerRadius: 1))
     .animation(Theme.spring, value: v)
   }
 }
 
-/// One bar split by outcome: pass, fail, flaky, never run.
+/// One bar split by outcome, a hairline gap between the parts.
 struct SplitBar: View {
   let parts: [(Int, Color)]
-  var height: CGFloat = 6
+  var height: CGFloat = 4
 
   var body: some View {
     let total = max(1, parts.reduce(0) { $0 + $1.0 })
     GeometryReader { geo in
       let shown = parts.filter { $0.0 > 0 }
-      let gaps = CGFloat(max(0, shown.count - 1)) * 3
-      HStack(spacing: 3) {
+      let gaps = CGFloat(max(0, shown.count - 1)) * 2
+      HStack(spacing: 2) {
         ForEach(Array(shown.enumerated()), id: \.offset) { _, p in
-          Capsule().fill(p.1.gradient).frame(width: max(height, (geo.size.width - gaps) * CGFloat(p.0) / CGFloat(total)))
+          Rectangle().fill(p.1).frame(width: max(2, (geo.size.width - gaps) * CGFloat(p.0) / CGFloat(total)))
         }
       }
     }
     .frame(height: height)
+    .clipShape(RoundedRectangle(cornerRadius: 1))
   }
 }
 
@@ -418,22 +392,22 @@ struct RepDots: View {
   var onSelect: ((Int) -> Void)? = nil
 
   var body: some View {
-    HStack(spacing: 4) {
+    HStack(spacing: 2) {
       ForEach(Array(outcomes.enumerated()), id: \.offset) { i, outcome in
         let tone = Tone(outcome)
         Circle()
-          .fill(tone.color.gradient)
-          .frame(width: 10, height: 10)
+          .fill(tone.color)
+          .frame(width: 7, height: 7)
           .padding(4)
-          .overlay(Circle().strokeBorder(selected == i + 1 ? tone.color.opacity(0.85) : .clear, lineWidth: 1.5))
+          .overlay(Circle().strokeBorder(selected == i + 1 ? Theme.text.opacity(0.7) : .clear, lineWidth: 1))
           .contentShape(Circle())
           .onTapGesture { onSelect?(i + 1) }
           .help("Repetition \(i + 1): \(Tone.word(outcome).lowercased())")
       }
       ForEach(0..<max(0, pending), id: \.self) { _ in
         Circle()
-          .strokeBorder(Theme.aqua, lineWidth: 1.5)
-          .frame(width: 10, height: 10)
+          .strokeBorder(Theme.accent, lineWidth: 1)
+          .frame(width: 7, height: 7)
           .padding(4)
           .phaseAnimator([0.3, 1]) { view, phase in view.opacity(phase) } animation: { _ in .easeInOut(duration: 0.7) }
       }
@@ -441,7 +415,7 @@ struct RepDots: View {
   }
 }
 
-/// Fades a view in and up when it first appears, after `delay`.
+/// Fades a view in when it first appears, after `delay`.
 struct Rise: ViewModifier {
   var delay: Double = 0
   @State private var shown = false
@@ -449,9 +423,9 @@ struct Rise: ViewModifier {
   func body(content: Content) -> some View {
     content
       .opacity(shown ? 1 : 0)
-      .offset(y: shown ? 0 : 8)
+      .offset(y: shown ? 0 : 4)
       .onAppear {
-        withAnimation(Theme.spring.delay(delay)) { shown = true }
+        withAnimation(.easeOut(duration: 0.35).delay(delay)) { shown = true }
       }
   }
 }

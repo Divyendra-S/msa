@@ -31,6 +31,7 @@ struct MainView: View {
   var body: some View {
     HStack(spacing: 0) {
       Sidebar()
+      Hairline(vertical: true)
       VStack(spacing: 0) {
         TopBar()
         ZStack {
@@ -53,14 +54,14 @@ struct MainView: View {
   }
 }
 
-/// The page title, what's running, and the two main actions.
+/// The page title, what's running, and Run all.
 struct TopBar: View {
   @Environment(AppModel.self) private var model
 
   var body: some View {
-    HStack(spacing: 10) {
+    HStack(spacing: 12) {
       Text(model.section.title)
-        .font(Theme.sans(16, .semibold))
+        .font(Theme.sans(15, .semibold))
         .foregroundStyle(Theme.text)
         .contentTransition(.opacity)
       Spacer(minLength: 10)
@@ -68,44 +69,27 @@ struct TopBar: View {
         HStack(spacing: 8) {
           BrailleSpinner(size: 10)
           Text(job.experiments.isEmpty ? "Running all" : "Running \(job.experiments.joined(separator: ", "))")
-            .font(Theme.sans(12, .medium)).foregroundStyle(Theme.dim).lineLimit(1)
-          Button {
-            model.stopJob(job.id)
-          } label: {
-            Image(systemName: "stop.fill").font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.fail)
-              .frame(width: 18, height: 18).background(Circle().fill(Theme.fail.opacity(0.14)))
-          }
-          .buttonStyle(.plain)
-          .help("Stop")
+            .font(Theme.sans(12)).foregroundStyle(Theme.dim).lineLimit(1)
+          Button("Stop") { model.stopJob(job.id) }
+            .buttonStyle(.plain)
+            .font(Theme.sans(12, .medium))
+            .foregroundStyle(Theme.fail)
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 6)
-        .frame(height: 30)
-        .glass(Capsule())
-        .frame(maxWidth: 320)
-        .transition(.scale(scale: 0.9).combined(with: .opacity))
+        .frame(maxWidth: 340)
+        .transition(.opacity)
       }
       Button {
         model.runExperiments([])
       } label: {
         Label("Run all", systemImage: "play.fill")
       }
-      .buttonStyle(GlassButtonStyle())
+      .buttonStyle(ActionButtonStyle())
       .disabled(model.runningJob != nil || model.experiments.isEmpty)
       .help("Run every experiment against the working tree. No model involved.")
-      if model.section != .hunt {
-        Button {
-          model.section = .hunt
-        } label: {
-          Label(model.runningHunt == nil ? "Hunt" : "Hunting", systemImage: "scope")
-        }
-        .buttonStyle(GlassButtonStyle(prominent: true))
-        .transition(.opacity)
-      }
     }
-    .padding(.leading, 22)
+    .padding(.leading, 24)
     .padding(.trailing, 16)
-    .frame(height: 56)
+    .frame(height: 52)
     .contentShape(Rectangle())
     .gesture(WindowDragGesture())
     .animation(Theme.spring, value: model.runningJob?.id)
@@ -119,7 +103,7 @@ struct Sidebar: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       // The traffic lights sit here.
-      Color.clear.frame(height: 34).contentShape(Rectangle()).gesture(WindowDragGesture())
+      Color.clear.frame(height: 40).contentShape(Rectangle()).gesture(WindowDragGesture())
       ProjectSwitcher().padding(.horizontal, 8)
       VStack(spacing: 2) {
         ForEach(Array(Pane.allCases.enumerated()), id: \.element) { i, section in
@@ -129,7 +113,7 @@ struct Sidebar: View {
         }
       }
       .padding(.horizontal, 8)
-      .padding(.top, 14)
+      .padding(.top, 12)
       Spacer(minLength: 20)
       HStack(spacing: 6) {
         LiveDot(on: model.live)
@@ -147,9 +131,8 @@ struct Sidebar: View {
       .padding(.bottom, 10)
       .help(bridgeHelp)
     }
-    .frame(width: 214)
-    .glass(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    .padding(8)
+    .frame(width: 210)
+    .background(Color.white.opacity(0.02))
   }
 
   private var bridgeHelp: String {
@@ -174,9 +157,7 @@ private struct ProjectSwitcher: View {
       Button("Close Project") { model.closeProject() }
     } label: {
       HStack(spacing: 9) {
-        LogoMark(size: 22)
-          .frame(width: 30, height: 30)
-          .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.06)))
+        LogoMark(size: 18).frame(width: 22)
         VStack(alignment: .leading, spacing: 1) {
           Text(model.status?.project.name ?? "—").font(Theme.sans(13, .semibold)).foregroundStyle(Theme.text).lineLimit(1)
           Text(Fmt.tilde(model.status?.project.root ?? "")).font(Theme.sans(10.5)).foregroundStyle(Theme.faint).lineLimit(1).truncationMode(.head)
@@ -184,8 +165,9 @@ private struct ProjectSwitcher: View {
         Spacer(minLength: 0)
         Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.faint)
       }
-      .padding(6)
-      .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(hovering ? Color.white.opacity(0.05) : .clear))
+      .padding(.horizontal, 8)
+      .padding(.vertical, 6)
+      .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(hovering ? Theme.hover : .clear))
       .contentShape(Rectangle())
     }
     .menuStyle(.button)
@@ -210,12 +192,11 @@ private struct SidebarItem: View {
       HStack(spacing: 10) {
         Image(systemName: section.symbol)
           .font(.system(size: 13, weight: .medium))
-          .foregroundStyle(selected ? AnyShapeStyle(Theme.air) : AnyShapeStyle(Theme.dim))
+          .foregroundStyle(selected ? Theme.accent : Theme.faint)
           .frame(width: 18)
-          .symbolEffect(.bounce, value: selected)
         Text(section.title)
           .font(Theme.sans(13, selected ? .semibold : .regular))
-          .foregroundStyle(selected || hovering ? Theme.text : Theme.text.opacity(0.78))
+          .foregroundStyle(selected || hovering ? Theme.text : Theme.dim)
         Spacer()
         if section == .hunt, model.runningHunt != nil {
           LiveDot(on: true)
@@ -224,14 +205,14 @@ private struct SidebarItem: View {
         }
       }
       .padding(.horizontal, 10)
-      .frame(height: 32)
+      .frame(height: 30)
       .background {
         if selected {
-          RoundedRectangle(cornerRadius: 9, style: .continuous)
-            .fill(Color.white.opacity(0.09))
+          RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+            .fill(Theme.selection)
             .matchedGeometryEffect(id: "sel", in: namespace)
         } else if hovering {
-          RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.white.opacity(0.04))
+          RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(Theme.hover)
         }
       }
       .contentShape(Rectangle())
@@ -266,9 +247,9 @@ struct NoticeToast: View {
           }
           .buttonStyle(.plain)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 11)
-        .glass(Capsule())
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .glass(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
         .shadow(color: .black.opacity(0.35), radius: 24, y: 10)
         .padding(.bottom, 24)
         .frame(maxWidth: 620)
@@ -291,47 +272,45 @@ struct WelcomeView: View {
 
   var body: some View {
     ZStack {
-      AsciiArt(scene: .orb(center: UnitPoint(x: 0.72, y: 0.5), radius: 0.25), fontSize: 8.5)
-        .mask(LinearGradient(stops: [.init(color: .clear, location: 0.3), .init(color: .black, location: 0.52)], startPoint: .leading, endPoint: .trailing))
+      AsciiArt(scene: .tunnel(throat: 0.66, squeeze: 0.52, spacing: 3.4), fontSize: 9, lineHeight: 1.1)
+        .padding(.vertical, 40)
+        .mask(LinearGradient(stops: [.init(color: .clear, location: 0.3), .init(color: .black, location: 0.55)], startPoint: .leading, endPoint: .trailing))
       HStack {
         VStack(alignment: .leading, spacing: 0) {
           Spacer()
-          LogoMark(size: 30)
-            .frame(width: 52, height: 52)
-            .glass(RoundedRectangle(cornerRadius: 15, style: .continuous))
-            .padding(.bottom, 28)
+          LogoMark(size: 34)
+            .padding(.bottom, 26)
             .rise()
           Text("Wind Tunnel")
-            .font(.system(size: 50, weight: .semibold))
-            .tracking(-1.4)
-            .foregroundStyle(LinearGradient(colors: [Theme.text, Theme.text.opacity(0.78)], startPoint: .top, endPoint: .bottom))
+            .font(.system(size: 44, weight: .semibold))
+            .tracking(-1.1)
+            .foregroundStyle(Theme.text)
             .rise(0.04)
           Text("Find the bugs that only happen\nwhen things happen at once.")
-            .font(Theme.sans(18))
+            .font(Theme.sans(17))
             .foregroundStyle(Theme.dim)
             .lineSpacing(3)
             .padding(.top, 10)
             .rise(0.08)
           if let error {
             HStack(alignment: .top, spacing: 10) {
-              Image(systemName: "xmark.octagon.fill").foregroundStyle(Theme.fail)
+              Rectangle().fill(Theme.fail).frame(width: 2)
               Text(error).font(Theme.sans(12.5)).foregroundStyle(Theme.text).textSelection(.enabled)
             }
-            .padding(14)
-            .frame(maxWidth: 520, alignment: .leading)
-            .card(radius: 12, tint: Theme.fail)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: 480, alignment: .leading)
             .padding(.top, 24)
           }
-          HStack(spacing: 10) {
+          HStack(spacing: 8) {
             Button {
               model.chooseProject()
             } label: {
-              Label("Open Folder…", systemImage: "folder")
+              Text("Open Folder…")
             }
-            .buttonStyle(GlassButtonStyle(prominent: true))
+            .buttonStyle(ActionButtonStyle(prominent: true))
             .keyboardShortcut("o", modifiers: .command)
             if error != nil, model.projectPath != nil {
-              Button("Try Again") { model.reconnect() }.buttonStyle(GlassButtonStyle())
+              Button("Try Again") { model.reconnect() }.buttonStyle(ActionButtonStyle())
             } else if let last = model.recents.first {
               Button {
                 model.open(project: last)
@@ -341,22 +320,22 @@ struct WelcomeView: View {
                   Text("↩").font(Theme.sans(11)).foregroundStyle(Theme.faint)
                 }
               }
-              .buttonStyle(GlassButtonStyle())
+              .buttonStyle(ActionButtonStyle())
               .keyboardShortcut(.defaultAction)
             }
           }
-          .padding(.top, 34)
+          .padding(.top, 32)
           .rise(0.12)
           if !model.recents.isEmpty {
-            VStack(alignment: .leading, spacing: 2) {
-              Text("Recent").label().padding(.leading, 10).padding(.bottom, 6)
+            VStack(alignment: .leading, spacing: 0) {
+              Text("Recent").label().padding(.leading, 8).padding(.bottom, 6)
               ForEach(model.recents.prefix(4), id: \.self) { path in
                 RecentRow(path: path)
               }
             }
-            .frame(width: 380, alignment: .leading)
-            .padding(.top, 40)
-            .padding(.leading, -10)
+            .frame(width: 360, alignment: .leading)
+            .padding(.top, 44)
+            .padding(.leading, -8)
             .rise(0.16)
           }
           Spacer()
@@ -379,8 +358,8 @@ private struct RecentRow: View {
 
   var body: some View {
     HStack(spacing: 10) {
-      Text((path as NSString).lastPathComponent).font(Theme.sans(13, .medium)).foregroundStyle(hovering ? Theme.text : Theme.text.opacity(0.85))
-      Text(Fmt.tilde((path as NSString).deletingLastPathComponent)).font(Theme.sans(11.5)).foregroundStyle(Theme.faint).lineLimit(1).truncationMode(.middle)
+      Text((path as NSString).lastPathComponent).font(Theme.sans(13)).foregroundStyle(hovering ? Theme.text : Theme.text.opacity(0.85))
+      Text(Fmt.tilde((path as NSString).deletingLastPathComponent)).font(Theme.sans(12)).foregroundStyle(Theme.faint).lineLimit(1).truncationMode(.middle)
       Spacer()
       if hovering {
         Button {
@@ -392,13 +371,12 @@ private struct RecentRow: View {
         .help("Remove from Recent")
       }
     }
-    .padding(.vertical, 7)
-    .padding(.horizontal, 10)
-    .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(hovering ? Color.white.opacity(0.06) : .clear))
+    .padding(.vertical, 6)
+    .padding(.horizontal, 8)
+    .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(hovering ? Theme.hover : .clear))
     .contentShape(Rectangle())
     .onTapGesture { model.open(project: path) }
     .onHover { hovering = $0 }
-    .animation(Theme.snappy, value: hovering)
   }
 }
 
@@ -406,12 +384,12 @@ struct ConnectingView: View {
   let path: String
 
   var body: some View {
-    VStack(spacing: 18) {
-      AsciiArt(scene: .orb(radius: 0.34), fontSize: 7, fps: 24)
-        .frame(width: 420, height: 230)
+    VStack(spacing: 16) {
+      AsciiArt(scene: .tunnel(squeeze: 0.5, spacing: 3, walls: false), fontSize: 8, fps: 24)
+        .frame(width: 440, height: 150)
       HStack(spacing: 9) {
         BrailleSpinner(size: 12)
-        Text("Opening \((path as NSString).lastPathComponent)").font(Theme.sans(14, .medium)).foregroundStyle(Theme.text)
+        Text("Opening \((path as NSString).lastPathComponent)").font(Theme.sans(13)).foregroundStyle(Theme.dim)
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -422,16 +400,17 @@ struct ConnectingView: View {
   }
 }
 
-/// A view with nothing in it yet: a small orb and a line.
+/// A view with nothing in it yet: a little air and a line.
 struct EmptyState: View {
   let title: String
   let text: String
 
   var body: some View {
-    VStack(spacing: 14) {
-      AsciiArt(scene: .orb(radius: 0.36, flow: false), fontSize: 6, fps: 16)
-        .frame(width: 140, height: 110)
-      Text(title).font(Theme.sans(15, .semibold)).foregroundStyle(Theme.text)
+    VStack(spacing: 12) {
+      AsciiArt(scene: .tunnel(squeeze: 0.45, spacing: 2.6, walls: false, dust: false), fontSize: 7, fps: 16)
+        .frame(width: 200, height: 70)
+        .padding(.bottom, 6)
+      Text(title).font(Theme.sans(14, .semibold)).foregroundStyle(Theme.text)
       Text(text).font(Theme.sans(12.5)).foregroundStyle(Theme.faint).multilineTextAlignment(.center).frame(maxWidth: 340)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)

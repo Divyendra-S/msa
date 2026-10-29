@@ -6,9 +6,8 @@ struct RunsSplit: View {
   var body: some View {
     HStack(spacing: 0) {
       RunsList()
-        .frame(width: 304)
-        .card(radius: 18)
-        .padding(.bottom, 8)
+        .frame(width: 292)
+      Hairline(vertical: true)
       Group {
         if let id = model.selectedRun ?? defaultRun {
           RunDetailView(runID: id).id(id)
@@ -47,16 +46,19 @@ struct RunsList: View {
 
   var body: some View {
     VStack(spacing: 0) {
-      VStack(spacing: 10) {
-        Segmented(items: RunFilter.allCases, selection: $filter) { f, _ in
+      VStack(alignment: .leading, spacing: 8) {
+        SearchField(text: $query, prompt: "Filter")
+        TabStrip(items: RunFilter.allCases, selection: $filter, size: 12) { f, _ in
           Text(f.title)
         }
-        SearchField(text: $query, prompt: "Filter by experiment or rule")
+        .padding(.leading, 4)
       }
-      .padding(12)
+      .padding(.horizontal, 12)
+      .padding(.top, 4)
+      Hairline()
 
       ScrollView {
-        LazyVStack(alignment: .leading, spacing: 1) {
+        LazyVStack(alignment: .leading, spacing: 0) {
           ForEach(filtered) { batch in
             Section {
               ForEach(batch.runs) { run in
@@ -75,7 +77,7 @@ struct RunsList: View {
               .frame(maxWidth: .infinity).padding(.top, 30)
           }
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 8)
         .padding(.bottom, 12)
       }
       .scrollIndicators(.never)
@@ -101,18 +103,14 @@ private struct BatchHeader: View {
 
   var body: some View {
     HStack(spacing: 8) {
-      Text("\(Fmt.day(batch.started).capitalized) \(Fmt.clock(batch.started))")
-        .font(Theme.sans(11, .semibold)).foregroundStyle(Theme.faint)
+      Text("\(Fmt.day(batch.started).capitalized), \(Fmt.clock(batch.started))")
+        .font(Theme.sans(11.5, .medium)).foregroundStyle(Theme.faint)
       Spacer()
-      if batch.count("running") > 0 {
-        BrailleSpinner(size: 9)
-      } else if batch.count("fail") > 0 {
-        Text("\(batch.count("fail")) failed").font(Theme.sans(11, .medium)).foregroundStyle(Theme.fail.opacity(0.85))
-      }
+      if batch.count("running") > 0 { BrailleSpinner(size: 9) }
     }
     .padding(.horizontal, 10)
-    .padding(.top, 10)
-    .padding(.bottom, 5)
+    .padding(.top, 14)
+    .padding(.bottom, 4)
   }
 }
 
@@ -123,42 +121,35 @@ private struct RunRow: View {
 
   var body: some View {
     let tone = Tone(run.outcome)
-    HStack(alignment: .center, spacing: 11) {
+    HStack(spacing: 10) {
       Group {
         if run.outcome == "running" {
-          BrailleSpinner(size: 11)
+          BrailleSpinner(size: 10)
         } else {
-          Circle().fill(tone.color).frame(width: 7, height: 7)
+          Circle().fill(tone.color).frame(width: 6, height: 6)
         }
       }
-      .frame(width: 12)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(run.experiment)
-          .font(Theme.sans(13, selected ? .semibold : .medium))
-          .foregroundStyle(Theme.text.opacity(selected ? 1 : 0.88))
-          .lineLimit(1)
-        if let progress = run.running {
-          HStack(spacing: 8) {
-            Meter(value: progress.total == 0 ? 0 : Double(progress.done) / Double(progress.total), color: Theme.aqua, height: 3)
-              .frame(width: 90)
-            Text("\(progress.done)/\(progress.total)").font(Theme.sans(11)).monospacedDigit().foregroundStyle(Theme.aqua)
-          }
-          .padding(.top, 2)
-        } else if !run.brokenRules.isEmpty {
-          Text(run.brokenRules.joined(separator: ", ")).font(Theme.mono(10.5)).foregroundStyle(tone.color.opacity(0.75)).lineLimit(1)
-        }
+      .frame(width: 10)
+      Text(run.experiment)
+        .font(Theme.sans(13, selected ? .medium : .regular))
+        .foregroundStyle(selected ? Theme.text : tone == .fail ? Theme.text.opacity(0.92) : Theme.dim)
+        .lineLimit(1)
+      Spacer(minLength: 6)
+      if let progress = run.running {
+        Text("\(progress.done)/\(progress.total)").font(Theme.sans(11.5)).monospacedDigit().foregroundStyle(Theme.accent)
+      } else {
+        Text(Fmt.ago(run.started)).font(Theme.sans(11.5)).monospacedDigit().foregroundStyle(Theme.ghost)
       }
-      Spacer(minLength: 4)
-      Text(Fmt.ago(run.started)).font(Theme.sans(11)).foregroundStyle(Theme.faint)
     }
     .padding(.horizontal, 10)
-    .padding(.vertical, 8)
+    .frame(height: 30)
     .background {
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
-        .fill(selected ? Color.white.opacity(0.09) : hovering ? Color.white.opacity(0.04) : .clear)
+      RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+        .fill(selected ? Theme.selection : hovering ? Theme.hover : .clear)
     }
     .contentShape(Rectangle())
     .onHover { hovering = $0 }
+    .help(run.brokenRules.isEmpty ? Tone.word(run.outcome) : "Broke \(run.brokenRules.joined(separator: ", "))")
   }
 }
 
@@ -184,10 +175,9 @@ struct SearchField: View {
         .buttonStyle(.plain)
       }
     }
-    .padding(.horizontal, 11)
-    .frame(height: 30)
-    .background(Capsule().fill(Color.black.opacity(0.18)))
-    .overlay(Capsule().strokeBorder(focused ? Theme.accent.opacity(0.45) : Theme.line, lineWidth: 1))
+    .padding(.horizontal, 10)
+    .frame(height: 28)
+    .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(focused ? Theme.fill : Color.white.opacity(0.035)))
     .animation(Theme.snappy, value: focused)
   }
 }

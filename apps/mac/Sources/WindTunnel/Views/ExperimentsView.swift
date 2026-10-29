@@ -7,25 +7,25 @@ struct ExperimentsSplit: View {
   var body: some View {
     HStack(spacing: 0) {
       VStack(spacing: 0) {
-        SearchField(text: $query, prompt: "Filter experiments").padding(12)
+        SearchField(text: $query, prompt: "Filter").padding(.horizontal, 12).padding(.top, 4).padding(.bottom, 10)
+        Hairline()
         if let error = model.experimentsError {
           Text(error).font(Theme.sans(12)).foregroundStyle(Theme.fail).padding(.horizontal, 14).padding(.bottom, 8)
         }
         ScrollView {
-          LazyVStack(spacing: 1) {
+          LazyVStack(spacing: 0) {
             ForEach(filtered) { e in
               ExperimentRow(experiment: e, latest: model.latestByExperiment[e.id], selected: selectedID == e.id)
                 .onTapGesture { withAnimation(Theme.snappy) { model.selectedExperiment = e.id } }
             }
           }
-          .padding(.horizontal, 6)
-          .padding(.bottom, 12)
+          .padding(.horizontal, 8)
+          .padding(.vertical, 8)
         }
         .scrollIndicators(.never)
       }
-      .frame(width: 304)
-      .card(radius: 18)
-      .padding(.bottom, 8)
+      .frame(width: 292)
+      Hairline(vertical: true)
       Group {
         if let e = model.experiments.first(where: { $0.id == selectedID }) {
           ExperimentDetail(experiment: e).id(e.id)
@@ -53,33 +53,33 @@ private struct ExperimentRow: View {
 
   var body: some View {
     let outcome = latest?.outcome ?? experiment.last?.outcome
-    HStack(alignment: .top, spacing: 11) {
+    let tone = Tone(outcome)
+    HStack(spacing: 10) {
       Group {
         if outcome == "running" {
-          BrailleSpinner(size: 11)
+          BrailleSpinner(size: 10)
         } else if outcome == nil {
-          Circle().strokeBorder(Theme.faint, lineWidth: 1.2).frame(width: 7, height: 7)
+          Circle().strokeBorder(Theme.ghost, lineWidth: 1).frame(width: 6, height: 6)
         } else {
-          Circle().fill(Tone(outcome).color).frame(width: 7, height: 7)
+          Circle().fill(tone.color).frame(width: 6, height: 6)
         }
       }
-      .frame(width: 12, height: 16)
-      VStack(alignment: .leading, spacing: 2) {
-        Text(experiment.id).font(Theme.sans(13, selected ? .semibold : .medium)).foregroundStyle(Theme.text.opacity(selected ? 1 : 0.88)).lineLimit(1)
-        if let d = experiment.description {
-          Text(d).font(Theme.sans(11.5)).foregroundStyle(Theme.faint).lineLimit(1)
-        }
-      }
+      .frame(width: 10)
+      Text(experiment.id)
+        .font(Theme.sans(13, selected ? .medium : .regular))
+        .foregroundStyle(selected ? Theme.text : tone == .fail ? Theme.text.opacity(0.92) : Theme.dim)
+        .lineLimit(1)
       Spacer(minLength: 0)
     }
     .padding(.horizontal, 10)
-    .padding(.vertical, 8)
+    .frame(height: 30)
     .background {
-      RoundedRectangle(cornerRadius: 10, style: .continuous)
-        .fill(selected ? Color.white.opacity(0.09) : hovering ? Color.white.opacity(0.04) : .clear)
+      RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+        .fill(selected ? Theme.selection : hovering ? Theme.hover : .clear)
     }
     .contentShape(Rectangle())
     .onHover { hovering = $0 }
+    .help(experiment.description ?? experiment.id)
   }
 }
 
@@ -94,31 +94,29 @@ struct ExperimentDetail: View {
     let job = model.jobs.first { $0.status == "running" && ($0.experiments.isEmpty || $0.experiments.contains(experiment.id)) }
       ?? model.jobs.first { $0.experiments == [experiment.id] }
     ScrollView {
-      VStack(alignment: .leading, spacing: 18) {
-        VStack(alignment: .leading, spacing: 8) {
-          HStack(alignment: .center, spacing: 12) {
-            Text(experiment.id).font(Theme.sans(22, .semibold)).tracking(-0.3).foregroundStyle(Theme.text).lineLimit(1)
+      VStack(alignment: .leading, spacing: 32) {
+        VStack(alignment: .leading, spacing: 0) {
+          HStack(alignment: .center, spacing: 8) {
+            Text(experiment.id).font(Theme.sans(20, .semibold)).tracking(-0.2).foregroundStyle(Theme.text).lineLimit(1)
               .minimumScaleFactor(0.8).layoutPriority(1)
-            if let latest = history.first { OutcomeBadge(outcome: latest.outcome, large: true) }
             Spacer(minLength: 12)
-            Button {
-              model.openFile(experiment.file)
-            } label: {
-              Image(systemName: "doc.text")
-            }
-            .buttonStyle(GlassButtonStyle())
-            .help("Open the file")
+            Button("Open File") { model.openFile(experiment.file) }
+              .buttonStyle(ActionButtonStyle())
             Button {
               model.runExperiments([experiment.id], repeat: repeatCount > 0 ? repeatCount : nil)
             } label: {
               Label(job?.status == "running" ? "Running…" : "Run", systemImage: "play.fill")
             }
-            .buttonStyle(GlassButtonStyle(prominent: true))
+            .buttonStyle(ActionButtonStyle(prominent: true))
             .disabled(model.runningJob != nil)
           }
-          Text(meta).font(Theme.sans(12)).foregroundStyle(Theme.faint)
+          HStack(spacing: 10) {
+            if let latest = history.first { OutcomeBadge(outcome: latest.outcome) }
+            Text(meta).font(Theme.sans(12)).foregroundStyle(Theme.faint).lineLimit(1)
+          }
+          .padding(.top, 6)
           if let d = experiment.description {
-            Text(d).font(Theme.sans(13)).foregroundStyle(Theme.dim).lineSpacing(2).frame(maxWidth: 720, alignment: .leading).padding(.top, 2)
+            Text(d).font(Theme.sans(13)).foregroundStyle(Theme.dim).lineSpacing(3).frame(maxWidth: 680, alignment: .leading).padding(.top, 14)
           }
         }
         .rise()
@@ -128,25 +126,24 @@ struct ExperimentDetail: View {
         }
 
         Panel("History", accessory: {
-          HStack(spacing: 10) {
+          HStack(spacing: 8) {
             Text("Repeat")
             Stepper(value: $repeatCount, in: 0...50) {
-              Text(repeatCount == 0 ? "default" : "\(repeatCount)×").font(Theme.sans(11.5, .medium)).monospacedDigit().foregroundStyle(Theme.dim).frame(width: 46, alignment: .trailing)
+              Text(repeatCount == 0 ? "default" : "\(repeatCount)×").font(Theme.sans(12)).monospacedDigit().foregroundStyle(Theme.dim).frame(width: 46, alignment: .trailing)
             }
             .controlSize(.mini)
             .help("How many times Run repeats it")
           }
         }) {
           if history.isEmpty {
-            Text("Never run.").font(Theme.sans(12.5)).foregroundStyle(Theme.dim)
+            Text("Never run.").font(Theme.sans(13)).foregroundStyle(Theme.dim)
           } else {
-            VStack(alignment: .leading, spacing: 12) {
-              HStack(spacing: 4) {
-                ForEach(history.prefix(40).reversed()) { run in
-                  Circle()
-                    .fill(Tone(run.outcome).color.gradient)
-                    .frame(width: 9, height: 9)
-                    .padding(2)
+            VStack(alignment: .leading, spacing: 14) {
+              HStack(spacing: 3) {
+                ForEach(history.prefix(48).reversed()) { run in
+                  RoundedRectangle(cornerRadius: 1)
+                    .fill(run.outcome == "pass" ? Theme.accent.opacity(0.6) : Tone(run.outcome).color)
+                    .frame(width: 6, height: 14)
                     .help("\(Tone.word(run.outcome)) · \(Fmt.ago(run.started))")
                     .onTapGesture {
                       model.selectedRun = run.id
@@ -159,22 +156,20 @@ struct ExperimentDetail: View {
                   HistoryRow(run: run)
                 }
               }
-              .padding(.horizontal, -8)
+              .padding(.horizontal, -10)
             }
           }
         }
 
-        Panel("Source", accessory: { Text((experiment.file as NSString).lastPathComponent).font(Theme.mono(10.5)) }) {
-          Text(YAML.highlight(source)).font(Theme.mono(11.5)).textSelection(.enabled).lineSpacing(2)
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.well))
+        Panel("Source", accessory: { Text((experiment.file as NSString).lastPathComponent).font(Theme.mono(11)) }) {
+          Text(YAML.highlight(source)).font(Theme.mono(11.5)).textSelection(.enabled).lineSpacing(3)
+            .well(padding: 16)
         }
       }
-      .padding(.horizontal, 26)
-      .padding(.top, 8)
-      .padding(.bottom, 28)
-      .frame(maxWidth: 1100, alignment: .leading)
+      .padding(.horizontal, 28)
+      .padding(.top, 10)
+      .padding(.bottom, 32)
+      .frame(maxWidth: 1000, alignment: .leading)
     }
     .task(id: experiment.id) {
       source = (try? String(contentsOfFile: experiment.file, encoding: .utf8)) ?? "(couldn't read \(experiment.file))"
@@ -197,18 +192,18 @@ private struct HistoryRow: View {
   @State private var hovering = false
 
   var body: some View {
-    HStack(spacing: 11) {
+    HStack(spacing: 12) {
       Circle().fill(Tone(run.outcome).color).frame(width: 6, height: 6)
-      Text(run.brokenRules.isEmpty ? (run.outcome == "pass" ? "Every rule held" : Tone.word(run.outcome)) : run.brokenRules.joined(separator: ", "))
-        .font(run.brokenRules.isEmpty ? Theme.sans(12.5) : Theme.mono(11.5))
+      Text(run.brokenRules.isEmpty ? (run.outcome == "pass" ? "Every rule held" : Tone.word(run.outcome)) : "Broke \(run.brokenRules.joined(separator: ", "))")
+        .font(Theme.sans(13))
         .foregroundStyle(Theme.dim).lineLimit(1)
       Spacer()
-      Text(Fmt.ago(run.started)).font(Theme.sans(11.5)).foregroundStyle(Theme.faint)
-      Image(systemName: "chevron.right").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(hovering ? Theme.dim : Theme.ghost)
+      Text(Fmt.ago(run.started)).font(Theme.sans(12)).monospacedDigit().foregroundStyle(Theme.ghost)
+      Image(systemName: "chevron.right").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(hovering ? Theme.dim : .clear)
     }
-    .padding(.horizontal, 8)
-    .padding(.vertical, 7)
-    .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(hovering ? Color.white.opacity(0.05) : .clear))
+    .padding(.horizontal, 10)
+    .frame(height: 32)
+    .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(hovering ? Theme.hover : .clear))
     .contentShape(Rectangle())
     .onHover { hovering = $0 }
     .onTapGesture {
@@ -227,7 +222,7 @@ struct JobPanel: View {
       if let error = job.error {
         Text(error).font(Theme.sans(12.5)).foregroundStyle(Theme.fail)
       }
-      TerminalPanel(title: job.status == "running" ? "Running" : Tone.word(job.status), lines: job.output, tint: job.status == "running" ? nil : Tone(job.status).color, follow: true)
+      TerminalPanel(title: job.status == "running" ? "Running" : Tone.word(job.status), lines: job.output, tint: job.status == "running" || Tone(job.status) == .pass ? nil : Tone(job.status).color, follow: true)
     }
     .rise()
   }
