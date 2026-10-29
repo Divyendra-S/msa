@@ -13,7 +13,12 @@ npx windtunnel-cli install        # or, from a checkout: pnpm wt install
 It checks Node, git, Docker, Postgres and Playwright's Chromium, installs the CLI globally (so
 `windtunnel` is on `PATH` for the skills), and adds the plugin to each agent it finds, after
 one confirmation (`--yes` skips it, `--dry-run` only shows it, `--hosts claude,codex,muse`
-limits it):
+limits it). An agent that has the plugin already is left alone. `--dry-run --json` prints the
+checks, the agents found and the steps as one JSON object; the Mac app's first-run check uses it.
+
+`windtunnel scan` reads any Next.js app's handlers, config or not, and says in a sentence what in
+each could go wrong when requests overlap (the static half of `windtunnel map`, with no build,
+database or model). The Mac app shows it as soon as a folder is picked.
 
 | Agent | What it does |
 |---|---|

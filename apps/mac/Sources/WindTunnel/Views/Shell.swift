@@ -13,12 +13,13 @@ struct RootView: View {
         ConnectingView(path: path).transition(.opacity)
       case .welcome:
         WelcomeView(error: nil).transition(.opacity)
+      case .setup:
+        SetupView().transition(.opacity)
       case .failed(let message):
         WelcomeView(error: message).transition(.opacity)
       }
     }
     .animation(.easeInOut(duration: 0.35), value: model.phase)
-    .preferredColorScheme(.dark)
     .tint(Theme.accent)
   }
 }
@@ -132,7 +133,7 @@ struct Sidebar: View {
       .help(bridgeHelp)
     }
     .frame(width: 210)
-    .background(Color.white.opacity(0.02))
+    .background(Theme.overlay(0.02))
   }
 
   private var bridgeHelp: String {
@@ -271,79 +272,71 @@ struct WelcomeView: View {
   let error: String?
 
   var body: some View {
-    ZStack {
-      AsciiArt(scene: .tunnel(throat: 0.66, squeeze: 0.52, spacing: 3.4), fontSize: 9, lineHeight: 1.1)
-        .padding(.vertical, 40)
-        .mask(LinearGradient(stops: [.init(color: .clear, location: 0.3), .init(color: .black, location: 0.55)], startPoint: .leading, endPoint: .trailing))
-      HStack {
-        VStack(alignment: .leading, spacing: 0) {
-          Spacer()
-          LogoMark(size: 34)
-            .padding(.bottom, 26)
-            .rise()
-          Text("Wind Tunnel")
-            .font(.system(size: 44, weight: .semibold))
-            .tracking(-1.1)
-            .foregroundStyle(Theme.text)
-            .rise(0.04)
-          Text("Find the bugs that only happen\nwhen things happen at once.")
-            .font(Theme.sans(17))
-            .foregroundStyle(Theme.dim)
-            .lineSpacing(3)
-            .padding(.top, 10)
-            .rise(0.08)
-          if let error {
-            HStack(alignment: .top, spacing: 10) {
-              Rectangle().fill(Theme.fail).frame(width: 2)
-              Text(error).font(Theme.sans(12.5)).foregroundStyle(Theme.text).textSelection(.enabled)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(maxWidth: 480, alignment: .leading)
-            .padding(.top, 24)
-          }
-          HStack(spacing: 8) {
-            Button {
-              model.chooseProject()
-            } label: {
-              Text("Open Folder…")
-            }
-            .buttonStyle(ActionButtonStyle(prominent: true))
-            .keyboardShortcut("o", modifiers: .command)
-            if error != nil, model.projectPath != nil {
-              Button("Try Again") { model.reconnect() }.buttonStyle(ActionButtonStyle())
-            } else if let last = model.recents.first {
-              Button {
-                model.open(project: last)
-              } label: {
-                HStack(spacing: 8) {
-                  Text("Open \((last as NSString).lastPathComponent)")
-                  Text("↩").font(Theme.sans(11)).foregroundStyle(Theme.faint)
-                }
-              }
-              .buttonStyle(ActionButtonStyle())
-              .keyboardShortcut(.defaultAction)
-            }
-          }
-          .padding(.top, 32)
-          .rise(0.12)
-          if !model.recents.isEmpty {
-            VStack(alignment: .leading, spacing: 0) {
-              Text("Recent").label().padding(.leading, 8).padding(.bottom, 6)
-              ForEach(model.recents.prefix(4), id: \.self) { path in
-                RecentRow(path: path)
-              }
-            }
-            .frame(width: 360, alignment: .leading)
-            .padding(.top, 44)
-            .padding(.leading, -8)
-            .rise(0.16)
-          }
-          Spacer()
+    VStack(alignment: .leading, spacing: 0) {
+      LogoMark(size: 32)
+        .padding(.bottom, 24)
+        .rise()
+      Text("Wind Tunnel")
+        .font(.system(size: 40, weight: .semibold))
+        .tracking(-1)
+        .foregroundStyle(Theme.text)
+        .rise(0.04)
+      Text("Find the bugs that only happen when things happen at once.")
+        .font(Theme.sans(15))
+        .foregroundStyle(Theme.dim)
+        .padding(.top, 8)
+        .rise(0.08)
+      if let error {
+        HStack(alignment: .top, spacing: 10) {
+          Rectangle().fill(Theme.fail).frame(width: 2)
+          Text(error).font(Theme.sans(12.5)).foregroundStyle(Theme.text).textSelection(.enabled)
         }
-        .padding(.leading, 80)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.top, 24)
+      }
+      HStack(spacing: 8) {
+        Button("Open Folder…") { model.chooseProject() }
+          .buttonStyle(ActionButtonStyle(prominent: model.recents.isEmpty || error != nil))
+          .keyboardShortcut("o", modifiers: .command)
+        if error != nil, model.projectPath != nil {
+          Button("Try Again") { model.reconnect() }.buttonStyle(ActionButtonStyle())
+        } else if let last = model.recents.first {
+          Button {
+            model.open(project: last)
+          } label: {
+            HStack(spacing: 8) {
+              Text("Open \((last as NSString).lastPathComponent)")
+              Text("↩").font(Theme.sans(11)).opacity(0.5)
+            }
+          }
+          .buttonStyle(ActionButtonStyle(prominent: true))
+          .keyboardShortcut(.defaultAction)
+        }
         Spacer()
+        Button("Set Up a New App…") {
+          model.setup.folder = nil
+          model.beginSetup(at: .app)
+        }
+        .buttonStyle(.plain).font(Theme.sans(12.5)).foregroundStyle(Theme.faint)
+      }
+      .padding(.top, 30)
+      .rise(0.12)
+      if !model.recents.isEmpty {
+        VStack(alignment: .leading, spacing: 0) {
+          Hairline().padding(.bottom, 14)
+          Text("Recent").label().padding(.leading, 8).padding(.bottom, 6)
+          ForEach(model.recents.prefix(5), id: \.self) { path in
+            RecentRow(path: path)
+          }
+        }
+        .padding(.top, 40)
+        .padding(.horizontal, -8)
+        .rise(0.16)
       }
     }
+    .frame(width: 480, alignment: .leading)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(Glow(corner: .bottomTrailing, strength: 0.45))
     .overlay(alignment: .top) {
       Color.clear.frame(height: 40).contentShape(Rectangle()).gesture(WindowDragGesture())
     }
@@ -384,15 +377,15 @@ struct ConnectingView: View {
   let path: String
 
   var body: some View {
-    VStack(spacing: 16) {
-      AsciiArt(scene: .tunnel(squeeze: 0.5, spacing: 3, walls: false), fontSize: 8, fps: 24)
-        .frame(width: 440, height: 150)
+    VStack(spacing: 22) {
+      LogoMark(size: 30)
       HStack(spacing: 9) {
         BrailleSpinner(size: 12)
         Text("Opening \((path as NSString).lastPathComponent)").font(Theme.sans(13)).foregroundStyle(Theme.dim)
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(Glow(corner: .bottomTrailing, strength: 0.35))
     .overlay(alignment: .top) {
       Color.clear.frame(height: 40).contentShape(Rectangle()).gesture(WindowDragGesture())
     }
@@ -400,16 +393,13 @@ struct ConnectingView: View {
   }
 }
 
-/// A view with nothing in it yet: a little air and a line.
+/// A view with nothing in it yet: what would be here, and how it gets there.
 struct EmptyState: View {
   let title: String
   let text: String
 
   var body: some View {
     VStack(spacing: 12) {
-      AsciiArt(scene: .tunnel(squeeze: 0.45, spacing: 2.6, walls: false, dust: false), fontSize: 7, fps: 16)
-        .frame(width: 200, height: 70)
-        .padding(.bottom, 6)
       Text(title).font(Theme.sans(14, .semibold)).foregroundStyle(Theme.text)
       Text(text).font(Theme.sans(12.5)).foregroundStyle(Theme.faint).multilineTextAlignment(.center).frame(maxWidth: 340)
     }

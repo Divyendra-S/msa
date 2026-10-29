@@ -28,6 +28,20 @@ enum Pane: String, CaseIterable, Identifiable {
   }
 }
 
+/// Light, dark, or as the Mac is set.
+enum Appearance: String, CaseIterable, Identifiable {
+  case system, light, dark
+  var id: String { rawValue }
+
+  var title: String {
+    switch self {
+    case .system: "System"
+    case .light: "Light"
+    case .dark: "Dark"
+    }
+  }
+}
+
 /// Something that happened in the project, newest first: what a hunt (here or in your own
 /// Claude Code session) is doing, seen through the runs it starts and finishes.
 struct Activity: Identifiable, Hashable {
@@ -48,12 +62,15 @@ final class AppModel {
 
   enum Phase: Equatable {
     case welcome
+    /// First run, or a folder that isn't set up yet: see `setup`.
+    case setup
     case connecting(String)
     case connected
     case failed(String)
   }
 
   var phase: Phase = .welcome
+  let setup = Setup()
   var projectPath: String?
   var recents: [String] = UserDefaults.standard.stringArray(forKey: "recentProjects") ?? []
   var toolchainDescription = ""
@@ -80,6 +97,13 @@ final class AppModel {
   var activity: [Activity] = []
   var notice: String?
 
+  var appearance = Appearance(rawValue: UserDefaults.standard.string(forKey: "appearance") ?? "") ?? .system {
+    didSet {
+      UserDefaults.standard.set(appearance.rawValue, forKey: "appearance")
+      applyAppearance()
+    }
+  }
+
   var hasAnthropicKey = Keychain.read() != nil
   var cliPath: String = UserDefaults.standard.string(forKey: "cliPath") ?? "" {
     didSet { UserDefaults.standard.set(cliPath, forKey: "cliPath") }
@@ -91,15 +115,36 @@ final class AppModel {
 
   // MARK: Connecting
 
+  /// For every window at once: the main one, its sheets, Settings and the menu bar's.
+  func applyAppearance() {
+    NSApp.appearance = switch appearance {
+    case .system: nil
+    case .light: NSAppearance(named: .aqua)
+    case .dark: NSAppearance(named: .darkAqua)
+    }
+  }
+
   func start() {
     let args = CommandLine.arguments
+    if let i = args.firstIndex(of: "--appearance"), args.count > i + 1, let a = Appearance(rawValue: args[i + 1]) { appearance = a }
     if let i = args.firstIndex(of: "--pane"), args.count > i + 1, let pane = Pane(rawValue: args[i + 1]) { section = pane }
     if args.contains("--welcome") { return }
-    // A project named on the command line opens at once; otherwise the start page, with the recent ones.
+    if let i = args.firstIndex(of: "--setup") {
+      let name = args.count > i + 1 ? args[i + 1] : ""
+      if let j = args.firstIndex(of: "--folder"), args.count > j + 1 { setup.choose(args[j + 1]) }
+      beginSetup(at: Setup.Step(rawValue: name) ?? .app)
+      // `--setup mac`: the Mac's checks, open.
+      if name == "mac" { setup.showMac = true }
+      return
+    }
+    // A project named on the command line opens at once; otherwise the start page, with the
+    // recent ones, or the first-run steps the first time.
     if let i = args.firstIndex(of: "--project"), args.count > i + 1 {
       open(project: args[i + 1])
     } else if let env = ProcessInfo.processInfo.environment["WINDTUNNEL_PROJECT"] {
       open(project: env)
+    } else if recents.isEmpty && !UserDefaults.standard.bool(forKey: "setupDone") {
+      beginSetup(at: .app)
     }
     // After opening, which clears the selection.
     if let i = args.firstIndex(of: "--run"), args.count > i + 1 { selectedRun = args[i + 1] }
@@ -123,10 +168,33 @@ final class AppModel {
     if panel.runModal() == .OK, let url = panel.url { open(project: url.path) }
   }
 
-  func open(project: String) {
+  /// The first-run screens, at `step`. Checking the Mac starts at once, out of the way.
+  func beginSetup(at step: Setup.Step) {
     connectTask?.cancel()
     disconnect()
-    let path = (project as NSString).standardizingPath
+    setup.step = step
+    if setup.report == nil { setup.check() }
+    phase = .setup
+  }
+
+  /// Leaves the steps for the app they ended on.
+  func finishSetup(open folder: AppFolder) {
+    UserDefaults.standard.set(true, forKey: "setupDone")
+    setup.stopWatching()
+    open(project: folder.app)
+  }
+
+  func open(project: String) {
+    // A folder with no config yet goes to the step where an agent writes one.
+    let folder = AppFolder.inspect(project)
+    if folder.config == nil {
+      setup.choose(project)
+      beginSetup(at: folder.configs.isEmpty ? .read : .app)
+      return
+    }
+    connectTask?.cancel()
+    disconnect()
+    let path = ((folder.config! as NSString).deletingLastPathComponent as NSString).standardizingPath
     projectPath = path
     phase = .connecting(path)
     let override = cliPath
@@ -145,6 +213,11 @@ final class AppModel {
         listen()
         requestNotifications()
       } catch is CancellationError {
+      } catch let problem as Toolchain.Problem {
+        // No Node or no CLI: the Mac's checks say what to install.
+        setup.toolchainProblem = problem
+        beginSetup(at: .app)
+        setup.showMac = true
       } catch {
         phase = .failed(error.localizedDescription)
       }
@@ -371,8 +444,8 @@ final class AppModel {
 
   /// Opens Claude Code in a new terminal in the app's folder with the prompt typed but not sent:
   /// it runs on your own login only when you press Enter, in your own Claude Code.
-  func openInClaudeCode(_ prompt: String) {
-    guard let root = status?.project.root ?? projectPath else { return }
+  func openInClaudeCode(_ prompt: String, in folder: String? = nil) {
+    guard let root = folder ?? status?.project.root ?? projectPath else { return }
     var c = URLComponents()
     c.scheme = "claude-cli"
     c.host = "open"
@@ -395,6 +468,26 @@ final class AppModel {
     } catch {
       notice = error.localizedDescription
     }
+  }
+
+  /// Codex or Muse Code in a new Terminal window in `folder`, with the prompt on the clipboard to
+  /// paste: nothing is sent until you press Enter.
+  func openInTerminal(_ command: String, prompt: String, in folder: String) {
+    copy(prompt)
+    let script = "#!/bin/zsh -il\ncd '\(folder)' && exec \(command)\n"
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent("windtunnel-\(command)-\(UUID().uuidString.prefix(8)).command")
+    do {
+      try script.write(to: file, atomically: true, encoding: .utf8)
+      try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
+      NSWorkspace.shared.open(file)
+    } catch {
+      notice = error.localizedDescription
+    }
+  }
+
+  func copy(_ text: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(text, forType: .string)
   }
 
   func saveAnthropicKey(_ key: String?) {

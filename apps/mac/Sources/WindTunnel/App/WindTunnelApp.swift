@@ -13,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
     // Also a proper app when started as a bare executable (swift run).
     NSApp.setActivationPolicy(.regular)
+    AppModel.shared.applyAppearance()
     NSApp.activate()
   }
 

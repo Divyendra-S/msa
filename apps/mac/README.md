@@ -18,7 +18,8 @@ Settings overrides both. It finds Node 22.18+ on that PATH, in nvm's folder or i
 
 | | |
 |---|---|
-| **Overview** | the project at a glance: experiments holding and failing; what needs attention, and whether it just broke or keeps breaking; which rules break most; each experiment's recent runs as a strip |
+| **First run** | two screens. Choose the app's folder (or drop it on the window); then its code, read by `windtunnel scan` before anything is set up: the handlers that could leave data wrong when requests overlap, each pattern in a sentence, beside what to do next: open it, or have your agent write `windtunnel.config.yaml` (`/windtunnel:init`) while the folder is watched for it. The Mac is checked meanwhile (`windtunnel install --dry-run --json`) and speaks up only when something's missing, with **Set Up** to run the install steps it lists. A folder with no config opened any other way lands on the second screen |
+| **Overview** | the project at a glance: experiments holding, and how that moved run by run; the failing ones first, with the rule each broke, what the experiment does, its recent runs, and whether it just broke or keeps breaking; the ones holding; which rules break most. A new project shows its next step instead: a hunt, or the first run |
 | **Runs** | every run, grouped by batch, failures first with the rule they broke and held runs folded; filtered by outcome or name. A run opens on the answer: the rule that broke, in words, with its rows, where the run first went another way than one that held, and which tab to look at next. Then its repetitions and orderings, the rules' SQL; a **race** timeline (each tab and the webhooks on one time axis), the runs side by side step by step, the trace chain per table, database changes, requests, the app log |
 | **Experiments** | each experiment, its source and history; **Run** with a repeat count, with the CLI's output live |
 | **Hunt** | send an agent to break the app (below), and follow everything it runs |
@@ -53,31 +54,32 @@ Sources/WindTunnel/
   App/        the app, its state (AppModel: bridge, event stream, actions), snapshot mode
   Bridge/     Toolchain (login-shell PATH, Node, the CLI), Bridge (child process, API, events), Keychain
   Model/      the API's shapes, formatting
-  Design/     Theme (backdrop, sections, buttons, tab strip, meters), Ascii (spinner, live dot,
-              the mark), AsciiArt (characters drawn like a shader: air through the tunnel)
-  Views/      Shell (window, top bar, sidebar, welcome), Overview, Runs, RunDetail,
-              Timeline, Evidence (trace, database, network, log), Experiments, Hunt, Usage
+  App/        also Setup: the first-run state (the CLI's install report, the folder inspected and watched)
+  Design/     Theme (backdrop, sections, buttons, tab strip, meters), Ascii (spinner, live dot, the mark),
+              Glow (a corner light: a slowly drifting mesh gradient in the hue under film grain)
+  Views/      Shell (window, top bar, sidebar, welcome), SetupView (first run),
+              Overview, Runs, RunDetail, Timeline, Evidence (trace, database, network, log),
+              Experiments, Hunt, Usage
 ```
 
-The look is quiet glass: the window shows the desktop through it, blurred and tinted ink. Content
-sits straight on it in sections split by hairlines, not boxed in cards, with small corners. One
-hue, a cool blue, for the brand, for what's live and for what holds; red and amber only where
-something failed or is flaky, and passing runs stay grey so failures are what you see. SF Pro for
-the interface, SF Mono only for data (rules, SQL, logs). Details live in tooltips.
+The look is quiet glass, dark or light (Settings → Appearance: System, Light or Dark): the window
+shows the desktop through it, blurred and tinted. Every colour in `Theme` has a dark and a light
+value, chosen by the appearance it's drawn in; on light the hue and the outcome colours go deeper
+so they read. Content sits straight on it in sections split by hairlines, not boxed in cards,
+with small corners. One hue, a cool blue, for the brand, for what's live and for what holds; red
+and amber only where something failed or is flaky, and passing runs stay grey so failures are
+what you see. SF Pro for the interface, SF Mono only for data (rules, SQL, logs). Details live in
+tooltips.
 
-The ASCII is drawn like a shader: every cell of a monospaced grid samples a scene for a glyph
-and a brightness, the field is coloured through the hue, and the brightest cells are lit white.
-The one scene is a wind tunnel's test section seen from the side: smoke lines squeeze through
-the narrow throat and speed up, then spread out behind it and start to waver, with puffs
-travelling down each line and dust drifting between them. Flat stretches pick a low, middle or
-high stroke (`_ - ¯`) for where the line crosses the cell, so curves read smooth. On the hunt
-page a sensor sweeps along it. It steps at about 20 frames a second and holds still with Reduce
-Motion.
+No illustrations: what the screens show is the user's own project, its code on the first run and
+its runs after. The one ornament is a soft light in a corner of the start and first-run screens,
+a mesh gradient in the hue drifting very slowly under film grain, so it never bands or looks flat.
 
 For working on the views:
 
 ```sh
-.build/debug/WindTunnel --snapshot tunnel /tmp/t.png 1000 640  # render a view to PNG (tunnel, probe, parts, icon)
+T=40 .build/debug/WindTunnel --snapshot glow /tmp/g.png 1200 760  # render a view to PNG (glow at time T, parts, icon)
 open "build/Wind Tunnel.app" --args --project <app folder> --pane runs --run <run id> --tab timeline
-open "build/Wind Tunnel.app" --args --welcome
+open "build/Wind Tunnel.app" --args --welcome --appearance light   # light, dark or system (saved as the setting)
+open "build/Wind Tunnel.app" --args --setup read --folder <app folder>  # a first-run screen: app, read, or mac (the checks)
 ```

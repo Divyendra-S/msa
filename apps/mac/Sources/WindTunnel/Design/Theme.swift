@@ -1,41 +1,49 @@
 import AppKit
 import SwiftUI
 
-/// The look: quiet glass. The window lets the desktop through, blurred and tinted ink. Content sits
+/// The look: quiet glass, dark or light. The window lets the desktop through, blurred and tinted. Content sits
 /// straight on it, in sections split by hairlines rather than boxed in cards. One hue, a cool blue,
 /// for the brand, for what's live and for what holds; red and amber only where something needs a
 /// look. SF Pro for the interface, SF Mono only for data (ids, rules, SQL, logs). Small radii.
 enum Theme {
   // Surfaces, over the glass.
-  static let ink = Color(hex: 0x0B0C10)
-  static let well = Color.black.opacity(0.22)
-  static let fill = Color.white.opacity(0.055)
-  static let hover = Color.white.opacity(0.04)
-  static let selection = Color.white.opacity(0.075)
-  static let line = Color.white.opacity(0.075)
-  static let lineStrong = Color.white.opacity(0.13)
+  static let ink = Color.adaptive(dark: Color(hex: 0x0B0C10), light: Color(hex: 0xF6F6F8))
+  static let well = Color.adaptive(dark: .black.opacity(0.22), light: .black.opacity(0.04))
+  static let fill = overlay(0.055)
+  static let hover = overlay(0.04)
+  static let selection = overlay(0.075)
+  static let line = Color.adaptive(dark: .white.opacity(0.075), light: .black.opacity(0.085))
+  static let lineStrong = Color.adaptive(dark: .white.opacity(0.13), light: .black.opacity(0.15))
+
+  /// The content colour at `amount`: white on dark, black on light. For fills and tracks.
+  static func overlay(_ amount: Double) -> Color {
+    .adaptive(dark: .white.opacity(amount), light: .black.opacity(amount * 0.85))
+  }
 
   // Text.
-  static let text = Color(hex: 0xEDEEF2)
-  static let dim = Color.white.opacity(0.6)
-  static let faint = Color.white.opacity(0.4)
-  static let ghost = Color.white.opacity(0.22)
+  static let text = Color.adaptive(dark: Color(hex: 0xEDEEF2), light: Color(hex: 0x16171B))
+  static let dim = Color.adaptive(dark: .white.opacity(0.6), light: .black.opacity(0.62))
+  static let faint = Color.adaptive(dark: .white.opacity(0.4), light: .black.opacity(0.46))
+  static let ghost = Color.adaptive(dark: .white.opacity(0.22), light: .black.opacity(0.26))
 
-  // The one hue, light to deep.
-  static let accent = Color(hex: 0x8FA2FF)
-  static let accentLight = Color(hex: 0xCCD4FF)
-  static let accentDeep = Color(hex: 0x4D5FBF)
-  /// The hue as a gradient, deep to light: for ASCII art and the mark.
+  // The one hue, light to deep; deeper on light backgrounds so it reads.
+  static let accent = Color.adaptive(dark: 0x8FA2FF, light: 0x4A5CD4)
+  static let accentLight = Color.adaptive(dark: 0xCCD4FF, light: 0x7E90EC)
+  static let accentDeep = Color.adaptive(dark: 0x4D5FBF, light: 0x33429F)
+  /// The hue as a gradient, deep to light: for the mark.
   static let hue: [Color] = [accentDeep, accent, accentLight]
 
   // Outcomes. Passing stays neutral so failures are what you see.
-  static let pass = Color.white.opacity(0.36)
-  static let fail = Color(hex: 0xF07D88)
-  static let flaky = Color(hex: 0xE6C17C)
-  static let error = Color(hex: 0xE6C17C)
+  static let pass = Color.adaptive(dark: .white.opacity(0.36), light: .black.opacity(0.3))
+  static let fail = Color.adaptive(dark: 0xF07D88, light: 0xD2404F)
+  static let flaky = Color.adaptive(dark: 0xE6C17C, light: 0xB07818)
+  static let error = flaky
 
   /// Actors in a run (browser tabs, webhooks), in the order they appear: shades of the hue.
-  static let actors: [Color] = [Color(hex: 0xB9C5FF), Color(hex: 0xE4E6EC), Color(hex: 0x7E92F2), Color(hex: 0x9DA5BE), Color(hex: 0x6274D6)]
+  static let actors: [Color] = [
+    .adaptive(dark: 0xB9C5FF, light: 0x4F63D8), .adaptive(dark: 0xE4E6EC, light: 0x3B3E48), .adaptive(dark: 0x7E92F2, light: 0x7486E6),
+    .adaptive(dark: 0x9DA5BE, light: 0x7A8296), .adaptive(dark: 0x6274D6, light: 0x2D3C99),
+  ]
 
   static func actor(_ i: Int) -> Color { actors[((i % actors.count) + actors.count) % actors.count] }
 
@@ -60,6 +68,17 @@ enum Theme {
 }
 
 extension Color {
+  /// One colour on dark, another on light, chosen by the appearance it's drawn in.
+  static func adaptive(dark: Color, light: Color) -> Color {
+    Color(nsColor: NSColor(name: nil) { appearance in
+      appearance.bestMatch(from: [.darkAqua, .aqua]) == .aqua ? NSColor(light) : NSColor(dark)
+    })
+  }
+
+  static func adaptive(dark: UInt32, light: UInt32) -> Color {
+    adaptive(dark: Color(hex: dark), light: Color(hex: light))
+  }
+
   init(hex: UInt32, opacity: Double = 1) {
     self.init(
       .sRGB,
@@ -142,7 +161,6 @@ struct BehindWindowBlur: NSViewRepresentable {
     view.material = .underWindowBackground
     view.blendingMode = .behindWindow
     view.state = .active
-    view.appearance = NSAppearance(named: .darkAqua)
     return view
   }
 
@@ -272,9 +290,9 @@ private struct ActionButtonBody: View {
       .frame(height: 28)
       .background {
         if prominent {
-          shape.fill(enabled ? Theme.text.opacity(hovering ? 1 : 0.9) : Color.white.opacity(0.08))
+          shape.fill(enabled ? Theme.text.opacity(hovering ? 1 : 0.9) : Theme.overlay(0.08))
         } else {
-          shape.fill(Color.white.opacity(hovering && enabled ? 0.1 : 0.06))
+          shape.fill(Theme.overlay(hovering && enabled ? 0.1 : 0.06))
         }
       }
       .contentShape(shape)
@@ -351,7 +369,7 @@ struct Meter: View {
     let v = min(1, max(0, value.isFinite ? value : 0))
     GeometryReader { geo in
       ZStack(alignment: .leading) {
-        Rectangle().fill(Color.white.opacity(0.08))
+        Rectangle().fill(Theme.overlay(0.08))
         if v > 0 {
           Rectangle().fill(color).frame(width: max(2, geo.size.width * v))
         }

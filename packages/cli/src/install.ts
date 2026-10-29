@@ -23,6 +23,8 @@ export interface InstallOptions {
   dryRun?: boolean;
   /** Only these agents (default: every one found). */
   hosts?: Host[];
+  /** One JSON object on stdout instead of text: the checks, the agents, the steps (for the Mac app). */
+  json?: boolean;
   env?: NodeJS.ProcessEnv;
   out?: (text: string) => void;
 }
@@ -40,6 +42,15 @@ interface Step {
   run(): Promise<void>;
 }
 
+interface Agent {
+  host: Host;
+  name: string;
+  /** On PATH. */
+  found: boolean;
+  /** The plugin (or Muse Code's skills and server) is there already. */
+  plugin: boolean;
+}
+
 /**
  * `windtunnel install`: checks Node, git, Docker, Postgres and Playwright's Chromium, puts the CLI
  * on PATH (from npx), and adds the plugin to each coding agent it finds: Claude Code and Codex
@@ -48,7 +59,9 @@ interface Step {
  */
 export async function install(options: InstallOptions = {}): Promise<number> {
   const env = options.env ?? process.env;
-  const out = options.out ?? ((text: string) => process.stdout.write(`${text}\n`));
+  const print = options.out ?? ((text: string) => process.stdout.write(`${text}\n`));
+  // With --json, the text is held back and one object is printed at the end.
+  const out = options.json ? () => undefined : print;
   const checks: Check[] = [];
   const steps: Step[] = [];
   const notes: string[] = [];
@@ -89,7 +102,7 @@ export async function install(options: InstallOptions = {}): Promise<number> {
     steps.push({
       title: "Download Playwright's Chromium (about 150 MB)",
       detail: ["playwright install chromium"],
-      run: () => mustRun(process.execPath, [playwrightCli(), "install", "chromium"], env, true),
+      run: () => mustRun(process.execPath, [playwrightCli(), "install", "chromium"], env, !options.json),
     });
   }
 
@@ -113,19 +126,29 @@ export async function install(options: InstallOptions = {}): Promise<number> {
         title: `Install the CLI for good (\`windtunnel\` on PATH)`,
         detail: [`npm install -g ${spec}`],
         run: async () => {
-          await mustRun(npm, ["install", "-g", spec], env, true);
+          await mustRun(npm, ["install", "-g", spec], env, !options.json);
           source = join((await capture(npm, ["root", "-g"], env)).stdout.trim(), PACKAGE_NAME);
         },
       });
     }
   }
 
+  const home = env.HOME ?? homedir();
+  const museSettings = join(env.XDG_CONFIG_HOME ?? join(home, ".config"), "muse", "settings.json");
+  const museSkills = join(home, ".agents", "skills");
   const found: Host[] = [];
+  const agents: Agent[] = [];
   for (const host of options.hosts ?? HOSTS) {
-    if (await which(host, env)) found.push(host);
-    else if (options.hosts) notes.push(`${HOST_NAMES[host]} (\`${host}\`) not found on PATH.`);
+    const on = !!(await which(host, env));
+    const plugin = on && (await hasPlugin(host, env, museSettings, museSkills));
+    agents.push({ host, name: HOST_NAMES[host], found: on, plugin });
+    if (on) {
+      found.push(host);
+      checks.push({ name: host, ok: plugin, detail: plugin ? "plugin added" : "plugin not added yet" });
+    } else if (options.hosts) notes.push(`${HOST_NAMES[host]} (\`${host}\`) not found on PATH.`);
   }
-  if (found.includes("claude")) {
+  const adding = (host: Host) => found.includes(host) && !agents.find((a) => a.host === host)?.plugin;
+  if (adding("claude")) {
     steps.push({
       title: "Claude Code: add the Wind Tunnel plugin",
       detail: [`claude plugin marketplace add ${sourceLabel}`, "claude plugin install windtunnel@windtunnel"],
@@ -135,7 +158,7 @@ export async function install(options: InstallOptions = {}): Promise<number> {
       },
     });
   }
-  if (found.includes("codex")) {
+  if (adding("codex")) {
     steps.push({
       title: "Codex: add the Wind Tunnel plugin",
       detail: [`codex plugin marketplace add ${sourceLabel}`, "codex plugin add windtunnel@windtunnel"],
@@ -151,16 +174,13 @@ export async function install(options: InstallOptions = {}): Promise<number> {
       },
     });
   }
-  if (found.includes("muse")) {
-    const home = env.HOME ?? homedir();
-    const settings = join(env.XDG_CONFIG_HOME ?? join(home, ".config"), "muse", "settings.json");
-    const skillsDir = join(home, ".agents", "skills");
+  if (adding("muse")) {
     steps.push({
       title: "Muse Code: add the skills and the MCP server",
-      detail: [`skills → ${join(skillsDir, "windtunnel-*")}`, `mcp_servers.windtunnel → ${settings}`],
+      detail: [`skills → ${join(museSkills, "windtunnel-*")}`, `mcp_servers.windtunnel → ${museSettings}`],
       run: async () => {
-        await writeSkills(skillsDir, "windtunnel-");
-        await addMuseServer(settings, onPath || !FROM_SOURCE ? "windtunnel" : join(PLUGIN_DIR, "scripts", "mcp.sh"));
+        await writeSkills(museSkills, "windtunnel-");
+        await addMuseServer(museSettings, onPath || !FROM_SOURCE ? "windtunnel" : join(PLUGIN_DIR, "scripts", "mcp.sh"));
       },
     });
   }
@@ -168,23 +188,41 @@ export async function install(options: InstallOptions = {}): Promise<number> {
   if (!found.length) notes.push("No coding agent found (claude, codex or muse on PATH). Install one and run this again.");
   else if (missing.length) notes.push(`Not found: ${missing.map((h) => HOST_NAMES[h]).join(", ")}. Run this again after installing.`);
 
+  const report = (results?: (string | undefined)[]) => {
+    if (!options.json) return;
+    const data = {
+      checks,
+      agents,
+      steps: steps.map((s, i) => ({ title: s.title, detail: s.detail, ...(results ? { error: results[i] ?? null } : {}) })),
+      notes,
+      blocked: !nodeOk || git.code !== 0,
+    };
+    print(JSON.stringify(data, null, 2));
+  };
+
   out("Wind Tunnel install\n");
   out(checks.map((c) => `  ${c.ok ? "ok  " : "--  "}  ${c.name.padEnd(9)} ${c.detail}`).join("\n"));
   if (!nodeOk || git.code !== 0) {
     out(`\n${!nodeOk ? "Node 22.18 or newer is needed" : "git is needed"}: install it, then run this again.`);
+    report();
     return 1;
   }
   if (notes.length) out(`\n${notes.join("\n")}`);
   if (!steps.length) {
     out("\nNothing to do: everything is set up.");
     if (found.length) out(nextSteps(found));
+    report();
     return 0;
   }
   out(`\nTo do\n${steps.map((s, i) => `  ${i + 1}. ${s.title}\n${s.detail.map((d) => `       ${d}`).join("\n")}`).join("\n")}`);
-  if (options.dryRun) return 0;
+  if (options.dryRun) {
+    report();
+    return 0;
+  }
   if (!options.yes) {
-    if (!process.stdin.isTTY) {
+    if (!process.stdin.isTTY || options.json) {
       out("\nRun again with --yes to do this.");
+      report();
       return 1;
     }
     const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -193,19 +231,41 @@ export async function install(options: InstallOptions = {}): Promise<number> {
     if (answer && answer !== "y" && answer !== "yes") return 1;
   }
 
-  let failed = 0;
+  const results: (string | undefined)[] = [];
   for (const [i, step] of steps.entries()) {
     out(`\n${i + 1}. ${step.title}`);
     try {
       await step.run();
+      results.push(undefined);
       out("   done");
     } catch (err) {
-      failed++;
+      results.push((err as Error).message);
       out(`   failed: ${(err as Error).message}`);
     }
   }
   if (found.length) out(nextSteps(found));
-  return failed ? 1 : 0;
+  report(results);
+  return results.some((r) => r !== undefined) ? 1 : 0;
+}
+
+/** Whether an agent has Wind Tunnel already: Claude Code's plugin list, Codex's marketplaces (both
+ * local, no account calls), Muse Code's settings file and skills folder. */
+async function hasPlugin(host: Host, env: NodeJS.ProcessEnv, museSettings: string, museSkills: string): Promise<boolean> {
+  if (host === "claude") {
+    const list = await capture("claude", ["plugin", "list", "--json"], env);
+    try {
+      const plugins = JSON.parse(list.stdout) as { id?: string; enabled?: boolean }[];
+      return plugins.some((p) => p.id === "windtunnel@windtunnel" && p.enabled !== false);
+    } catch {
+      return false;
+    }
+  }
+  if (host === "codex") {
+    const list = await capture("codex", ["plugin", "marketplace", "list"], env);
+    return list.code === 0 && /^windtunnel\s/m.test(list.stdout);
+  }
+  const settings = (await readJson(museSettings).catch(() => undefined)) as { mcp_servers?: Record<string, unknown> } | undefined;
+  return !!settings?.mcp_servers?.windtunnel && existsSync(join(museSkills, "windtunnel-hunt", "SKILL.md"));
 }
 
 function nextSteps(hosts: Host[]): string {

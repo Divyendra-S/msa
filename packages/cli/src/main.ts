@@ -44,6 +44,7 @@ import {
 import { findProjectDir, serveStdio, Workspace } from "@windtunnel/mcp";
 import { buildUi, startViewer, uiStatus } from "@windtunnel/viewer";
 import { type Host, HOSTS, install } from "./install.ts";
+import { formatScan, scan } from "./scan.ts";
 import { PLUGIN_DIR, writeSkills } from "./skills.ts";
 
 export interface Flags {
@@ -92,6 +93,8 @@ Commands
                       Evidence packet for a run, or one detail (steps, requests, diff[:table], rule:<id>, log…)
   map                 App map from the code: handlers, risky patterns, pages, database schema
                       (plus the live crawl of this code version, if there is one)
+  scan                What in a Next.js app's code is worth an experiment, in plain words; any folder,
+                      no config, build or database needed
   crawl               Run the app and crawl it as a visitor and test users: real control names, and the
                       free sweep (console errors, failed requests, broken links, accessibility, slow pages)
   decide [id] [answer…]
@@ -163,6 +166,11 @@ export async function main(args: string[], flags: Flags): Promise<number> {
         return await evidence(args.slice(1), flags);
       case "map":
         return await map(flags);
+      case "scan": {
+        const result = await scan(flags.cwd ?? process.cwd());
+        print(flags, result, formatScan(result));
+        return 0;
+      }
       case "crawl":
         return await crawlCommand(flags);
       case "decide":
@@ -174,7 +182,7 @@ export async function main(args: string[], flags: Flags): Promise<number> {
       case "skills":
         return await skills(flags);
       case "install":
-        return await install({ yes: flags.yes, dryRun: flags["dry-run"], hosts: hostsFlag(flags.hosts) });
+        return await install({ yes: flags.yes, dryRun: flags["dry-run"], hosts: hostsFlag(flags.hosts), json: flags.json });
       case "mcp":
         await serveStdio(mcpDir(flags));
         return 0;

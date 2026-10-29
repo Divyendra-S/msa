@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 /// `WindTunnel --snapshot <name> <out.png> [width height]`: renders one view to a PNG and exits.
+/// Names: glow (at time $T if set), parts, icon. LIGHT=1 renders it light.
 /// For checking the look without a screen (the views here don't need the bridge).
 enum Snapshot {
   static func runIfAsked() -> Bool {
@@ -11,10 +12,14 @@ enum Snapshot {
     let out = URL(fileURLWithPath: args[i + 2])
     let width = args.count > i + 3 ? Double(args[i + 3]) ?? 1100 : 1100
     let height = args.count > i + 4 ? Double(args[i + 4]) ?? 700 : 700
-    let view = AnyView(content(name).frame(width: width, height: height).background(name == "icon" ? Color.clear : Theme.ink).environment(\.colorScheme, .dark))
+    // LIGHT=1 renders it light.
+    let light = ProcessInfo.processInfo.environment["LIGHT"] == "1" && name != "icon"
+    let view = AnyView(content(name).frame(width: width, height: height).background(name == "icon" ? Color.clear : Theme.ink).environment(\.colorScheme, light ? .light : .dark))
     let renderer = ImageRenderer(content: view)
     renderer.scale = name == "icon" ? 1 : 2
-    guard let image = renderer.nsImage, let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+    var image: NSImage?
+    NSAppearance(named: light ? .aqua : .darkAqua)!.performAsCurrentDrawingAppearance { image = renderer.nsImage }
+    guard let image, let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
       let png = rep.representation(using: .png, properties: [:])
     else {
       FileHandle.standardError.write(Data("could not render \(name)\n".utf8))
@@ -27,10 +32,8 @@ enum Snapshot {
   @ViewBuilder
   static func content(_ name: String) -> some View {
     switch name {
-    case "tunnel":
-      AsciiArt(scene: .tunnel(throat: 0.6), fontSize: 9, lineHeight: 1.1, time: 12.3)
-    case "probe":
-      AsciiArt(scene: .tunnel(throat: 0.7, spacing: 3, probe: true), fontSize: 7.5, time: 21.4)
+    case "glow":
+      Glow(time: Double(ProcessInfo.processInfo.environment["T"] ?? "") ?? 0)
     case "icon":
       AppIcon()
     case "parts":

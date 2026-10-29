@@ -78,7 +78,7 @@ struct UsageView: View {
   }
 
   /// Who decided, cheapest first, in shades of the hue.
-  static let decisionColors: [Color] = [Theme.accentLight, Theme.accent, Theme.accentDeep, Color.white.opacity(0.45)]
+  static let decisionColors: [Color] = [Theme.accentLight, Theme.accent, Theme.accentDeep, Theme.overlay(0.45)]
 
   private func legend(_ label: String, _ color: Color) -> some View {
     HStack(spacing: 5) {
@@ -126,6 +126,15 @@ struct SettingsView: View {
     @Bindable var model = model
     VStack(alignment: .leading, spacing: 22) {
       VStack(alignment: .leading, spacing: 8) {
+        Text("Appearance").label()
+        Picker("", selection: $model.appearance) {
+          ForEach(Appearance.allCases) { Text($0.title).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
+      }
+      VStack(alignment: .leading, spacing: 8) {
         Text("Claude API key").label()
         HStack {
           Text(model.hasAnthropicKey ? "Saved in the keychain" : "None. Hunts run in your own Claude Code.")
@@ -160,7 +169,7 @@ struct SettingsView: View {
     .padding(24)
     .frame(width: 520)
     .background(Backdrop())
-    .preferredColorScheme(.dark)
+    .tint(Theme.accent)
     .sheet(isPresented: $showKey) { KeySheet().environment(model) }
   }
 }
@@ -222,6 +231,5 @@ struct MenuBarView: View {
     }
     .padding(16)
     .frame(width: 320)
-    .preferredColorScheme(.dark)
   }
 }

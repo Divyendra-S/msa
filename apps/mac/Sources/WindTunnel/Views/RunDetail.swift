@@ -125,7 +125,7 @@ struct LoadingBlock: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
       ForEach(0..<4, id: \.self) { i in
-        RoundedRectangle(cornerRadius: 3).fill(Color.white.opacity(0.06)).frame(width: [420, 300, 520, 260][i], height: 10)
+        RoundedRectangle(cornerRadius: 3).fill(Theme.overlay(0.06)).frame(width: [420, 300, 520, 260][i], height: 10)
           .phaseAnimator([0.4, 1]) { v, o in v.opacity(o) } animation: { _ in .easeInOut(duration: 0.9).delay(Double(i) * 0.08) }
       }
     }

@@ -270,7 +270,7 @@ struct SearchField: View {
     }
     .padding(.horizontal, 10)
     .frame(height: 28)
-    .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(focused ? Theme.fill : Color.white.opacity(0.035)))
+    .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(focused ? Theme.fill : Theme.overlay(0.035)))
     .animation(Theme.snappy, value: focused)
   }
 }

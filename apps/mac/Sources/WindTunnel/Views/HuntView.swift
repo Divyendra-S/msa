@@ -59,8 +59,6 @@ struct HuntView: View {
 
   private var composer: some View {
     ZStack(alignment: .topLeading) {
-      AsciiArt(scene: .tunnel(throat: 0.74, squeeze: 0.5, spacing: 3, probe: true, speed: model.runningHunt != nil ? 2.2 : 1), fontSize: 7.5)
-        .mask(LinearGradient(stops: [.init(color: .clear, location: 0.6), .init(color: .black, location: 0.84)], startPoint: .leading, endPoint: .trailing))
       VStack(alignment: .leading, spacing: 0) {
         Text("Send an agent to break your app")
           .font(Theme.sans(20, .semibold)).tracking(-0.2).foregroundStyle(Theme.text)
@@ -436,6 +434,5 @@ struct KeySheet: View {
     .padding(24)
     .frame(width: 480)
     .background(Backdrop())
-    .preferredColorScheme(.dark)
   }
 }

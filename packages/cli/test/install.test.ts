@@ -36,6 +36,8 @@ test("install adds the plugin to every agent found and keeps Muse Code's other s
 
     const calls = (await readFile(log, "utf8")).trim().split("\n").filter((c) => !c.startsWith("docker"));
     assert.deepEqual(calls, [
+      "claude plugin list --json",
+      "codex plugin marketplace list",
       `claude plugin marketplace add ${PACKAGE_ROOT}`,
       "claude plugin install windtunnel@windtunnel",
       `codex plugin marketplace add ${PACKAGE_ROOT}`,
@@ -66,6 +68,34 @@ test("install --dry-run changes nothing and --hosts names missing agents", async
     assert.equal(code, 0);
     assert.match(out.join("\n"), /Muse Code \(`muse`\) not found on PATH/);
     assert.deepEqual(await readdir(dir), []);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("install --json reports agents that have the plugin already and leaves them alone", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "wt-install-"));
+  try {
+    const bin = join(dir, "bin");
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(bin, "claude"), `#!/bin/sh\n[ "$2" = list ] && echo '[{"id":"windtunnel@windtunnel","enabled":true}]'\nexit 0\n`);
+    await writeFile(join(bin, "codex"), "#!/bin/sh\nexit 0\n");
+    await chmod(join(bin, "claude"), 0o755);
+    await chmod(join(bin, "codex"), 0o755);
+    const out: string[] = [];
+    const env = { PATH: [bin, dirname(process.execPath), "/usr/bin", "/bin"].join(delimiter), HOME: dir, PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH };
+    const code = await install({ dryRun: true, json: true, env, out: (text) => out.push(text) });
+    assert.equal(code, 0);
+    assert.equal(out.length, 1, "one JSON object, no text");
+    const report = JSON.parse(out[0]!);
+    assert.deepEqual(
+      report.agents.map((a: { host: string; found: boolean; plugin: boolean }) => [a.host, a.found, a.plugin]),
+      [["claude", true, true], ["codex", true, false], ["muse", false, false]],
+    );
+    const titles: string[] = report.steps.map((s: { title: string }) => s.title);
+    assert.ok(!titles.some((t) => t.startsWith("Claude Code")));
+    assert.ok(titles.some((t) => t.startsWith("Codex")));
+    assert.equal(report.blocked, false);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
