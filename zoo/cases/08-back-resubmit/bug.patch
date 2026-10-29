@@ -1,0 +1,48 @@
+--- a/zoo/shop/app/api/orders/route.ts
++++ b/zoo/shop/app/api/orders/route.ts
+@@ -31,18 +31,19 @@ export async function POST(req: Request) {
+       await db.query("SELECT id FROM carts WHERE id = $1 FOR UPDATE", [cart.id]);
+       const items = await getCartItems(cart.id, db);
+       if (items.length === 0) throw new EmptyCartError();
+-      // One order per cart: a repeated or concurrent checkout gets the existing order back.
++      // One open order per cart: a repeated or concurrent checkout gets the existing order back.
+       const created = await db.query<Order>(
+         `INSERT INTO orders (user_id, cart_id, total_cents) VALUES ($1, $2, $3)
+-         ON CONFLICT (cart_id) DO NOTHING
++         ON CONFLICT (cart_id) WHERE status IN ('pending', 'processing') DO NOTHING
+          RETURNING id, status, total_cents`,
+         [user.id, cart.id, cartTotal(items)],
+       );
+       const newOrder = created.rows[0];
+       if (!newOrder) {
+-        const existing = await db.query<Order>("SELECT id, status, total_cents FROM orders WHERE cart_id = $1", [
+-          cart.id,
+-        ]);
++        const existing = await db.query<Order>(
++          "SELECT id, status, total_cents FROM orders WHERE cart_id = $1 AND status IN ('pending', 'processing')",
++          [cart.id],
++        );
+         return existing.rows[0]!;
+       }
+       for (const item of items) {
+--- a/zoo/shop/db/schema.sql
++++ b/zoo/shop/db/schema.sql
+@@ -55,7 +55,7 @@ CREATE TABLE cart_items (
+ CREATE TABLE orders (
+   id          serial PRIMARY KEY,
+   user_id     integer NOT NULL REFERENCES users (id),
+-  cart_id     integer NOT NULL UNIQUE REFERENCES carts (id),
++  cart_id     integer NOT NULL REFERENCES carts (id),
+   total_cents integer NOT NULL,
+   status      text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'paid', 'failed')),
+   charge_id   text,
+@@ -63,6 +63,9 @@ CREATE TABLE orders (
+   paid_at     timestamptz
+ );
+ 
++-- One unsettled order per cart: after a failed payment the buyer can pay for the same cart again.
++CREATE UNIQUE INDEX orders_one_open_per_cart ON orders (cart_id) WHERE status IN ('pending', 'processing');
++
+ CREATE TABLE order_items (
+   order_id         integer NOT NULL REFERENCES orders (id) ON DELETE CASCADE,
+   product_id       integer NOT NULL REFERENCES products (id),

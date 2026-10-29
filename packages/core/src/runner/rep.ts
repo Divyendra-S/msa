@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import pg from "pg";
 import type { MockEvent, Tenant } from "@windtunnel/mock-pay";
-import type { Browser, BrowserContext, Page } from "playwright";
+import type { Browser, BrowserContext, Page, Request } from "playwright";
 import type { FlowContext, TestUser } from "../flow-api.ts";
 import type { BrowserPerturbation, Experiment, RaceOrder, Variant, WebhookSpec } from "./experiment.ts";
 import { isNetworkPerturbation } from "./experiment.ts";
@@ -31,6 +31,8 @@ export interface StepRecord {
   error?: string;
   /** False when the network never went quiet after the step. */
   quiet: boolean;
+  /** What the page said when the step ended (rules read it as `windtunnel_pages`). */
+  seen?: { path: string; text: string };
 }
 
 export interface FlowError {
@@ -116,6 +118,8 @@ interface Tab {
 type StepInstance = { started: number };
 
 const MAX_CONSOLE = 100;
+/** Page text kept per step. */
+const MAX_SEEN = 2_000;
 
 /** One execution of an experiment's flow(s) against one branch. */
 export class Rep {
@@ -134,6 +138,8 @@ export class Rep {
   private readonly active = new Set<StepInstance>();
   private readonly sqlDone = new Set<BrowserPerturbation>();
   private readonly webhooks: WebhookControl;
+  /** Logged-in contexts of users that `replay-as` sends requests as. */
+  private readonly replayers = new Map<string, Promise<BrowserContext>>();
   private closing = false;
 
   constructor(input: RepInput) {
@@ -149,6 +155,7 @@ export class Rep {
         count: race.count ?? Math.max(2, input.tabs.length),
         order: (input.variant.order ?? race.order) as RaceOrder,
       },
+      replay: (user, request, original) => this.replayAs(user, request, original),
     });
     this.webhooks = new WebhookControl(input.tenant, experiment.webhooks, this.active, () => {
       // When the earliest request that could have made the charge (not a GET, still waiting) was sent.
@@ -168,6 +175,10 @@ export class Rep {
   /** Runs every tab's flow, then lets held webhooks and requests finish. */
   async execute(): Promise<void> {
     this.webhooks.setup();
+    // Users that requests are replayed as log in before the flows start.
+    for (const p of this.input.experiment.perturb) {
+      if (p.do === "replay-as") await this.replayer(p.user).catch(() => undefined);
+    }
     for (const { label, user } of this.input.tabs) {
       const session = await this.session(user);
       await this.addTab(session, label, await session.context.newPage(), false);
@@ -218,6 +229,7 @@ export class Rep {
       }
       await session.context.close().catch(() => undefined);
     }
+    for (const context of this.replayers.values()) await (await context.catch(() => undefined))?.close().catch(() => undefined);
     await Promise.allSettled([...this.running]);
     return traces;
   }
@@ -248,6 +260,80 @@ export class Rep {
     session = { user, context, tabs: [] };
     this.sessions.set(user, session);
     return session;
+  }
+
+  /** A context logged in as `name`, used only to replay requests; it opens no tab. */
+  private replayer(name: string): Promise<BrowserContext> {
+    let context = this.replayers.get(name);
+    if (!context) {
+      context = this.logInReplayer(name);
+      this.replayers.set(name, context);
+    }
+    return context;
+  }
+
+  private async logInReplayer(name: string): Promise<BrowserContext> {
+    const { users, login, browser, baseUrl, experiment } = this.input;
+    const user = users[name];
+    if (!user) throw new Error(`unknown user "${name}"`);
+    if (!login) throw new Error("add .windtunnel/flows/login.ts to log in");
+    const context = await browser.newContext({ baseURL: baseUrl, locale: "en-US", timezoneId: "UTC", serviceWorkers: "block" });
+    context.setDefaultTimeout(10_000);
+    const page = await context.newPage();
+    try {
+      await login.flow.run({
+        page,
+        step: (_name, action) => action(),
+        login: () => Promise.reject(new Error("login() inside the login flow")),
+        user,
+        users,
+        params: experiment.params,
+        baseUrl,
+        tab: `${name} (replay)`,
+        clock: page.clock,
+      });
+    } catch (err) {
+      await context.close().catch(() => undefined);
+      throw new Error(`could not log in as ${name}: ${firstLine(err)}`);
+    } finally {
+      await page.close().catch(() => undefined);
+    }
+    return context;
+  }
+
+  /** Sends a request again with another user's session (`replay-as`) and logs it. */
+  private async replayAs(user: string, request: Request, original: RequestRecord): Promise<RequestRecord> {
+    const context = await this.replayer(user);
+    const record = this.network.external({
+      tab: `${user} (replay)`,
+      user,
+      step: original.step,
+      method: original.method,
+      url: original.url,
+      type: "fetch",
+      start: this.now(),
+      harness: [`request ${original.id} from ${original.tab}, sent again with ${user}'s session`],
+    });
+    try {
+      const headers = Object.fromEntries(
+        Object.entries(request.headers()).filter(([name]) => name === "content-type" || name === "accept"),
+      );
+      const response = await context.request.fetch(new URL(original.url, this.input.baseUrl).href, {
+        method: original.method,
+        headers,
+        data: request.postDataBuffer() ?? undefined,
+        maxRedirects: 0,
+        failOnStatusCode: false,
+        timeout: 15_000,
+      });
+      record.response = this.now();
+      record.status = response.status();
+      await response.body().catch(() => undefined);
+    } catch (err) {
+      record.failure = firstLine(err);
+    }
+    record.end = this.now();
+    return record;
   }
 
   private async addTab(session: Session, label: string, page: Page, isFork: boolean, skipUntil?: string): Promise<Tab> {
@@ -489,6 +575,8 @@ export class Rep {
       throw err;
     } finally {
       record.quiet = await this.network.quiet(tab.session.context);
+      const seen = await pageText(tab.page);
+      if (seen) record.seen = seen;
       if (tab.current.refreshPending) {
         record.harness = [...(record.harness ?? []), "refresh: the step sent no request to interrupt"];
       }
@@ -626,6 +714,14 @@ async function runSql(url: string | undefined, sql: string): Promise<number> {
   } finally {
     await client.end();
   }
+}
+
+/** The page's path and visible text, whitespace collapsed. */
+async function pageText(page: Page): Promise<{ path: string; text: string } | undefined> {
+  if (page.isClosed()) return undefined;
+  const text = await within(page.locator("body").innerText({ timeout: 1_000 }).catch(() => undefined), 1_500);
+  if (typeof text !== "string") return undefined;
+  return { path: pathOf(page.url()), text: text.replace(/\s+/g, " ").trim().slice(0, MAX_SEEN) };
 }
 
 /** Where the page is and what it says, for evidence when a flow fails. */

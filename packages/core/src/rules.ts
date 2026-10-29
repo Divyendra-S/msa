@@ -20,6 +20,65 @@ const RulesFileSchema = z.record(z.string().regex(/^[a-z0-9][a-z0-9-]*$/, "rule 
 
 export type Rule = { id: string } & z.infer<typeof RuleSchema>;
 
+/**
+ * What happened at the edges of one run, as tables rules can join with the app's own:
+ * `windtunnel_requests` (every request, its user and status) and `windtunnel_pages` (what
+ * each page said when a step ended). They are temporary tables of the rule check's session,
+ * so the app's database is never changed.
+ */
+export interface RunFacts {
+  requests: RequestFact[];
+  pages: PageFact[];
+}
+
+export interface RequestFact {
+  id: number;
+  tab: string;
+  user_name: string | null;
+  user_email: string | null;
+  step: string | null;
+  method: string;
+  /** Path without the query string. */
+  path: string;
+  query: string | null;
+  /** Null when no answer arrived. */
+  status: number | null;
+  failure: string | null;
+  /** False when the harness answered and the app never saw the request. */
+  reached_app: boolean;
+  /** ms since the run started. */
+  at_ms: number;
+  /** What the harness did to it, `; `-separated. */
+  harness: string | null;
+}
+
+export interface PageFact {
+  tab: string;
+  user_name: string | null;
+  user_email: string | null;
+  step: string;
+  /** `repeat 1`, `resubmit`… when a perturbation ran the step again. */
+  attempt: string | null;
+  /** When the step ended, ms since the run started. */
+  at_ms: number;
+  path: string;
+  /** The page's visible text (first 2,000 characters). */
+  text: string;
+}
+
+export const FACT_TABLES = {
+  windtunnel_requests:
+    "id int, tab text, user_name text, user_email text, step text, method text, path text, query text, status int, failure text, reached_app boolean, at_ms int, harness text",
+  windtunnel_pages: "tab text, user_name text, user_email text, step text, attempt text, at_ms int, path text, text text",
+} as const;
+
+export type FactTable = keyof typeof FACT_TABLES;
+
+/** The run-fact tables a query reads. */
+export function factTablesOf(sql: string): FactTable[] {
+  return (Object.keys(FACT_TABLES) as FactTable[]).filter((name) => new RegExp(`\\b${name}\\b`, "i").test(sql));
+}
+
 export interface RuleResult {
   id: string;
   ok: boolean;
@@ -44,14 +103,22 @@ export async function loadRules(project: Project): Promise<Rule[]> {
   return text === undefined ? [] : parseRules(text, path);
 }
 
-/** Runs each rule's query read-only against a database. */
-export async function checkRules(databaseUrl: string, rules: Rule[]): Promise<RuleResult[]> {
+/**
+ * Runs each rule's query read-only against a database. Rules that read run facts see `facts`
+ * (empty tables without them, e.g. on the seed data).
+ */
+export async function checkRules(databaseUrl: string, rules: Rule[], facts?: RunFacts): Promise<RuleResult[]> {
   const client = new pg.Client({ connectionString: databaseUrl, application_name: "windtunnel-rules" });
   // A dropped connection fails the running query; without a listener it would crash the process.
   client.on("error", () => undefined);
   await client.connect();
   try {
     await client.query("SET statement_timeout = '5s'");
+    for (const table of new Set(rules.flatMap((r) => factTablesOf(r.sql)))) {
+      await client.query(`CREATE TEMP TABLE ${table} (${FACT_TABLES[table]})`);
+      const rows = facts ? (table === "windtunnel_requests" ? facts.requests : facts.pages) : [];
+      if (rows.length) await client.query(`INSERT INTO ${table} SELECT * FROM json_populate_recordset(NULL::${table}, $1)`, [JSON.stringify(rows)]);
+    }
     const results: RuleResult[] = [];
     for (const rule of rules) {
       const sql = rule.sql.trim().replace(/;+\s*$/, "");

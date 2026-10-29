@@ -1,0 +1,8 @@
+description: Checkout takes 3 seconds and then fails (the server gives up); the user waits for the answer.
+flow: checkout
+params: { mayFail: true }
+perturb:
+  - do: fail
+    request: POST /api/orders
+    status: 502
+    after: 3s

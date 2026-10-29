@@ -28,13 +28,14 @@ For each suspicious spot write one line: the real-world event, the perturbation 
 | UPDATE that only matches the id (no version/state check) | two tabs or two editors save | `second-tab` at the edit step + `race` with an `order` |
 | State moved forward by several actors (app, webhook, job) | events arrive in another order | `webhooks: early`, `delay` on one request |
 | Session or permission lookup | session expires or is revoked mid-flow | `sql` perturbation that expires sessions on the server; `expire-session` (cookie) |
-| Success shown before the server confirms | slow or failing request | `delay`, `fail` |
+| Row loaded by the id in the path, owner not in the query | another user tries the id | `replay-as` the request with another user + a rule on `windtunnel_requests` |
+| Success shown before the server confirms | slow or failing request | `delay`, `fail` with `after` + a rule on `windtunnel_pages` |
 
 Prefer the 3–6 most likely bugs over covering everything.
 
 ## 3. Rules
 
-A rule is an invariant about the data: SQL that lists the rows breaking it (no rows = rule holds). Write what must always be true, not how the code works: "a cart becomes at most one order", "stock never goes below zero", "each payment event is recorded once", "an order with a payment is not pending", "two saves never start from the same version". Rules run after every run of every experiment, so a good rule catches bugs you didn't aim for. Keep existing rules; add new ones to `.windtunnel/rules.yaml`.
+A rule is an invariant about the data: SQL that lists the rows breaking it (no rows = rule holds). Write what must always be true, not how the code works: "a seat is booked at most once", "a balance never goes below zero", "each payment event is recorded once", "a paid booking is not left pending", "two saves never start from the same version". Rules run after every run of every experiment, so a good rule catches bugs you didn't aim for. Rules can also join what users got and saw (`windtunnel_requests`, `windtunnel_pages`): "only the owner gets a document", "a confirmation means a paid booking". Keep existing rules; add new ones to `.windtunnel/rules.yaml`.
 
 ## 4. Experiments and flows
 
@@ -61,7 +62,7 @@ For each confirmed bug:
 ```
 ### <short title>
 Reproduce: windtunnel run <experiment-id>   (fails N/N; run <run id>)
-Rule broken: <rule-id> — <rows, e.g. order 1 has 2 charges>
+Rule broken: <rule-id> — <rows, e.g. booking 1 has 2 charges>
 What happens: <2–3 sentences: the event, then what the code does wrong>
 Where: <file>:<line>
 Fix: <the smallest correct fix>

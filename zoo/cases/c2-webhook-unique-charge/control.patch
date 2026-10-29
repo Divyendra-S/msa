@@ -1,0 +1,44 @@
+--- a/zoo/shop/app/api/webhooks/payment/route.ts
++++ b/zoo/shop/app/api/webhooks/payment/route.ts
+@@ -16,22 +16,18 @@ export async function POST(req: Request) {
+   if (!Number.isInteger(orderId)) return Response.json({ error: "Charge has no order" }, { status: 400 });
+ 
+   await transaction(async (db) => {
+-    // Providers deliver at least once; handle each event id a single time.
+-    const first = await db.query("INSERT INTO webhook_events (id, type) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING", [
+-      event.id,
+-      event.type,
+-    ]);
+-    if (first.rowCount === 0) return;
+-
++    // Repeating this is harmless: a paid order stays paid.
+     if (event.type === "charge.failed") {
+       await db.query("UPDATE orders SET status = 'failed' WHERE id = $1 AND status <> 'paid'", [orderId]);
+       return;
+     }
+-    await db.query("INSERT INTO payments (order_id, charge_id, amount_cents) VALUES ($1, $2, $3)", [
+-      orderId,
+-      charge.id,
+-      charge.amount,
+-    ]);
++    // Providers deliver at least once. A charge is recorded once (payments.charge_id is unique),
++    // so a repeated event, even one arriving at the same moment, changes nothing.
++    const recorded = await db.query(
++      "INSERT INTO payments (order_id, charge_id, amount_cents) VALUES ($1, $2, $3) ON CONFLICT (charge_id) DO NOTHING",
++      [orderId, charge.id, charge.amount],
++    );
++    if (recorded.rowCount === 0) return;
+     const paid = await db.query<{ cart_id: number }>(
+       "UPDATE orders SET status = 'paid', charge_id = $2, paid_at = now() WHERE id = $1 RETURNING cart_id",
+       [orderId, charge.id],
+--- a/zoo/shop/db/schema.sql
++++ b/zoo/shop/db/schema.sql
+@@ -74,7 +74,7 @@ CREATE TABLE order_items (
+ CREATE TABLE payments (
+   id           serial PRIMARY KEY,
+   order_id     integer NOT NULL REFERENCES orders (id),
+-  charge_id    text NOT NULL,
++  charge_id    text NOT NULL UNIQUE,
+   amount_cents integer NOT NULL,
+   created_at   timestamptz NOT NULL DEFAULT now()
+ );

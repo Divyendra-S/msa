@@ -153,6 +153,12 @@ function Cell({ cell, end }: { cell: LaneStep; end: number }) {
           ))}
         </div>
       ))}
+      {cell.seen && (
+        <details className={`seen ${cell.seenDiffers ? "first" : ""}`} open={cell.seenDiffers}>
+          <summary>page {cell.seen.path}</summary>
+          <div className="seen-text">{cell.seen.text}</div>
+        </details>
+      )}
       {cell.error && <div className="cell-error">{cell.error}</div>}
     </>
   );

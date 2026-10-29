@@ -1,0 +1,8 @@
+id: 08-back-resubmit
+title: Back and resubmit
+summary: Orders are unique per cart only while unpaid (so a failed payment can be retried), so going Back after a payment and paying again orders and charges the same cart twice.
+experiment: checkout-back-resubmit
+perturbation: Back after the payment went through, then "Pay now" again
+breaks: [one-order-per-cart]
+handler: app/api/orders/route.ts
+fix: One order per cart whatever its status (a unique cart_id); a repeated checkout gets the existing order back.

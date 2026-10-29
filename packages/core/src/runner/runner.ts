@@ -8,6 +8,7 @@ import { CommandError, sh } from "../exec.ts";
 import type { TestUser } from "../flow-api.ts";
 import { checkRules, loadRules, type Rule, type RuleResult } from "../rules.ts";
 import { type DbSnapshot, diffSnapshots, snapshotDatabase } from "./db-diff.ts";
+import { runFacts } from "./facts.ts";
 import {
   checkExperiment,
   type Experiment,
@@ -313,7 +314,7 @@ export class Runner {
       });
       await rep.execute();
 
-      ruleResults = await checkRules(branch.database.url, job.rules);
+      ruleResults = await checkRules(branch.database.url, job.rules, runFacts(rep.requests, rep.steps, this.testUsers()));
       const diff = diffSnapshots(await this.baseline(job.version.id, branch.database.url), await snapshotDatabase(branch.database.url));
       diffSummary = diff.summary;
       await writeJson(`${dir}/db-diff.json`, diff);

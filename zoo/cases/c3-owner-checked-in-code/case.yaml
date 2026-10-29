@@ -1,0 +1,6 @@
+id: c3-owner-checked-in-code
+title: "Control: order owner checked in code"
+summary: The order status API loads an order by id alone, which looks like an IDOR. It then compares the order's user with the session's user and answers 404 for anyone else.
+control: true
+looks-like: 09-another-users-order
+files: ["app/api/orders/[id]/route.ts"]

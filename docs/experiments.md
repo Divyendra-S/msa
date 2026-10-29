@@ -86,9 +86,14 @@ from `tab`), to the first `count` matching requests (default 1, or `all`).
 | `do` | What happens |
 |---|---|
 | `delay` (`ms`) | The request waits before it is sent |
-| `fail` (`status`, default 503) | The harness answers; the app never sees the request |
+| `fail` (`status`, default 503; `after`) | The harness answers, after `after` if set (a slow server that gives up); the app never sees the request |
 | `lose-response` | The app handles the request; the browser gets a network error |
 | `duplicate` | The app gets the request twice; the browser gets the first answer |
+| `replay-as` (`user`) | The app answers the tab; then the harness sends the same request (method, body, content type) with `user`'s session and logs it as tab `<user> (replay)`. The user logs in with `flows/login.ts` before the flows start, in a browser context of its own |
+
+`replay-as` is the authorization check: can another user read or change what this request
+reaches? Its answer is in the request log, so the rule that catches it reads
+`windtunnel_requests` (below).
 
 ### Browser perturbations
 
@@ -157,6 +162,39 @@ database after the flow and webhooks have finished. Every run's database also ho
 of the seed data in the `windtunnel_seed` schema (same table names), for rules that compare
 with the start, e.g. `JOIN windtunnel_seed.products s ON s.id = p.id`.
 
+### What users got and saw
+
+Some bugs change no data: another user can read an order, or the page says "Order confirmed"
+for a payment that failed. Rules can join two tables of the run with the app's own:
+
+| Table | Columns |
+|---|---|
+| `windtunnel_requests` | `id`, `tab`, `user_name`, `user_email`, `step`, `method`, `path`, `query`, `status` (null when no answer came), `failure`, `reached_app` (false when the harness answered), `at_ms`, `harness` (what the harness did) |
+| `windtunnel_pages` | `tab`, `user_name`, `user_email`, `step`, `attempt` (`repeat 1`, `resubmit`…), `at_ms`, `path`, `text`: the page's visible text (first 2,000 characters) when each step ended |
+
+```yaml
+orders-shown-only-to-their-buyer:
+  description: An order is shown only to the user who placed it.
+  sql: >-
+    SELECT r.user_name AS reader, r.path, r.status, o.user_id AS buyer
+    FROM windtunnel_requests r
+    JOIN users u ON u.email = r.user_email
+    JOIN orders o ON o.id = substring(r.path from '^/(?:api/)?orders/(\d+)$')::int
+    WHERE r.status = 200 AND o.user_id <> u.id
+
+confirmation-means-paid:
+  description: When a page says "Order confirmed", its user has a paid order.
+  sql: >-
+    SELECT p.tab, p.step, p.path FROM windtunnel_pages p
+    JOIN users u ON u.email = p.user_email
+    WHERE p.text LIKE '%Order confirmed%'
+      AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id AND o.status = 'paid')
+```
+
+They are temporary tables of the rule check's own session: created only when a rule names
+them, filled from the run's request log and steps, gone when the check ends. The app's
+database never holds them. On the seed data (`windtunnel validate`) they are empty.
+
 Results list anything that never took effect under "not exercised": a network perturbation
 that matched no request, a race that held fewer requests than it waited for, webhooks when
 the app made no payment, out-of-order webhooks with only one event at a time.
@@ -189,7 +227,7 @@ the experiment re-run (see [Failure sorting](agents.md#failure-sorting-and-selec
     experiment.json                  the experiment as run
     triage.json                      how the failure was sorted (label, reason, who decided, re-run)
     reps/<n>/
-      result.json                    steps, actions, harness notes, rules, race, webhooks, charges, console
+      result.json                    steps (with what the page said when each ended), actions, harness notes, rules, race, webhooks, charges, console
       requests.json                  request log: tab, step, timing (sent to the app, answered), status, harness notes
       sql.json                       the app's statements: SQL, parameters, result tag or error, timing, connection
       db-diff.json                   row-level diff against the seed, keyed by primary key

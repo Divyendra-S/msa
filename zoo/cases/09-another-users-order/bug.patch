@@ -1,0 +1,16 @@
+--- a/zoo/shop/app/api/orders/[id]/route.ts
++++ b/zoo/shop/app/api/orders/[id]/route.ts
+@@ -7,10 +7,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
+ 
+   const { id } = await params;
+   if (!/^\d+$/.test(id)) return Response.json({ error: "Not found" }, { status: 404 });
+-  const order = await queryOne(
+-    "SELECT id, status, total_cents, created_at, paid_at FROM orders WHERE id = $1 AND user_id = $2",
+-    [Number(id), user.id],
+-  );
++  const order = await queryOne("SELECT id, status, total_cents, created_at, paid_at FROM orders WHERE id = $1", [
++    Number(id),
++  ]);
+   if (!order) return Response.json({ error: "Not found" }, { status: 404 });
+   return Response.json(order);
+ }

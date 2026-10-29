@@ -978,6 +978,30 @@ table.variants th {
   font-family: var(--sans);
 }
 
+.seen summary {
+  font-size: 0.85em;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.seen.first {
+  border-left: 3px solid var(--first);
+  padding-left: 6px;
+}
+
+.seen.first summary {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.seen-text {
+  font-size: 0.85em;
+  max-height: 8em;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+
 .cell-error {
   color: var(--bad);
   font-family: var(--mono);

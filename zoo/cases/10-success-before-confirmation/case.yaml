@@ -1,0 +1,8 @@
+id: 10-success-before-confirmation
+title: Success before confirmation
+summary: When checkout is slow the pay button shows "Order confirmed" after 2.5 s and ignores what the server says later, so a checkout that then fails still told the buyer it went through.
+experiment: checkout-slow-then-fails
+perturbation: Checkout answers 502 after 3 s
+breaks: [confirmation-means-paid]
+handler: components/PayButton.tsx
+fix: Wait for the server before showing success; keep a pending state while it is slow and show the error if it fails.

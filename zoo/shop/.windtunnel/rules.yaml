@@ -69,3 +69,25 @@ stock-matches-sales:
                 WHERE o.status <> 'failed' GROUP BY oi.product_id) sold ON sold.product_id = p.id
     WHERE p.stock <> s.stock - coalesce(sold.units, 0)
   expect: empty
+
+# The next two also read what happened in the browser: every request with its user and
+# status (windtunnel_requests), and what each page said when a step ended (windtunnel_pages).
+
+orders-shown-only-to-their-buyer:
+  description: An order is shown only to the user who placed it; anyone else asking for it is refused.
+  sql: >-
+    SELECT r.user_name AS reader, r.method, r.path, r.status, o.user_id AS buyer
+    FROM windtunnel_requests r
+    JOIN users u ON u.email = r.user_email
+    JOIN orders o ON o.id = substring(r.path from '^/(?:api/)?orders/(\d+)$')::int
+    WHERE r.status = 200 AND o.user_id <> u.id
+  expect: empty
+
+confirmation-means-paid:
+  description: When a page says "Order confirmed", its user has a paid order.
+  sql: >-
+    SELECT p.tab, p.step, p.path FROM windtunnel_pages p
+    JOIN users u ON u.email = p.user_email
+    WHERE p.text LIKE '%Order confirmed%'
+      AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.user_id = u.id AND o.status = 'paid')
+  expect: empty

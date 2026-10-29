@@ -15,6 +15,33 @@ stock after payment, which still races).
 | 05 oversell | `checkout-two-buyers` (variant `together`) | `stock-non-negative` | `app/api/orders/route.ts` |
 | 06 session expiry | `checkout-session-expired` | `orders-need-a-live-session` | `lib/auth.ts` |
 | 07 lost update | `product-edit-two-tabs` | `no-lost-update` | `app/api/products/[id]/route.ts` |
+| 08 back and resubmit | `checkout-back-resubmit` | `one-order-per-cart` | `app/api/orders/route.ts` |
+| 09 another user's order (IDOR) | `order-read-by-another-user` | `orders-shown-only-to-their-buyer` | `app/api/orders/[id]/route.ts` |
+| 10 success before confirmation | `checkout-slow-then-fails` | `confirmation-means-paid` | `components/PayButton.tsx` |
+
+- **08**: orders are unique per cart only while unpaid ("so a failed payment can be retried"),
+  so Back after the payment went through, then **Pay now** on the cached cart page, orders
+  and charges the cart again. A double click or a retry before the payment settles is still
+  caught; `checkout-retry-after-paid` breaks too.
+- **09**: the order status API checks that someone is logged in, not that the order is theirs.
+  `replay-as` sends Alice's status request again with Bob's session; the rule reads the request
+  log (`windtunnel_requests`), since nothing in the database changes.
+- **10**: when checkout takes over 2.5 s the pay button shows "Order confirmed" and ignores
+  what the server says later. The experiment answers `POST /api/orders` with a 502 after 3 s;
+  the rule reads what the page said (`windtunnel_pages`). A slow checkout that succeeds
+  (`checkout-slow-payment`) still passes: the order ends up paid.
+
+## Clean controls
+
+Each control is the clean shop with one guard rewritten in a way that is still correct but
+looks risky (`control.patch`). Every experiment must pass on it, and in the benchmark any
+finding on a control counts as a false alarm.
+
+| Control | Looks like | Why it is correct |
+|---|---|---|
+| c1 stock taken under a row lock | 05 oversell: read stock, then a plain `UPDATE … SET stock = stock - $1` (the map flags a blind UPDATE) | the read is `SELECT … FOR UPDATE` inside the order's transaction, in product id order |
+| c2 webhook deduped by a unique charge id | 03 duplicate webhook: no event-id table (the map flags missing dedupe) | `payments.charge_id` is unique and the insert is `ON CONFLICT DO NOTHING`; nothing else happens unless it inserted |
+| c3 order owner checked in code | 09 another user's order: `SELECT … WHERE id = $1` (the map flags no owner in the query) | the handler compares the order's user with the session's and answers 404 |
 
 Flows, experiments and rules live in `zoo/shop/.windtunnel/`.
 
@@ -31,11 +58,14 @@ in the clean shop itself. They are fixed, and these experiments keep them fixed:
 ## Verify
 
 `pnpm zoo:verify` runs every experiment in `zoo/shop/.windtunnel/experiments` against the
-clean shop and every case variant (each run in its own branch) and checks that:
+clean shop, every case variant and every control (each run in its own branch) and checks that:
 
-- the clean shop passes every experiment, and
+- the clean shop and every control pass every experiment, and
 - each case variant breaks its expected rules in its own experiment (`experiment` in
   `case.yaml`), in every run (of one race ordering when `case.yaml` names a `variant`).
+
+It prints one line per variant: what didn't pass (the case's own experiment first, marked
+`*`), then how many others passed.
 
 Options: `--repeat <n>` (default 3), `--case <id>`, `--experiment <id>` (repeatable).
 

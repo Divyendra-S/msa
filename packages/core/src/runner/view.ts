@@ -6,6 +6,7 @@ import {
   type EvidenceOptions,
   experimentChanged,
   firstDifference,
+  pageDifference,
   interesting,
   type LoadedRep,
   loadRep,
@@ -312,6 +313,10 @@ export interface LaneStep {
   harness: string[];
   quiet: boolean;
   requests: LaneRequest[];
+  /** What the page said when the step ended. */
+  seen?: { path: string; text: string };
+  /** This step is where the page first said something else than in the reference lane. */
+  seenDiffers?: boolean;
 }
 
 export interface AlignedRow {
@@ -391,7 +396,7 @@ export async function compareLanes(store: RunStore, refs: LaneRef[]): Promise<Co
   const divergence = loaded.map(({ rep }, i): Divergence | null => {
     if (reference < 0 || i === reference) return null;
     const first = firstDifference(rep, loaded[reference]!.rep);
-    if (!first) return writesDiffer(rows, i, reference);
+    if (!first) return writesDiffer(rows, i, reference) ?? pageDiffers(rows, rep, loaded[reference]!.rep, i, reference);
     const mark = (lane: number, r: RequestRecord | undefined) => {
       if (!r) return -1;
       const row = rows.findIndex((x) => x.tab === r.tab && x.cells[lane]?.requests.some((q) => q.id === r.id));
@@ -404,6 +409,19 @@ export async function compareLanes(store: RunStore, refs: LaneRef[]): Promise<Co
     return { tab: first.tab, at: first.at, row: ours >= 0 ? ours : theirs, ours: show(first.ours), theirs: show(first.theirs) };
   });
   return { lanes, rows, reference, divergence };
+}
+
+/** Same requests and writes in both lanes: the first step after which the page said something else. */
+function pageDiffers(rows: AlignedRow[], ours: LoadedRep, theirs: LoadedRep, lane: number, reference: number): Divergence | null {
+  const page = pageDifference(ours, theirs);
+  if (!page) return null;
+  const [step, attempt] = page.step.match(/^(.*?)(?: \((.+)\))?$/)!.slice(1);
+  const row = rows.findIndex((r) => r.tab === page.tab && r.step === step && (r.attempt ?? undefined) === attempt);
+  for (const l of [lane, reference]) {
+    const cell = rows[row]?.cells[l];
+    if (cell) cell.seenDiffers = true;
+  }
+  return { tab: page.tab, at: rows[row]?.cells[lane]?.end ?? 0, row, ours: `${page.step}: page said "${page.ours}"`, theirs: `"${page.theirs}"` };
 }
 
 /** Same requests in both lanes: the first whose database writes differ (a duplicate webhook that wrote twice). */
@@ -467,6 +485,7 @@ function laneCells(rep: LoadedRep): Map<string, { tab: string; step: string; att
         harness: s.harness ?? [],
         quiet: s.quiet,
         requests: requests.map(view),
+        ...(s.seen ? { seen: s.seen } : {}),
       },
     });
   }

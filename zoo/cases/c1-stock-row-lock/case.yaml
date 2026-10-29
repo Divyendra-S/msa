@@ -1,0 +1,6 @@
+id: c1-stock-row-lock
+title: "Control: stock taken under a row lock"
+summary: Checkout reads the stock and then takes it with a plain UPDATE, which looks like check-then-act. The read locks the product row (FOR UPDATE) inside the order's transaction, so two buyers can't both get the last item.
+control: true
+looks-like: 05-oversell
+files: [app/api/orders/route.ts]

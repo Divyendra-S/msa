@@ -15,6 +15,18 @@ importers:
         specifier: ~6.0.3
         version: 6.0.3
 
+  bench:
+    dependencies:
+      '@windtunnel/core':
+        specifier: workspace:*
+        version: link:../packages/core
+      '@windtunnel/viewer':
+        specifier: workspace:*
+        version: link:../packages/viewer
+      yaml:
+        specifier: ^2.9.1
+        version: 2.9.1
+
   packages/cli:
     dependencies:
       '@windtunnel/core':

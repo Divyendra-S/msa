@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { git } from "../git.ts";
-import type { Rule, RuleResult } from "../rules.ts";
+import { FACT_TABLES, type Rule, type RuleResult } from "../rules.ts";
 import { viewerLink } from "../viewer-state.ts";
 import type { DbDiff, Row } from "./db-diff.ts";
 import type { Experiment } from "./experiment.ts";
@@ -424,7 +424,7 @@ async function sqlLocator(
 /** Tables a rule's SQL reads, without the seed copies it may compare with. */
 export function tablesOf(sql: string[]): string[] {
   const tables = sql.flatMap((s) => [...s.matchAll(/\b(?:FROM|JOIN)\s+([\w."]+)/gi)].map((m) => m[1]!.replace(/"/g, "")));
-  return [...new Set(tables.filter((t) => !t.startsWith("windtunnel_seed.")))];
+  return [...new Set(tables.filter((t) => !t.startsWith("windtunnel_seed.") && !Object.hasOwn(FACT_TABLES, t)))];
 }
 
 function diffLines(diff: DbDiff, first: string[], maxRows: number): string[] {
@@ -484,6 +484,37 @@ export function firstDifference(ours: LoadedRep, theirs: LoadedRep): { tab: stri
   return first;
 }
 
+/**
+ * The first step, by when it ended, after which a tab's page said something different. Ids and
+ * times that change from run to run (`Order #12`) count as the same text.
+ */
+export function pageDifference(ours: LoadedRep, theirs: LoadedRep): { tab: string; step: string; path: string; ours: string; theirs: string } | undefined {
+  const same = (s: string) => s.replace(/\d+/g, "0");
+  const key = (s: StepRecord) => `${s.tab} ${s.step} ${s.attempt ?? ""}`;
+  const other = new Map(theirs.detail.steps.map((s) => [key(s), s]));
+  for (const s of [...ours.detail.steps].sort((a, b) => a.end - b.end)) {
+    const t = other.get(key(s));
+    if (!s.seen || !t?.seen || same(s.seen.text) === same(t.seen.text)) continue;
+    const [a, b] = textDelta(s.seen.text, t.seen.text);
+    return { tab: s.tab, step: s.attempt ? `${s.step} (${s.attempt})` : s.step, path: s.seen.path, ours: a, theirs: b };
+  }
+  return undefined;
+}
+
+/** The parts of two texts that differ, with a little context, after their common start and end. */
+function textDelta(a: string, b: string, context = 30, max = 160): [string, string] {
+  let start = 0;
+  while (start < a.length && start < b.length && a[start] === b[start]) start++;
+  let end = 0;
+  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end++;
+  const cut = (s: string) => {
+    const from = Math.max(0, start - context);
+    const part = s.slice(from, Math.max(from, s.length - end + context));
+    return `${from > 0 ? "…" : ""}${part.length > max ? `${part.slice(0, max)}…` : part}${s.length - end + context < s.length ? "…" : ""}`;
+  };
+  return [cut(a), cut(b)];
+}
+
 /** Where this run first differs from a run that held every rule: in this run, or the latest passing run of the experiment. */
 async function divergence(store: RunStore, run: ExperimentResult, focus: RepSummary, rep: LoadedRep): Promise<string[]> {
   if (focus.outcome === "ok") return [];
@@ -497,7 +528,13 @@ async function divergence(store: RunStore, run: ExperimentResult, focus: RepSumm
   if (first) {
     const show = (r: RequestRecord | undefined) => (r ? `${r.step ?? "outside a step"}: ${requestLine(r, {})}` : "(nothing)");
     lines.push(`  first difference, tab ${first.tab}: this run ${show(first.ours)} — that run ${show(first.theirs)}`);
-  } else lines.push("  same requests in the same order");
+  } else {
+    lines.push("  same requests in the same order");
+    const page = pageDifference(rep, theirs);
+    if (page) {
+      lines.push(`  first page that differs, ${page.tab} after ${page.step} (${page.path}): this run "${page.ours}" — that run "${page.theirs}"`);
+    }
+  }
   lines.push(`  database changes there: ${other.rep.diff || "none"}`);
   return lines;
 }

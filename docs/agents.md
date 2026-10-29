@@ -79,8 +79,10 @@ POST /api/orders  app/api/orders/route.ts
   an unconditional write to it), a transaction that works from rows read before it began, blind UPDATE/DELETE (WHERE only picks the row), writes after an
   external call, INSERT with no ON CONFLICT on a table with no natural unique key, two or more
   writes outside a transaction, external POSTs without an idempotency key, mutating handlers
-  with no auth or signature check, webhooks with or without event-id dedupe, and session
-  lookups with no expiry check.
+  with no auth or signature check, webhooks with or without event-id dedupe, session
+  lookups with no expiry check, and logged-in routes that load a user's row by the id in the
+  path with no owner column (a foreign key to users, `user_id`, `owner_id`) in the query: try
+  `replay-as`.
 - **Pages:** buttons, form labels, short texts the page can show (what a flow waits for:
   "Order confirmed", "Payment failed"), the requests its components send, and whether the
   page redirects to log in.
@@ -143,7 +145,8 @@ with `sweep` lists them all.
 - the **first difference from a passing run**, compared tab by tab: another repetition in the
   same run (the same ordering first), else the latest passing run of the same experiment (for example on the fixed
   code), with its database changes and a note when that run used another version of the
-  experiment file;
+  experiment file; when both sent the same requests, the first step after which a page said
+  something else (`"Order confirmed…" — that run "Payment failed…"`);
 - what the page showed when a flow failed (path, `role="alert"` texts, the start of the
   visible text), so a UI bug can be confirmed without opening the trace; when a locator failed,
   what it waited for and the controls that were on the page instead (`<run>/<n>/page` lists

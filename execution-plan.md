@@ -81,11 +81,11 @@
 
 ## Phase 7 — Bug Zoo + benchmark
 
-- [ ] Bug Zoo cases 8–10: back + resubmit, another user's order, success before confirmation (case 9 changes no data, so SQL rules can't see it: today a flow throws on a 200 for someone else's order and the agent sorts the error; a first-class response check would let it count as a broken rule)
-- [ ] Clean controls C1–C3
-- [ ] Benchmark harness: setups A (no Wind Tunnel), B (rules only), C (with Muse Spark) on Muse Wonder
-- [ ] Usage measurement per setup
-- [ ] Scoreboard
+- [x] Bug Zoo cases 8–10: back + resubmit (orders unique per cart only while unpaid), another user's order (the status API skips the owner check), success before confirmation (the pay button says "Order confirmed" after 2.5 s and ignores a later failure). Cases 9 and 10 change no data, so rules can now read what users got and saw: `windtunnel_requests` and `windtunnel_pages`, temporary tables of the rule check. New perturbations: `replay-as` (the same request with another user's session) and `fail … after`. Evidence shows the first page that differs when the requests match; the map flags rows loaded by id with no owner in the query
+- [x] Clean controls C1–C3: correct code that looks like cases 05, 03 and 09 (row lock, unique charge id, owner checked in code); `zoo:verify` requires every experiment to pass on them
+- [x] Benchmark harness (`bench/`): one-commit trial folders outside the repo per case and setup (A: Playwright MCP; B: Wind Tunnel, rules only; C: + Muse Spark), Muse Code runner with HOME isolation and a time cap, scoring without a model (reproduce command fails with the bug and passes on the clean shop; hidden experiment on the final code; regressions; false alarms), manual trials for Claude Code. Real runs on Muse Wonder wait for the Muse setup (Phase 8)
+- [x] Usage measurement per setup: host JSONL usage (tokens, cost or reported prices), Wind Tunnel's tool output and Level 1 spend, wall time
+- [x] Scoreboard: totals per setup and a row per trial, written to `bench/results/<batch>/scoreboard.md`
 
 ## Phase 8 — Submission
 

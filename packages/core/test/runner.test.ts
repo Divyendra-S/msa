@@ -18,7 +18,7 @@ import { writeProofBranch } from "../src/runner/proof-branch.ts";
 import { prove } from "../src/runner/prove.ts";
 import { type ExperimentResult, Runner } from "../src/runner/runner.ts";
 import { loadRules } from "../src/rules.ts";
-import { CONFIG, createFixtureRepo, pgAvailable, SEED, SERVER } from "./fixture.ts";
+import { CONFIG, createFixtureRepo, pgAvailable, RULES, SEED, SERVER } from "./fixture.ts";
 
 // The project's own tests: they use the seed copy they are given.
 const TESTS = `const { Client } = require(process.env.WT_TEST_PG_MODULE);
@@ -29,6 +29,13 @@ const TESTS = `const { Client } = require(process.env.WT_TEST_PG_MODULE);
   await db.end();
   console.log("tests pass");
 })().catch((err) => { console.error(err.message); process.exit(1); });
+`;
+
+// Rules on what users got and saw (the run's requests and pages, next to the app's tables).
+const FACT_RULES = `replays-refused:
+  sql: SELECT id, user_name, status FROM windtunnel_requests WHERE harness LIKE '%sent again with%' AND status < 400
+no-502-shown:
+  sql: SELECT tab, step FROM windtunnel_pages WHERE text LIKE '%Failed 502%' AND user_email = 'alice@example.test'
 `;
 
 const EXPERIMENTS: Record<string, string> = {
@@ -43,6 +50,10 @@ perturb:
   - { do: repeat, step: send }`,
   duplicate: "flow: send\nperturb: [{ do: duplicate, request: POST /api/send }]",
   delay: "flow: send\nperturb: [{ do: delay, request: POST /api/send, ms: 400ms }]",
+  "fail-after": `flow: send
+params: { expect: "^Failed 502$" }
+perturb: [{ do: fail, request: POST /api/send, status: 502, after: 400ms }]`,
+  "replay-as": "flow: send\nperturb: [{ do: replay-as, request: POST /api/send, user: bob }]",
   "expired-session": `flow: send
 params: { expect: "^Failed 401$" }
 perturb: [{ do: expire-session, step: send, cookie: sid }]`,
@@ -109,6 +120,7 @@ describe("runner", { skip: !(await pgAvailable()) && "Postgres not reachable (pn
     repo = await createFixtureRepo(EXPERIMENTS, {
       "windtunnel.config.yaml": CONFIG.replace("app:\n", "app:\n  test: node tests.cjs\n"),
       "tests.cjs": TESTS,
+      ".windtunnel/rules.yaml": RULES + FACT_RULES,
     });
     cache = await mkdtemp(join(tmpdir(), "wt-cache-"));
     process.env.WINDTUNNEL_CACHE_DIR = cache;
@@ -185,6 +197,29 @@ describe("runner", { skip: !(await pgAvailable()) && "Postgres not reachable (pn
     assertOutcome("second-tab", "fail");
     const tabs = await repFile<{ race: { arrived: { tab: string }[] } }>("second-tab", "result.json");
     assert.deepEqual(tabs.race.arrived.map((a) => a.tab).sort(), ["alice", "alice#2"]);
+  });
+
+  it("rules read what users got and saw: a request replayed as another user, a page after a slow failure", async () => {
+    assertOutcome("replay-as", "fail");
+    assert.deepEqual([...results.get("replay-as")!.reps[0]!.broken].sort(), ["at-most-one-hit", "replays-refused"]);
+    const requests = await repFile<RequestRecord[]>("replay-as", "requests.json");
+    const replay = requests.find((r) => r.tab === "bob (replay)");
+    assert.ok(replay, "the replay is in the request log");
+    assert.equal(replay.user, "bob");
+    assert.equal(replay.status, 200);
+    assert.equal(replay.step, "send");
+    const original = requests.find((r) => r.tab === "alice" && r.url === "/api/send")!;
+    assert.match(original.harness!.join(), new RegExp(`replayed as bob \\(request ${replay.id}\\): 200`));
+    assert.deepEqual((await addedHits("replay-as")).map((h) => h.who), ["alice@example.test", "bob@example.test"]);
+
+    assertOutcome("fail-after", "fail");
+    assert.deepEqual(results.get("fail-after")!.reps[0]!.broken, ["no-502-shown"]);
+    const [send] = await sendRequests("fail-after");
+    assert.match(send!.harness!.join(), /answered 502 after 400 ms/);
+    assert.ok(send!.end! - send!.start >= 400, `answered after ${send!.end! - send!.start} ms`);
+    const { steps } = await repFile<{ steps: StepRecord[] }>("fail-after", "result.json");
+    assert.match(steps.find((s) => s.step === "result")!.seen!.text, /Failed 502/);
+    assert.equal(steps.find((s) => s.step === "result")!.seen!.path, "/");
   });
 
   it("ordered races release requests in the chosen order; `each` runs every order", async () => {

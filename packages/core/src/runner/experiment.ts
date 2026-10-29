@@ -28,12 +28,23 @@ const Perturbation = z.discriminatedUnion("do", [
     do: z.literal("fail"),
     request: Request,
     status: z.number().int().min(400).max(599).default(503),
+    /** Answer only after this long (a slow server that gives up). */
+    after: Duration.optional(),
     step: Step.optional(),
     tab: Tab,
     count: Count,
   }),
   z.strictObject({ do: z.literal("lose-response"), request: Request, step: Step.optional(), tab: Tab, count: Count }),
   z.strictObject({ do: z.literal("duplicate"), request: Request, step: Step.optional(), tab: Tab, count: Count }),
+  // Sends the same request again with another user's session, after the app answered the first.
+  z.strictObject({
+    do: z.literal("replay-as"),
+    request: Request,
+    user: z.string().min(1),
+    step: Step.optional(),
+    tab: Tab,
+    count: Count,
+  }),
   // Browser: applied to a step.
   z.strictObject({ do: z.literal("double-submit"), step: Step, tab: Tab }),
   z.strictObject({ do: z.literal("repeat"), step: Step, times: z.number().int().min(1).max(5).default(1), tab: Tab }),
@@ -216,6 +227,14 @@ export async function checkExperiment(experiment: Experiment, project: Project, 
       errors.push(`unknown user "${user}" (config users: ${configured.join(", ") || "none"})`);
     }
   }
+  for (const p of experiment.perturb) {
+    if (p.do !== "replay-as") continue;
+    if (!project.config.users[p.user]) {
+      errors.push(`replay-as: unknown user "${p.user}" (config users: ${configured.join(", ") || "none"})`);
+    } else if (users.includes(p.user) && users.length === 1) {
+      warnings.push(`replay-as ${p.user}: the request is replayed as the same user who sent it`);
+    }
+  }
 
   let steps: string[] = [];
   try {
@@ -223,6 +242,9 @@ export async function checkExperiment(experiment: Experiment, project: Project, 
     steps = loaded.steps;
     const login = await loadFlow(project.stateDir, LOGIN_FLOW).catch(() => undefined);
     if (login) steps.push(...login.steps);
+    else if (experiment.perturb.some((p) => p.do === "replay-as")) {
+      errors.push("replay-as: add .windtunnel/flows/login.ts to log the other user in");
+    }
   } catch (err) {
     errors.push((err as Error).message);
   }

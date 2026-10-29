@@ -201,7 +201,7 @@ The output is a branch or PR with regression experiments and an evidence report,
 | F15 | **Viewer.** Runs list, branch timelines aligned by step, first divergence highlighted, trace chain, DB diff, rule results, usage meter, "Open in Claude Code" button | The demo can be presented from the viewer alone. **Built:** `windtunnel view` ([docs/viewer.md](docs/viewer.md)) |
 | F16 | **Usage meter + budgets.** Count the tokens of everything our tools return; per-job budget; Jev cost shown | Meter appears on every job |
 | F17 | **Free sweep (no model).** Console errors, failed requests, broken links, accessibility (axe-core), slow pages, found during the crawl | Runs as part of the map step at 0 tokens |
-| F18 | **Bug Zoo + benchmark** (see §11) | Scoreboard for 3 setups committed to `bench/results/` |
+| F18 | **Bug Zoo + benchmark** (see §11) | Scoreboard for 3 setups committed to `bench/results/`. **Built:** cases 1–10 and controls C1–C3; `bench/` prepares one-commit trials outside the repo, runs Muse Code headless, and scores without a model (found = a reproduce command that fails with the bug and passes on the clean shop; fixed = the hidden experiment passes on the final code) |
 | F19 | **Run from the viewer.** A "Run hunt" button starts `muse exec --json` with the Meta key and streams its events into the viewer | The demo starts from the viewer with one click. **Built:** command in `hunt.command`; events read without a fixed schema, since Muse Code's isn't documented |
 
 ### 8.2 Stretch (only if MVP is done)
@@ -309,6 +309,8 @@ The one idea kept from the Linux-agent proposal: **an eval set with known answer
 | C1–C3 | Clean controls | All of the above | — | Any finding counts as a false alarm |
 
 **Scoreboard columns:** found · reproduced (N/N) · correct handler file · fix proven · false alarms · model tokens · credits spent (Meta, plus Jev if used) · wall time.
+
+**Scoring (built, no model):** the task asks for `bench-report.json` with a reproduce command per finding. *Found* = that command fails with the bug and passes on the clean shop (the only difference between them is the seeded bug). *Fix proven* = the case's hidden experiment passes in every run on the agent's final code; the other hidden experiments give regressions. *False alarms* = any finding on a control; on a bug case, a command that never fails with the bug. Bugs that change no data (cases 9, 10) are caught by rules on `windtunnel_requests` and `windtunnel_pages`.
 
 **Setups compared (all on Muse Wonder, same time cap, same task prompt)**
 - **A.** Muse Code + Playwright MCP, no Wind Tunnel: "Find and fix bugs in checkout. Prove each fix."

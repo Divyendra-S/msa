@@ -14,7 +14,20 @@ export {
 export { CommandError, Service, sh } from "./exec.ts";
 export { changedFiles } from "./git.ts";
 export { openProject, type Project } from "./project.ts";
-export { checkRules, loadRules, parseRules, type Rule, type RuleResult, RULES_FILE } from "./rules.ts";
+export {
+  checkRules,
+  FACT_TABLES,
+  factTablesOf,
+  loadRules,
+  type PageFact,
+  parseRules,
+  type RequestFact,
+  type Rule,
+  type RuleResult,
+  RULES_FILE,
+  type RunFacts,
+} from "./rules.ts";
+export { runFacts } from "./runner/facts.ts";
 export { flow, type Flow, type FlowContext, type TestUser } from "./flow-api.ts";
 export {
   checkExperiment,

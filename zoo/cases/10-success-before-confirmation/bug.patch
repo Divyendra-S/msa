@@ -1,0 +1,52 @@
+--- a/zoo/shop/components/PayButton.tsx
++++ b/zoo/shop/components/PayButton.tsx
+@@ -7,16 +7,25 @@ export function PayButton({ cartId }: { cartId: number }) {
+   const router = useRouter();
+   const [paying, setPaying] = useState(false);
+   const [error, setError] = useState<string | null>(null);
++  const [confirmed, setConfirmed] = useState(false);
+ 
+   async function pay() {
+     setPaying(true);
+     setError(null);
++    // Checkout can take a few seconds when the payment provider is busy: don't leave the buyer
++    // staring at a spinner. The order page has the details once it's done.
++    let shown = false;
++    const reassure = setTimeout(() => {
++      shown = true;
++      setConfirmed(true);
++    }, 2500);
+     try {
+       const res = await fetch("/api/orders", {
+         method: "POST",
+         headers: { "content-type": "application/json" },
+         body: JSON.stringify({ cartId }),
+       });
++      clearTimeout(reassure);
+       if (res.status === 401) {
+         // Session gone: log in again and come back to the cart (it is kept with the account).
+         router.push("/login?next=/cart");
+@@ -24,17 +33,23 @@ export function PayButton({ cartId }: { cartId: number }) {
+       }
+       const body = (await res.json()) as { orderId?: number; error?: string };
+       if (!res.ok || !body.orderId) {
++        // The buyer has already been told it went through.
++        if (shown) return;
+         setError(body.error ?? "Payment failed");
+         setPaying(false);
+         return;
+       }
+       router.push(`/orders/${body.orderId}`);
+     } catch {
++      clearTimeout(reassure);
++      if (shown) return;
+       setError("Network error. Please try again.");
+       setPaying(false);
+     }
+   }
+ 
++  if (confirmed) return <p className="ok">Order confirmed. We'll email your receipt.</p>;
++
+   return (
+     <div className="row">
+       <button onClick={pay} disabled={paying}>

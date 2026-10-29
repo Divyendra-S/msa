@@ -32,6 +32,8 @@ export interface RequestRecord {
   failure?: string;
   /** What the harness did to this request. */
   harness?: string[];
+  /** The user whose session sent it, when that isn't the tab's own (a `replay-as`). */
+  user?: string;
 }
 
 export interface RaceRecord {
@@ -41,6 +43,9 @@ export interface RaceRecord {
   released: string[];
   timedOut: boolean;
 }
+
+/** Sends `request` again with `user`'s session after the app answered `original`. */
+export type Replayer = (user: string, request: Request, original: RequestRecord) => Promise<RequestRecord>;
 
 /** Requests that make up "network activity" for step timing and the request log. */
 const TRACKED_TYPES = new Set(["document", "fetch", "xhr"]);
@@ -115,15 +120,19 @@ export class Network {
   private readonly open = new WeakMap<Request, ContextState>();
   private readonly openByPage = new Map<Page, Set<Request>>();
   private readonly work = new Set<Promise<unknown>>();
+  private readonly replay?: Replayer;
 
   constructor(options: {
     t0: number;
     tabOf: (page: Page) => NetworkTab | undefined;
     perturbations: NetworkPerturbation[];
     race?: RaceSpec & { count: number; order: RaceOrder };
+    /** Sends a request again as another user (`replay-as`). */
+    replay?: Replayer;
   }) {
     this.t0 = options.t0;
     this.tabOf = options.tabOf;
+    this.replay = options.replay;
     this.perturbations = options.perturbations.map((spec) => ({
       spec,
       pattern: parseRequestPattern(spec.request),
@@ -295,8 +304,9 @@ export class Network {
         record.sent = Date.now() - this.t0;
         return this.forward(route, request);
       case "fail":
-        note(record, `answered ${p.status} by the harness; the app never saw it`);
+        note(record, `answered ${p.status}${p.after ? ` after ${p.after} ms` : ""} by the harness; the app never saw it`);
         record.sent = null;
+        if (p.after) await sleep(p.after);
         return this.reply(request, () =>
           route.fulfill({ status: p.status, contentType: "text/plain", body: "Service unavailable (injected)" }),
         );
@@ -313,7 +323,26 @@ export class Network {
         note(record, `sent to the app twice (${first.status()}, ${second.status()}); the browser got the first answer`);
         return this.reply(request, () => route.fulfill({ response: first }));
       }
+      case "replay-as": {
+        const response = await route.fetch({ maxRedirects: 0 });
+        record.response ??= this.now();
+        await this.reply(request, () => route.fulfill({ response }));
+        const replayed = await this.replay?.(p.user, request, record).catch((err: Error) => err);
+        if (!replayed || replayed instanceof Error) {
+          note(record, `could not replay it as ${p.user}${replayed ? `: ${replayed.message.split("\n")[0]}` : ""}`);
+        } else {
+          note(record, `replayed as ${p.user} (request ${replayed.id}): ${replayed.status ?? replayed.failure}`);
+        }
+        return;
+      }
     }
+  }
+
+  /** Logs a request the harness sent itself, not a page (a replay); returns its record. */
+  external(fields: Omit<RequestRecord, "id">): RequestRecord {
+    const record: RequestRecord = { id: this.log.length + 1, ...fields };
+    this.log.push(record);
+    return record;
   }
 
   private async forward(route: Route, request: Request): Promise<void> {

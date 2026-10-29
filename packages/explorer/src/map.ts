@@ -49,6 +49,7 @@ export async function buildAppMap(project: Project, options: { schema?: TableInf
   const pages: PageInfo[] = [];
   const helperFlags = new Set<string>();
   const uniqueKeys = keysByTable(options.schema);
+  const owners = ownersByTable(options.schema);
 
   for (const f of files) {
     const rel = relative(project.root, f.file);
@@ -63,7 +64,7 @@ export async function buildAppMap(project: Project, options: { schema?: TableInf
         const method = f.kind === "app" ? h.name : f.kind === "pages-api" ? "ANY" : "ACTION";
         const path = f.kind === "action" ? h.name : f.path;
         for (const flag of helperPatterns(h.effects)) helperFlags.add(flag);
-        const { flags, notes } = routeFlags(method, path, h.effects, uniqueKeys);
+        const { flags, notes } = routeFlags(method, path, h.effects, uniqueKeys, owners);
         routes.push({ method, path, file: rel, ...(h.comment ? { comment: h.comment } : {}), effects: h.effects, flags, notes });
       }
     } else {
@@ -133,6 +134,7 @@ function routeFlags(
   path: string,
   effects: Effect[],
   uniqueKeys: Map<string, string[]> | undefined,
+  owners?: Map<string, string[]>,
 ): { flags: string[]; notes: string[] } {
   const flat = flatten(effects);
   const flags: string[] = [];
@@ -184,6 +186,16 @@ function routeFlags(
 
   const authed = flat.some((f) => f.inAuth) || hasAuthCall(effects);
   if (mutating && !authed) flags.push("no auth or signature check found");
+  // A logged-in route that loads a user's row by the id in its path, without the owner in the query.
+  if (authed && /\[|:/.test(path)) {
+    for (const f of sql) {
+      const table = f.effect.tables[0]!;
+      const columns = owners?.get(table);
+      if (!columns?.length || !f.effect.where || columns.some((c) => new RegExp(`\\b${c}\\b`, "i").test(f.effect.where!))) continue;
+      flags.push(`${f.effect.op} ${table} by ${f.effect.where} with no owner (${columns.join("/")}) in the query: can another user reach it? (replay-as)`);
+      break;
+    }
+  }
   if (/webhook/i.test(path)) {
     const dedupe = sql.some((f) => f.effect.op === "INSERT" && f.effect.onConflict && /event|webhook|idempot/i.test(f.effect.tables[0]!));
     if (dedupe) notes.push("webhook dedupes on event id");
@@ -210,6 +222,21 @@ function helperPatterns(effects: Effect[]): string[] {
   };
   visit(effects);
   return out;
+}
+
+/** Columns that say which user a row belongs to: a foreign key to a users-like table, or `user_id` / `owner_id`. */
+function ownersByTable(schema: TableInfo[] | undefined): Map<string, string[]> | undefined {
+  if (!schema) return undefined;
+  const people = /^(users?|accounts?|customers?|members?|profiles?)$/i;
+  return new Map(
+    schema.map((t) => [
+      t.name,
+      unique([
+        ...t.foreignKeys.filter((k) => people.test(k.table.split(".").pop()!)).flatMap((k) => k.columns),
+        ...t.columns.filter((c) => /^(user|owner)_id$/i.test(c.name)).map((c) => c.name),
+      ]),
+    ]),
+  );
 }
 
 function keysByTable(schema: TableInfo[] | undefined): Map<string, string[]> | undefined {

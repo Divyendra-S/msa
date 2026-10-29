@@ -4,6 +4,7 @@ import { flow } from "windtunnel";
 // When the app asks to log in again (the session ended), the user does and carries on.
 //   params.product      product name (default "Ceramic Mug")
 //   params.mayBeSoldOut finishing with "out of stock" also counts as done
+//   params.mayFail      finishing with an error message (the payment didn't go through) also counts as done
 export default flow(async ({ page, step, login, params, user }) => {
   const product: string = params.product ?? "Ceramic Mug";
   const isLoginPage = () => new URL(page.url()).pathname === "/login";
@@ -33,7 +34,9 @@ export default flow(async ({ page, step, login, params, user }) => {
 
   await step("confirmation", async () => {
     const done = page.getByText("Order confirmed");
-    const ending = params.mayBeSoldOut ? done.or(page.getByText(/out of stock/)) : done;
+    let ending = params.mayBeSoldOut ? done.or(page.getByText(/out of stock/)) : done;
+    // Not just any alert: Next.js keeps an empty role="alert" route announcer on every page.
+    if (params.mayFail) ending = ending.or(page.getByRole("alert").filter({ hasText: /try again|failed/i }));
     await ending.or(page.getByLabel("Email")).waitFor();
     if (isLoginPage()) {
       await logInAgain();

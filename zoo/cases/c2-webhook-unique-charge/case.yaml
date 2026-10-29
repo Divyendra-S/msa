@@ -1,0 +1,6 @@
+id: c2-webhook-unique-charge
+title: "Control: webhooks deduped by a unique charge id"
+summary: The payment webhook no longer records event ids, which looks like missing dedupe. Payments are unique per charge and inserted with ON CONFLICT DO NOTHING, so a repeated or concurrent delivery changes nothing.
+control: true
+looks-like: 03-duplicate-webhook
+files: [app/api/webhooks/payment/route.ts, db/schema.sql]

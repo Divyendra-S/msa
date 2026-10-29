@@ -1,0 +1,16 @@
+{
+  "name": "@windtunnel/bench",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Bug Zoo benchmark: the same task for setups A (no Wind Tunnel), B (rules only) and C (Muse Spark at Level 1), scored without a model",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "bench": "node src/cli.ts"
+  },
+  "dependencies": {
+    "@windtunnel/core": "workspace:*",
+    "@windtunnel/viewer": "workspace:*",
+    "yaml": "^2.9.1"
+  }
+}

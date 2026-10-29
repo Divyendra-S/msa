@@ -9,7 +9,7 @@ and database, traces what broke, and proves a fix by re-running the experiment.
 - Product plan: [`plan.md`](plan.md)
 - Build plan by phase: [`execution-plan.md`](execution-plan.md)
 
-**Status:** Phases 1–6 are done: isolated branches; the experiment engine (flows,
+**Status:** Phases 1–7 are done: isolated branches; the experiment engine (flows,
 perturbations, ordered races, webhook control, rules, database diff, repeat runs, run
 store); the agent connection (an MCP server, skills and a plugin for Claude Code, Codex
 and Muse Code, the static app map, evidence packets, Bug Zoo cases 1–7); fix proof (the
@@ -20,7 +20,9 @@ links, accessibility and slow pages; failure sorting; selector repair written ba
 flow; a Decider that answers small decisions with rules, then Muse Spark or Jev, then the
 agent; and a usage meter with per-job budgets); and the local viewer (runs as they happen,
 aligned timelines, first divergence, trace chain, database changes, rules, usage, a Run hunt
-button for Muse Code and an Open in Claude Code link).
+button for Muse Code and an Open in Claude Code link); and the full Bug Zoo (ten cases and
+three clean controls, with rules that can read what users got and saw) with the benchmark
+harness for setups A, B and C, scored without a model.
 
 ## Layout
 
@@ -43,7 +45,10 @@ zoo/
   shop/       Bug Zoo demo shop: Next.js + Postgres, standalone app with its own lockfile;
               its .windtunnel/ holds the reference flows, experiments and rules
   mock-pay/   mock payment provider: idempotent charges, signed webhooks, harness control
-  cases/      one bug patch per case + expected results + verifier; prover and healing checks
+  cases/      one bug patch per case (or decoy patch per control) + expected results + verifier;
+              prover and healing checks
+bench/        the benchmark: trials per case and setup, Muse Code runner, scoring, scoreboard;
+              results/ holds committed runs
 docs/
   experiments.md   flow, experiment and rules reference
   agents.md        skills, MCP tools, app map, live crawl and sweep, evidence packets, trace chain,
@@ -67,7 +72,7 @@ Checks:
 ```sh
 pnpm typecheck               # packages, tests and the shop's flow files
 pnpm test                    # unit + integration tests (branches, runner; need pnpm db:up)
-pnpm zoo:verify              # every shop experiment against the clean shop and each bug variant
+pnpm zoo:verify              # every shop experiment against the clean shop, each bug and each control
 pnpm zoo:prove               # the prover: proves each case's real fix, rejects the wrong fixes
 pnpm zoo:heal                # failure sorting and selector repair on a copy of the shop, rules only
 ```
@@ -157,6 +162,20 @@ pnpm wt --cwd zoo/shop evidence <run>               # evidence packet; <run>/1/t
 pnpm wt --cwd zoo/shop prove checkout-two-buyers --base-patch zoo/cases/05-oversell/bug.patch
 pnpm wt --cwd zoo/shop prove checkout-two-buyers --branch windtunnel/fix-oversell   # bug in HEAD, fix in the working tree
 ```
+
+## Benchmark
+
+```sh
+pnpm bench run --cases all --setups A,B,C            # Muse Code on every case, in each setup (Meta key)
+pnpm bench prepare --case 09 --setup B --host manual # one trial to run by hand in Claude Code
+pnpm bench board                                     # the scoreboard
+```
+
+The same task on each Bug Zoo case: A without Wind Tunnel (Playwright MCP), B with it (rules
+only), C with Muse Spark answering its small decisions. Each trial is a one-commit copy of the
+shop outside this repository. A finding counts when its reproduce command fails with the bug
+and passes on the clean shop; a fix counts when the case's hidden experiment passes on the
+agent's final code. See [`bench/README.md`](bench/README.md).
 
 ## Viewer
 

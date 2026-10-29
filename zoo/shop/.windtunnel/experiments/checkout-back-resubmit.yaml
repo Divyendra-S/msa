@@ -1,0 +1,7 @@
+description: The user pays and the payment goes through; then they press Back and click "Pay now" again.
+flow: checkout
+perturb:
+  - do: back-resubmit
+    step: pay
+# Paid before the checkout answers, so the order is settled by the time the user goes back.
+webhooks: early

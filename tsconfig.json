@@ -5,6 +5,8 @@
     "packages/*/test",
     "zoo/mock-pay/src",
     "zoo/mock-pay/test",
-    "zoo/cases/*.ts"
+    "zoo/cases/*.ts",
+    "bench/src",
+    "bench/test"
   ]
 }

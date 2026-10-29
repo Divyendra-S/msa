@@ -1,5 +1,5 @@
 // Verifies the Bug Zoo end to end: the shop's experiments (zoo/shop/.windtunnel)
-// run against the clean shop and every case variant, each run in its own branch.
+// run against the clean shop, every case variant and every clean control, each run in its own branch.
 //
 //   pnpm zoo:verify [--repeat 3] [--case 02-lost-response-retry] [--experiment checkout-double-submit]
 import { readdir, readFile } from "node:fs/promises";
@@ -18,11 +18,13 @@ import { parse as parseYaml } from "yaml";
 interface Case {
   id: string;
   title: string;
-  experiment: string;
+  /** A clean control (`control.patch`): every experiment must pass, like on the clean shop. */
+  control?: boolean;
+  experiment?: string;
   /** Only this race ordering must break (default: every run of the experiment). */
   variant?: string;
   breaks: string[];
-  handler: string;
+  handler?: string;
   patch: string;
 }
 
@@ -30,18 +32,21 @@ interface Variant {
   id: string;
   version: CodeVersion;
   expected?: Case;
+  /** Must pass every experiment: the clean shop and the controls. */
+  clean: boolean;
 }
 
 async function loadCases(dir: string, only?: string): Promise<Case[]> {
   const cases: Case[] = [];
   const caseDirs = (await readdir(dir, { withFileTypes: true }))
-    .filter((e) => e.isDirectory() && /^\d{2}-/.test(e.name))
+    .filter((e) => e.isDirectory() && /^(\d{2}|c\d)-/.test(e.name))
     .map((e) => e.name)
     .sort();
   for (const name of caseDirs) {
     if (only && name !== only) continue;
     const meta = parseYaml(await readFile(join(dir, name, "case.yaml"), "utf8")) as Omit<Case, "patch">;
-    cases.push({ ...meta, patch: await readFile(join(dir, name, "bug.patch"), "utf8") });
+    const patch = await readFile(join(dir, name, meta.control ? "control.patch" : "bug.patch"), "utf8");
+    cases.push({ ...meta, breaks: meta.breaks ?? [], patch });
   }
   if (only && cases.length === 0) throw new Error(`no case named ${only}`);
   return cases;
@@ -76,7 +81,7 @@ async function main(): Promise<number> {
   try {
     const experiments: Experiment[] = await loadExperiments(runner.project, values.experiment ?? []);
     for (const c of cases) {
-      if (!experiments.some((e) => e.id === c.experiment)) throw new Error(`${c.id}: experiment ${c.experiment} not selected`);
+      if (!c.control && !experiments.some((e) => e.id === c.experiment)) throw new Error(`${c.id}: experiment ${c.experiment} not selected`);
     }
 
     const variants: Variant[] = [];
@@ -84,25 +89,26 @@ async function main(): Promise<number> {
       const started = Date.now();
       const version = await runner.branches.versions.resolve({ patch: "patch" in spec ? spec.patch : undefined, label: spec.id });
       await runner.branches.prepare(version);
-      console.log(`prepared ${spec.id.padEnd(24)} version ${version.id}  ${Date.now() - started} ms`);
-      variants.push({ id: spec.id, version, expected: "expected" in spec ? spec.expected : undefined });
+      console.log(`prepared ${spec.id.padEnd(30)} version ${version.id}  ${Date.now() - started} ms`);
+      const expected = "expected" in spec ? spec.expected : undefined;
+      variants.push({ id: spec.id, version, expected: expected?.control ? undefined : expected, clean: !expected || !!expected.control });
     }
 
     const started = Date.now();
     const results = await Promise.all(variants.map((v) => runner.run(experiments, { version: v.version, repeat })));
     const seconds = ((Date.now() - started) / 1000).toFixed(1);
 
-    // Matrix: one row per experiment, one column per variant.
+    // One line per variant: what didn't pass (the expected experiment first), then the count that passed.
     const failures: string[] = [];
-    const header = ["experiment", ...variants.map((v) => v.id)];
-    const rows = experiments.map((experiment) => [
-      experiment.id,
-      ...variants.map((variant, i) => {
+    const width = Math.max(...variants.map((v) => v.id.length));
+    console.log("");
+    for (const [i, variant] of variants.entries()) {
+      const expected = variant.expected;
+      const outcomes = experiments.map((experiment) => {
         const result = results[i]!.find((r) => r.experiment === experiment.id)!;
-        if (variant.id === "clean" && result.outcome !== "pass") {
-          failures.push(`clean shop: ${experiment.id} is ${cell(result)} (run ${result.runId})`);
+        if (variant.clean && result.outcome !== "pass") {
+          failures.push(`${variant.id === "clean" ? "clean shop" : `${variant.id} (control)`}: ${experiment.id} is ${cell(result)} (run ${result.runId})`);
         }
-        const expected = variant.expected;
         if (expected?.experiment === experiment.id) {
           const reps = result.reps.filter((r) => !expected.variant || r.variant === expected.variant);
           const where = expected.variant ? ` of variant ${expected.variant}` : "";
@@ -114,11 +120,17 @@ async function main(): Promise<number> {
             }
           }
         }
-        return cell(result);
-      }),
-    ]);
-    const widths = header.map((_, c) => Math.max(...[header, ...rows].map((r) => r[c]!.length)));
-    console.log(`\n${[header, ...rows].map((r) => r.map((s, c) => s.padEnd(widths[c]!)).join("  ")).join("\n")}`);
+        return { experiment: experiment.id, result };
+      });
+      const notPassing = outcomes
+        .filter((o) => o.result.outcome !== "pass" || o.experiment === expected?.experiment)
+        .sort((a, b) => Number(b.experiment === expected?.experiment) - Number(a.experiment === expected?.experiment))
+        .map((o) => `${o.experiment === expected?.experiment ? "* " : ""}${o.experiment}: ${cell(o.result)}`);
+      const passed = outcomes.filter((o) => o.result.outcome === "pass" && o.experiment !== expected?.experiment).length;
+      const kind = variant.id === "clean" ? "" : expected ? "" : " (control)";
+      console.log(`${variant.id.padEnd(width)}  ${[...notPassing, `${passed} ${expected ? "other(s) " : ""}pass`].join(" · ")}${kind}`);
+    }
+    console.log("(* the case's own experiment)");
 
     const runs = results.flat().reduce((n, r) => n + r.reps.length, 0);
     console.log(`\n${runs} runs in ${seconds} s`);
@@ -129,7 +141,7 @@ async function main(): Promise<number> {
       console.log(`\nFAIL\n${failures.map((f) => `  - ${f}`).join("\n")}`);
       return 1;
     }
-    console.log("\nPASS: the clean shop passes every experiment; each case breaks its rules in every run.");
+    console.log("\nPASS: the clean shop and the controls pass every experiment; each case breaks its rules in every run.");
     return 0;
   } finally {
     await runner.close();

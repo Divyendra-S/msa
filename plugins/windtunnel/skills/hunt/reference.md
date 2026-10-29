@@ -7,50 +7,50 @@ Files live in `.windtunnel/` next to `windtunnel.config.yaml`. Flows, experiment
 ```ts
 import { flow } from "windtunnel";   // resolved by Wind Tunnel; nothing to install
 
-// Buy one product and wait for the confirmation.
-//   params.product  product name (default "Ceramic Mug")
+// Book one seat and wait for the confirmation.
+//   params.show  show name (default "Opening Night")
 export default flow(async ({ page, step, login, params }) => {
-  const product: string = params.product ?? "Ceramic Mug";
+  const show: string = params.show ?? "Opening Night";
   await login();                                   // runs flows/login.ts as this tab's user
-  await step("add-item", async () => {
-    await page.goto("/");
-    const card = page.locator(".card", { has: page.getByRole("heading", { name: product }) });
-    await card.getByRole("button", { name: "Add to cart" }).click();
-    await card.getByText("Added").waitFor();
+  await step("pick-seat", async () => {
+    await page.goto("/shows");
+    const card = page.locator(".show", { has: page.getByRole("heading", { name: show }) });
+    await card.getByRole("button", { name: "Pick a seat" }).click();
+    await page.getByRole("button", { name: "Seat A1" }).click();
   });
-  await step("open-cart", () => page.goto("/cart"));
-  await step("pay", () => page.getByRole("button", { name: "Pay now" }).click());
+  await step("open-checkout", () => page.goto("/checkout"));
+  await step("pay", () => page.getByRole("button", { name: "Pay" }).click());
   await step("confirmation", async () => {
-    const done = page.getByText("Order confirmed");
+    const done = page.getByText("Booking confirmed");
     // Accept every valid ending under the experiment, or the correct app errors instead of passing.
-    await (params.mayBeSoldOut ? done.or(page.getByText(/out of stock/)) : done).waitFor();
+    await (params.maySellOut ? done.or(page.getByText(/sold out/)) : done).waitFor();
   });
 });
 ```
 
 - Context: `page` (Playwright, `baseURL` set), `step(name, fn)`, `login(name?)` (this tab's user, or another config user by name: `login("bob")` on the same browser, as on a shared computer; evidence then shows `alice (as bob)`), `user` / `users` (`name`, `email`, `password`), `params`, `tab` (string: `alice`, `bob`, `alice#2`), `clock`.
-- A flow can branch on the tab, e.g. a second tab that keeps shopping while the first pays: `if (tab.includes("#")) { … }`.
+- A flow can branch on the tab, e.g. a second tab that keeps browsing while the first pays: `if (tab.includes("#")) { … }`.
 - A step is one user action and ends when the network is quiet. Perturbations attach to step names. Keep every page action inside a step.
 - Flows act like a user; they don't check for bugs. Rules do that. Use `getByRole`, `getByLabel`, `getByText` with the names the map's live crawl lists. If a name changes later, the run heals the flow file itself.
 - One flow can serve many experiments through `params`.
-- A request the page itself wouldn't send (someone else's id, a tampered body): send it from the page, `await page.evaluate(() => fetch("/api/orders/1"))`, so it carries the browser's cookies, goes through the harness and shows in the evidence.
-- A bug that changes no data (another user's order is readable) breaks no SQL rule. There the flow checks the answer and throws: `if (res.status !== 404) throw new Error("bob can read alice's order 1")`. The run then errors with that message, and the failure sorting hands it to you to call a bug.
+- A request the page itself wouldn't send (a tampered body, an id from the URL bar): send it from the page, `await page.evaluate(() => fetch("/api/bookings/1"))`, so it carries the browser's cookies, goes through the harness and shows in the evidence. The same request as another user: the `replay-as` perturbation.
+- A bug that changes no data (another user's booking is readable, a confirmation shown for a payment that failed) breaks no rule on the app's tables: write the rule on what users got or saw (`windtunnel_requests`, `windtunnel_pages`, below).
 
 ## Experiment: `.windtunnel/experiments/<id>.yaml`
 
 ```yaml
-description: The app saves the order but the browser never gets the answer, so the user clicks "Pay now" again.
-flow: checkout
-params: { product: Limited Print }   # optional, passed to the flow
+description: The app saves the booking but the browser never gets the answer, so the user clicks "Pay" again.
+flow: book-seat
+params: { show: Last Show }          # optional, passed to the flow
 users: [alice, bob]                  # one tab per entry, all at once (default: first config user)
 perturb:
   - do: lose-response
-    request: POST /api/orders
+    request: POST /api/bookings
     step: pay
   - do: repeat
     step: pay
 race:
-  request: POST /api/orders
+  request: POST /api/bookings
   order: each
 webhooks: late
 rules: all                           # or [rule-id, …] (default: all)
@@ -62,16 +62,17 @@ Defaults inside a run: each Playwright action waits up to 10 s, a navigation up 
 
 The id is the file name. Unknown fields, steps, users, tabs or rules are errors.
 
-Request patterns: `"POST /api/orders"`, `"GET /api/orders/:id"`, `"* /api/**"` (query ignored). In Next.js, client navigations and `router.refresh()` are React Server Component fetches (`GET /path?_rsc=…`, shown as `(RSC)` in evidence) that also match `GET /path`: add `step:` (and `tab:`) so a perturbation hits the request you mean.
+Request patterns: `"POST /api/bookings"`, `"GET /api/bookings/:id"`, `"* /api/**"` (query ignored). In Next.js, client navigations and `router.refresh()` are React Server Component fetches (`GET /path?_rsc=…`, shown as `(RSC)` in evidence) that also match `GET /path`: add `step:` (and `tab:`) so a perturbation hits the request you mean.
 
 Network perturbations (`request` required; optional `step`, `tab`, `count: n | all`):
 
 | `do` | Effect |
 |---|---|
 | `delay` (`ms: 3s`) | request waits before it is sent |
-| `fail` (`status: 503`) | harness answers; the app never sees it |
+| `fail` (`status: 503`, `after: 3s`) | harness answers (after `after`: a slow server that gives up); the app never sees it |
 | `lose-response` | app handles it; the browser gets a network error |
 | `duplicate` | app gets it twice; browser gets the first answer |
+| `replay-as` (`user: bob`) | app answers the tab; then the same request is sent again with another test user's session (tab `bob (replay)`, logged in before the flow starts). Catch it with a rule on `windtunnel_requests` |
 
 Browser and state perturbations (`step` required; optional `tab`):
 
@@ -95,12 +96,16 @@ Webhooks (needs `mockPay` in the config; one charge sends one event, so `out-of-
 ## Rules: `.windtunnel/rules.yaml`
 
 ```yaml
-one-order-per-cart:
-  description: A cart turns into at most one order.
-  sql: SELECT cart_id, count(*) AS orders FROM orders GROUP BY cart_id HAVING count(*) > 1
-stock-non-negative:
-  description: Stock never goes below zero.
-  sql: SELECT id, stock FROM products WHERE stock < 0
+one-booking-per-seat:
+  description: A seat is booked at most once per show.
+  sql: >-
+    SELECT show_id, seat, count(*) AS bookings FROM bookings
+    WHERE status <> 'cancelled' GROUP BY show_id, seat HAVING count(*) > 1
+show-never-oversold:
+  description: A show never has more bookings than seats.
+  sql: >-
+    SELECT s.id, s.capacity, count(*) AS booked FROM shows s JOIN bookings b ON b.show_id = s.id
+    WHERE b.status <> 'cancelled' GROUP BY s.id, s.capacity HAVING count(*) > s.capacity
 ```
 
 Each query lists the rows that break the rule and must return nothing on the seed data. Return the columns that explain the breakage (ids, counts). Rules run read-only after the flow and webhooks finish.
@@ -108,15 +113,38 @@ Each query lists the rows that break the rule and must return nothing on the see
 To compare with the start, read the seed copy in the `windtunnel_seed` schema (same table names):
 
 ```yaml
-stock-matches-sales:
-  description: Stock taken since the seed equals the units in orders that didn't fail.
+balance-matches-ledger:
+  description: Each balance moved by exactly the ledger entries added since the start.
   sql: >-
-    SELECT p.id, p.stock, s.stock - coalesce(sold.units, 0) AS expected
-    FROM products p JOIN windtunnel_seed.products s ON s.id = p.id
-    LEFT JOIN (SELECT oi.product_id, sum(oi.quantity)::int AS units FROM order_items oi
-               JOIN orders o ON o.id = oi.order_id WHERE o.status <> 'failed'
-               GROUP BY oi.product_id) sold ON sold.product_id = p.id
-    WHERE p.stock <> s.stock - coalesce(sold.units, 0)
+    SELECT a.id, a.balance, s.balance + coalesce(l.total, 0) AS expected
+    FROM accounts a JOIN windtunnel_seed.accounts s ON s.id = a.id
+    LEFT JOIN (SELECT account_id, sum(amount) AS total FROM ledger
+               WHERE id NOT IN (SELECT id FROM windtunnel_seed.ledger)
+               GROUP BY account_id) l ON l.account_id = a.id
+    WHERE a.balance <> s.balance + coalesce(l.total, 0)
+```
+
+Rules can also read what users got and saw: two tables of the run, next to the app's own (they exist only while the rules run; the app's database is not changed).
+
+| Table | Columns |
+|---|---|
+| `windtunnel_requests` | `id, tab, user_name, user_email, step, method, path, query, status, failure, reached_app, at_ms, harness`: every request a page (or `replay-as`) sent; `status` is null when no answer came |
+| `windtunnel_pages` | `tab, user_name, user_email, step, attempt, at_ms, path, text`: the page's visible text (first 2,000 characters) when each step ended |
+
+```yaml
+documents-shown-only-to-their-owner:
+  description: A document is shown only to its owner.
+  sql: >-
+    SELECT r.user_name, r.path, r.status, d.owner_id
+    FROM windtunnel_requests r JOIN users u ON u.email = r.user_email
+    JOIN documents d ON d.id = substring(r.path from '^/api/documents/(\d+)$')::int
+    WHERE r.status = 200 AND d.owner_id <> u.id
+booking-confirmed-means-paid:
+  description: When a page says "Booking confirmed", its user has a paid booking.
+  sql: >-
+    SELECT p.tab, p.step FROM windtunnel_pages p JOIN users u ON u.email = p.user_email
+    WHERE p.text LIKE '%Booking confirmed%'
+      AND NOT EXISTS (SELECT 1 FROM bookings b WHERE b.user_id = u.id AND b.status = 'paid')
 ```
 
 ## Outcomes

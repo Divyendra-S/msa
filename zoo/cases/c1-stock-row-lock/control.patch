@@ -1,0 +1,19 @@
+--- a/zoo/shop/app/api/orders/route.ts
++++ b/zoo/shop/app/api/orders/route.ts
+@@ -46,11 +46,13 @@ export async function POST(req: Request) {
+         return existing.rows[0]!;
+       }
+       for (const item of items) {
+-        const reserved = await db.query("UPDATE products SET stock = stock - $1 WHERE id = $2 AND stock >= $1", [
+-          item.quantity,
++        // Lock the product row until the order commits, so no other checkout reads this stock meanwhile.
++        // (Items come in product id order, so two checkouts always lock in the same order.)
++        const product = await db.query<{ stock: number }>("SELECT stock FROM products WHERE id = $1 FOR UPDATE", [
+           item.product_id,
+         ]);
+-        if (reserved.rowCount === 0) throw new OutOfStockError(item.name);
++        if ((product.rows[0]?.stock ?? 0) < item.quantity) throw new OutOfStockError(item.name);
++        await db.query("UPDATE products SET stock = stock - $1 WHERE id = $2", [item.quantity, item.product_id]);
+         await db.query(
+           "INSERT INTO order_items (order_id, product_id, quantity, unit_price_cents) VALUES ($1, $2, $3, $4)",
+           [newOrder.id, item.product_id, item.quantity, item.price_cents],

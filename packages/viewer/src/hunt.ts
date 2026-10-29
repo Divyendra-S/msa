@@ -318,7 +318,7 @@ function findUsage(o: Record<string, any>, depth = 0): HuntUsage | undefined {
 }
 
 /** Turn-by-turn counts add up; a final summary event replaces the sum when it is larger. */
-function addUsage(total: HuntUsage, u: HuntUsage, type?: string): void {
+export function addUsage(total: HuntUsage, u: HuntUsage, type?: string): void {
   if (type && /result|summary|session\.(end|completed)|thread\.completed|^done$|^end$/i.test(type)) {
     if (u.input + u.output >= total.input + total.output) Object.assign(total, u);
     return;

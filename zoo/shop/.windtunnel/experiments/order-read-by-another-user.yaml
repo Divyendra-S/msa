@@ -1,0 +1,8 @@
+description: Alice pays and her order page asks for the order's status; Bob sends the same request with his own session.
+flow: checkout
+perturb:
+  - do: replay-as
+    request: GET /api/orders/:id
+    user: bob
+# A slow confirmation, so the order page asks for the status at least once.
+webhooks: { delay: 1s }
