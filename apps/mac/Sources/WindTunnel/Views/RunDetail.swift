@@ -64,10 +64,10 @@ struct RunDetailView: View {
           LoadingBlock()
         }
       }
-      .padding(.horizontal, 28)
+      .padding(.horizontal, Theme.gutter)
       .padding(.top, 10)
       .padding(.bottom, 32)
-      .frame(maxWidth: 1100, alignment: .leading)
+      .frame(maxWidth: Theme.measure, alignment: .leading)
     }
     .scrollIndicators(.automatic)
     .animation(Theme.spring, value: tab)
@@ -124,9 +124,9 @@ struct RunDetailView: View {
 struct LoadingBlock: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
+      // Lines of dithered cells with light running along them, where the text will be.
       ForEach(0..<4, id: \.self) { i in
-        RoundedRectangle(cornerRadius: 3).fill(Theme.overlay(0.06)).frame(width: [420, 300, 520, 260][i], height: 10)
-          .phaseAnimator([0.4, 1]) { v, o in v.opacity(o) } animation: { _ in .easeInOut(duration: 0.9).delay(Double(i) * 0.08) }
+        DitherBar(width: [420, 300, 520, 260][i], height: 8).opacity(0.7)
       }
     }
     .padding(.top, 8)
@@ -145,7 +145,7 @@ struct RunHeader: View {
     VStack(alignment: .leading, spacing: 0) {
       HStack(alignment: .center, spacing: 8) {
         Text(detail.experiment.id)
-          .font(Theme.sans(20, .semibold)).tracking(-0.2)
+          .font(Theme.sans(22, .semibold)).tracking(-0.2)
           .foregroundStyle(Theme.text)
           .textSelection(.enabled)
           .lineLimit(1)
@@ -252,7 +252,7 @@ struct SummaryTab: View {
         if let warnings = rep.warnings, !warnings.isEmpty {
           Panel("Warnings", tint: Theme.flaky) {
             VStack(alignment: .leading, spacing: 6) {
-              ForEach(warnings, id: \.self) { w in Text(w).font(Theme.sans(12.5)).foregroundStyle(Theme.dim) }
+              ForEach(warnings, id: \.self) { w in Text(w).font(Theme.sans(12)).foregroundStyle(Theme.dim) }
             }
           }
         }
@@ -268,7 +268,7 @@ struct SummaryTab: View {
                   Text(w.deliveries.count > 1 ? "delivered \(w.deliveries.count)×" : "")
                     .foregroundStyle(Theme.flaky)
                 }
-                .font(Theme.mono(11.5))
+                .font(Theme.mono(11))
               }
             }
           }
@@ -330,13 +330,13 @@ struct Verdict: View {
         if !broken.isEmpty {
           ForEach(broken) { rule in
             VStack(alignment: .leading, spacing: 0) {
-              Text(label("Rule broken")).font(Theme.sans(11.5, .medium)).foregroundStyle(Theme.fail)
+              Text(label("Rule broken")).font(Theme.sans(11, .medium)).foregroundStyle(Theme.fail)
               Text(rule.description ?? rule.id)
                 .font(Theme.sans(17, .semibold)).tracking(-0.2).foregroundStyle(Theme.text)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.top, 6)
               if rule.description != nil {
-                Text(rule.id).font(Theme.mono(11.5)).foregroundStyle(Theme.faint).textSelection(.enabled).padding(.top, 4)
+                Text(rule.id).font(Theme.mono(11)).foregroundStyle(Theme.faint).textSelection(.enabled).padding(.top, 4)
               }
               if let rows = rule.rows, !rows.isEmpty {
                 RowsTable(rows: Array(rows.prefix(8)))
@@ -350,13 +350,13 @@ struct Verdict: View {
           }
         } else if let error = rep.error {
           VStack(alignment: .leading, spacing: 6) {
-            Text(label("Didn't finish")).font(Theme.sans(11.5, .medium)).foregroundStyle(Theme.error)
-            Text(error).font(Theme.mono(12.5)).foregroundStyle(Theme.text).textSelection(.enabled)
+            Text(label("Didn't finish")).font(Theme.sans(11, .medium)).foregroundStyle(Theme.error)
+            Text(error).font(Theme.mono(12)).foregroundStyle(Theme.text).textSelection(.enabled)
               .fixedSize(horizontal: false, vertical: true)
           }
         } else {
           VStack(alignment: .leading, spacing: 6) {
-            Text(label(otherRepsBroke > 0 ? "This repetition held" : "Held")).font(Theme.sans(11.5, .medium)).foregroundStyle(Theme.dim)
+            Text(label(otherRepsBroke > 0 ? "This repetition held" : "Held")).font(Theme.sans(11, .medium)).foregroundStyle(Theme.dim)
             Text("Every rule held").font(Theme.sans(17, .semibold)).tracking(-0.2).foregroundStyle(Theme.text)
             Text(otherRepsBroke > 0
               ? "\(otherRepsBroke) of \(detail.total) repetitions broke a rule: pick a red dot above to see one."
@@ -450,7 +450,7 @@ struct RulesPanel: View {
         ForEach(broken.filter { $0.sql != nil }) { rule in
           VStack(alignment: .leading, spacing: 8) {
             if broken.count > 1 { Text(rule.id).font(Theme.mono(12)).foregroundStyle(Theme.fail) }
-            Text(SQL.highlight(rule.sql ?? "")).font(Theme.mono(11.5)).textSelection(.enabled).lineSpacing(2)
+            Text(SQL.highlight(rule.sql ?? "")).font(Theme.mono(12)).textSelection(.enabled).lineSpacing(3)
               .well(padding: 14)
           }
         }
@@ -464,7 +464,7 @@ struct RulesPanel: View {
                   Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold)).rotationEffect(.degrees(showHeld ? 90 : 0))
                   Text("\(held.count) held")
                 }
-                .font(Theme.sans(12.5)).foregroundStyle(Theme.dim)
+                .font(Theme.sans(12)).foregroundStyle(Theme.dim)
                 .contentShape(Rectangle())
               }
               .buttonStyle(.plain)
@@ -472,7 +472,7 @@ struct RulesPanel: View {
             if showHeld || broken.isEmpty {
               FlowLayout(spacing: 20, lineSpacing: 8) {
                 ForEach(held) { rule in
-                  Text(rule.id).font(Theme.mono(11.5)).foregroundStyle(Theme.faint)
+                  Text(rule.id).font(Theme.mono(11)).foregroundStyle(Theme.faint)
                     .help(rule.description ?? rule.id)
                 }
               }
@@ -500,7 +500,7 @@ struct RowsTable: View {
       ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
         GridRow {
           ForEach(row.fields, id: \.0) { _, v in
-            Text(Short.value(v)).font(Theme.mono(11.5)).foregroundStyle(Theme.text).lineLimit(1)
+            Text(Short.value(v)).font(Theme.mono(11)).foregroundStyle(Theme.text).lineLimit(1)
           }
         }
       }

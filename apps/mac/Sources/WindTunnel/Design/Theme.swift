@@ -60,6 +60,23 @@ enum Theme {
     .system(size: size, weight: weight, design: .default).monospacedDigit()
   }
 
+  // The type scale. Interface text is 11, 12, 13, 15 or 17; titles 22; the start screens' headlines
+  // 30 and 44. Mono is 10 to 13. Nothing in between, so sizes alone show what matters.
+
+  /// A start screen's headline: `Which app should we try to break?`
+  static let display = Font.system(size: 44, weight: .semibold)
+  static let displayTracking: CGFloat = -1.4
+  /// A screen's own name: the app on the second start screen, an empty pane's next step.
+  static let title = Font.system(size: 30, weight: .semibold)
+  static let titleTracking: CGFloat = -0.8
+
+  /// Space either side of a pane, shared by the top bar so titles and content line up.
+  static let gutter: CGFloat = 28
+  /// The widest a pane's content gets. Wider windows leave the room on the right.
+  static let measure: CGFloat = 1100
+  /// The start screens' left margin.
+  static let startMargin: CGFloat = 72
+
   /// Corners: wells and fields; controls are a little tighter.
   static let radius: CGFloat = 8
   static let controlRadius: CGFloat = 6
@@ -200,7 +217,7 @@ struct Hairline: View {
 extension View {
   /// A small heading over a column: `Repetitions`.
   func label(_ color: Color = Theme.faint) -> some View {
-    font(Theme.sans(11.5, .medium)).foregroundStyle(color)
+    font(Theme.sans(11, .medium)).foregroundStyle(color)
   }
 }
 
@@ -231,7 +248,7 @@ struct Panel<Content: View, Accessory: View>: View {
       if rule { Hairline() }
       HStack(alignment: .firstTextBaseline, spacing: 8) {
         Text(title)
-          .font(mono ? Theme.mono(12.5, .medium) : Theme.sans(13, .semibold))
+          .font(mono ? Theme.mono(12, .medium) : Theme.sans(13, .semibold))
           .foregroundStyle(tint ?? Theme.text)
         Spacer(minLength: 8)
         accessory().font(Theme.sans(12)).foregroundStyle(Theme.faint)
@@ -263,13 +280,17 @@ struct OutcomeBadge: View {
   }
 }
 
-/// Buttons: small rounded rectangles. Prominent is light on dark; the rest a quiet fill.
+/// Buttons: small rounded rectangles. Prominent is light on dark; the rest a quiet fill. Large is
+/// for the one thing a start screen asks for.
 struct ActionButtonStyle: ButtonStyle {
   var prominent = false
   var color: Color? = nil
+  var large = false
+  /// Fills the width it's given, label centred: the main action at the foot of a column.
+  var wide = false
 
   func makeBody(configuration: Configuration) -> some View {
-    ActionButtonBody(configuration: configuration, prominent: prominent, color: color)
+    ActionButtonBody(configuration: configuration, prominent: prominent, color: color, large: large, wide: wide)
   }
 }
 
@@ -277,27 +298,32 @@ private struct ActionButtonBody: View {
   let configuration: ButtonStyleConfiguration
   let prominent: Bool
   let color: Color?
+  let large: Bool
+  let wide: Bool
   @State private var hovering = false
   @Environment(\.isEnabled) private var enabled
 
   var body: some View {
-    let shape = RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
+    let shape = RoundedRectangle(cornerRadius: large ? Theme.radius : Theme.controlRadius, style: .continuous)
     configuration.label
-      .font(Theme.sans(12.5, .medium))
+      .font(Theme.sans(large ? 13 : 12, .medium))
       .labelStyle(ActionLabelStyle())
       .foregroundStyle(foreground)
-      .padding(.horizontal, 12)
-      .frame(height: 28)
+      .padding(.horizontal, large ? 16 : 11)
+      .frame(maxWidth: wide ? .infinity : nil)
+      .frame(height: large ? 36 : 28)
       .background {
         if prominent {
-          shape.fill(enabled ? Theme.text.opacity(hovering ? 1 : 0.9) : Theme.overlay(0.08))
+          shape.fill(enabled ? Theme.text.opacity(hovering ? 1 : 0.92) : Theme.overlay(0.08))
         } else {
           shape.fill(Theme.overlay(hovering && enabled ? 0.1 : 0.06))
         }
       }
       .contentShape(shape)
-      .opacity(configuration.isPressed ? 0.8 : 1)
+      .scaleEffect(configuration.isPressed ? 0.985 : 1)
+      .opacity(configuration.isPressed ? 0.85 : 1)
       .animation(Theme.snappy, value: hovering)
+      .animation(Theme.snappy, value: configuration.isPressed)
       .onHover { hovering = $0 }
   }
 
@@ -314,6 +340,46 @@ private struct ActionLabelStyle: LabelStyle {
       configuration.icon.font(.system(size: 11, weight: .semibold))
       configuration.title
     }
+  }
+}
+
+/// A button that reads as words: quiet until the pointer is on it.
+struct LinkButtonStyle: ButtonStyle {
+  var color: Color = Theme.faint
+  var size: CGFloat = 12
+
+  func makeBody(configuration: Configuration) -> some View {
+    LinkButtonBody(configuration: configuration, color: color, size: size)
+  }
+}
+
+private struct LinkButtonBody: View {
+  let configuration: ButtonStyleConfiguration
+  let color: Color
+  let size: CGFloat
+  @State private var hovering = false
+  @Environment(\.isEnabled) private var enabled
+
+  var body: some View {
+    configuration.label
+      .font(Theme.sans(size, .medium))
+      .labelStyle(ActionLabelStyle())
+      .foregroundStyle(!enabled ? Theme.ghost : hovering ? Theme.text : color)
+      .opacity(configuration.isPressed ? 0.7 : 1)
+      .contentShape(Rectangle())
+      .animation(Theme.snappy, value: hovering)
+      .onHover { hovering = $0 }
+  }
+}
+
+/// A keyboard shortcut inside a button's label, `⌘O` or `↩`, a step quieter than the words.
+struct KeyHint: View {
+  let keys: String
+
+  init(_ keys: String) { self.keys = keys }
+
+  var body: some View {
+    Text(keys).font(Theme.sans(11, .medium)).opacity(0.45).padding(.leading, 2)
   }
 }
 

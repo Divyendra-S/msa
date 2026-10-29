@@ -13,9 +13,10 @@ struct Glow: View {
   var time: Double? = nil
   @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @Environment(\.colorScheme) private var scheme
+  @Environment(\.controlActiveState) private var active
 
   var body: some View {
-    TimelineView(.animation(minimumInterval: 1 / 30, paused: time != nil || reduceMotion)) { timeline in
+    TimelineView(.animation(minimumInterval: 1 / 15, paused: time != nil || reduceMotion || active == .inactive)) { timeline in
       let t = time ?? (reduceMotion ? 0 : timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 10_000))
       MeshGradient(width: 4, height: 4, points: Self.points(t), colors: scheme == .light ? Self.lightColors : Self.colors, smoothsColors: true, colorSpace: .perceptual)
     }

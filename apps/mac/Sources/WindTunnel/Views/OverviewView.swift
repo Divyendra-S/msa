@@ -19,11 +19,11 @@ struct OverviewView: View {
           }
           .rise(0.1)
         }
-        .padding(.horizontal, 28)
+        .padding(.horizontal, Theme.gutter)
         .padding(.top, 4)
         .padding(.bottom, 32)
-        .frame(maxWidth: 1100, alignment: .leading)
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: Theme.measure, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
       .scrollIndicators(.never)
     }
@@ -51,13 +51,13 @@ private struct Hero: View {
             .foregroundStyle(Theme.text)
             .contentTransition(.numericText(value: Double(shown)))
           Text("of \(outcomes.count) experiments holding")
-            .font(Theme.sans(16)).foregroundStyle(Theme.faint)
+            .font(Theme.sans(15)).foregroundStyle(Theme.faint)
         }
         SplitBar(parts: [(passing, Theme.accent), (failing, Theme.fail), (flaky, Theme.flaky), (other, Theme.overlay(0.12))])
           .frame(width: 340)
           .padding(.top, 14)
         Text(summary(failing: failing, flaky: flaky, other: other))
-          .font(Theme.sans(12.5)).foregroundStyle(Theme.faint)
+          .font(Theme.sans(12)).foregroundStyle(Theme.faint)
           .padding(.top, 12)
       }
       .layoutPriority(1)
@@ -92,7 +92,7 @@ private struct HoldingChart: View {
     let top = Double(max(experiments, series.map { $0.held + $0.failed }.max() ?? 1, 1))
     VStack(alignment: .leading, spacing: 8) {
       HStack(alignment: .firstTextBaseline) {
-        Text("After each run").font(Theme.sans(11.5)).foregroundStyle(Theme.ghost)
+        Text("After each run").font(Theme.sans(11)).foregroundStyle(Theme.ghost)
         Spacer()
         if let last = series.last {
           Legend(color: Theme.accent, text: "\(last.held) holding")
@@ -160,7 +160,7 @@ private struct HoldingChart: View {
     var body: some View {
       HStack(spacing: 6) {
         Circle().fill(color).frame(width: 6, height: 6)
-        Text(text).font(Theme.sans(11.5)).monospacedDigit().foregroundStyle(Theme.dim)
+        Text(text).font(Theme.sans(11)).monospacedDigit().foregroundStyle(Theme.dim)
       }
     }
   }
@@ -181,7 +181,10 @@ private struct FailingPanel: View {
         return x != y ? x < y : a.0.experiment < b.0.experiment
       }
     Panel("Failing", tint: bad.isEmpty ? nil : Theme.text, accessory: {
-      if !bad.isEmpty { Text("newest run of each, oldest to newest") }
+      if !bad.isEmpty {
+        Text("\(bad.count)").monospacedDigit().foregroundStyle(Theme.fail)
+          .help("Each experiment's newest run. The cells are its recent runs, oldest to newest.")
+      }
     }) {
       if bad.isEmpty {
         HStack(spacing: 10) {
@@ -213,26 +216,26 @@ private struct FailingRow: View {
 
   var body: some View {
     let history = Array((model.runsByExperiment[run.experiment] ?? []).prefix(slots))
-    HStack(spacing: 20) {
-      Circle().fill(Tone(run.outcome).color).frame(width: 6, height: 6)
+    HStack(spacing: 0) {
+      Circle().fill(Tone(run.outcome).color).frame(width: 6, height: 6).frame(width: 18, alignment: .leading)
       VStack(alignment: .leading, spacing: 4) {
-        Text(run.experiment).font(Theme.sans(13.5, .medium)).foregroundStyle(Theme.text).lineLimit(1)
+        Text(run.experiment).font(Theme.sans(13, .medium)).foregroundStyle(Theme.text).lineLimit(1)
         Text(run.brokenRules.isEmpty ? Tone.word(run.outcome).lowercased() : run.brokenRules.joined(separator: ", "))
-          .font(Theme.mono(11.5)).foregroundStyle(Theme.faint).lineLimit(1)
+          .font(Theme.mono(11)).foregroundStyle(Theme.faint).lineLimit(1)
       }
-      .frame(width: 250, alignment: .leading)
+      .frame(width: 240, alignment: .leading)
       // What the experiment does, in its own words.
       Text(model.experiments.first { $0.id == run.experiment }?.description ?? "")
-        .font(Theme.sans(12.5)).foregroundStyle(Theme.faint).lineSpacing(2)
+        .font(Theme.sans(12)).foregroundStyle(hovering ? Theme.dim : Theme.faint).lineSpacing(2)
         .lineLimit(2)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.trailing, 24)
       RunStrip(runs: history, slots: slots, cell: CGSize(width: 9, height: 16))
       Text(streak?.text ?? "")
         .font(Theme.sans(12, streak == .new ? .medium : .regular))
         .foregroundStyle(streak == .new ? Theme.fail : Theme.faint)
-        .frame(width: 70, alignment: .trailing)
+        .frame(width: 76, alignment: .trailing)
         .help(streak?.help ?? "")
-      Image(systemName: "chevron.right").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(hovering ? Theme.dim : .clear)
     }
     .padding(.horizontal, 10)
     .frame(height: 58)
@@ -282,12 +285,12 @@ private struct HoldingRow: View {
   var body: some View {
     HStack(spacing: 12) {
       Text(name)
-        .font(Theme.sans(12.5))
+        .font(Theme.sans(12))
         .foregroundStyle(hovering ? Theme.text : Theme.dim)
         .lineLimit(1).truncationMode(.middle)
       Spacer(minLength: 8)
       if runs.isEmpty {
-        Text("not run").font(Theme.sans(11.5)).foregroundStyle(Theme.ghost)
+        Text("not run").font(Theme.sans(11)).foregroundStyle(Theme.ghost)
       } else {
         RunStrip(runs: runs, slots: 10, cell: CGSize(width: 5, height: 12), gap: 2)
       }
@@ -435,7 +438,7 @@ private struct FirstRun: View {
         }
         .buttonStyle(ActionButtonStyle(prominent: true))
         Button("Copy /windtunnel:hunt checkout") { model.copy("/windtunnel:hunt checkout") }
-          .buttonStyle(.plain).font(Theme.sans(12)).foregroundStyle(Theme.faint)
+          .buttonStyle(LinkButtonStyle())
           .padding(.leading, 6)
       }
       .padding(.top, 28)
@@ -463,7 +466,7 @@ private struct FirstRun: View {
       .rise(0.08)
       VStack(alignment: .leading, spacing: 6) {
         ForEach(model.experiments.prefix(8)) { e in
-          Text(e.id).font(Theme.mono(11.5)).foregroundStyle(Theme.faint).lineLimit(1)
+          Text(e.id).font(Theme.mono(11)).foregroundStyle(Theme.faint).lineLimit(1)
         }
         if model.experiments.count > 8 {
           Text("and \(model.experiments.count - 8) more").font(Theme.sans(12)).foregroundStyle(Theme.ghost)

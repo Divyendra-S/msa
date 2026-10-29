@@ -1,20 +1,27 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// First run, in two screens. Pick the app; then see what its code shows, read by `windtunnel scan`
-/// with nothing set up yet, beside what to do next. The Mac is checked quietly meanwhile and only
-/// speaks up when something is missing. A soft light sits in a corner.
+/// First run, in two screens. Pick the app, beside a trace of requests where two that run at once
+/// get caught, the way the bugs it finds do; then the app's code, read by `windtunnel scan` with nothing
+/// set up yet, beside what to do next. The Mac is checked quietly meanwhile and only speaks up when
+/// something is missing.
 struct SetupView: View {
   @Environment(AppModel.self) private var model
   @State private var dropping = false
 
   var body: some View {
     @Bindable var setup = model.setup
+    let picking = setup.step == .app
     ZStack {
-      Glow(corner: setup.step == .app ? .bottomTrailing : .topTrailing, strength: setup.step == .app ? (dropping ? 0.95 : 0.6) : 0.32)
+      Glow(corner: picking ? .bottomTrailing : .topTrailing, strength: picking ? (dropping ? 0.95 : 0.6) : 0.28)
         .ignoresSafeArea()
-        .animation(.easeInOut(duration: 0.8), value: dropping)
-        .animation(.easeInOut(duration: 0.8), value: setup.step)
+      if picking {
+        RequestTrace()
+          .mask(StartScreenFade())
+          .opacity(dropping ? 1 : 0.85)
+          .ignoresSafeArea()
+          .transition(.opacity)
+      }
       Group {
         switch setup.step {
         case .app: PickApp(dropping: dropping)
@@ -25,7 +32,8 @@ struct SetupView: View {
       .id(setup.step)
       .transition(.opacity)
     }
-    .animation(.easeInOut(duration: 0.3), value: setup.step)
+    .animation(.easeInOut(duration: 0.6), value: dropping)
+    .animation(.easeInOut(duration: 0.35), value: setup.step)
     .onDrop(of: [.fileURL], isTargeted: $dropping) { providers in
       guard let provider = providers.first else { return false }
       _ = provider.loadObject(ofClass: URL.self) { url, _ in
@@ -47,12 +55,12 @@ struct SetupView: View {
   }
 }
 
-/// The name in the corner, where a title bar would put it.
-private struct Brand: View {
+/// The mark and the name, where a title bar would put them.
+struct Brand: View {
   var body: some View {
     HStack(spacing: 8) {
       LogoMark(size: 15)
-      Text("Wind Tunnel").font(Theme.sans(12.5, .medium)).foregroundStyle(Theme.faint)
+      Text("Wind Tunnel").font(Theme.sans(13, .medium)).foregroundStyle(Theme.dim)
     }
   }
 }
@@ -65,44 +73,57 @@ private struct PickApp: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      Brand().padding(.top, 52)
-      Spacer(minLength: 40)
+      Brand().padding(.top, 46)
+      Spacer(minLength: 32)
       Text("Which app should\nwe try to break?")
-        .font(.system(size: 46, weight: .semibold)).tracking(-1.3).lineSpacing(-2)
+        .font(Theme.display).tracking(Theme.displayTracking)
         .foregroundStyle(Theme.text)
         .fixedSize(horizontal: false, vertical: true)
         .rise()
-      Text("Choose its folder, or drop it anywhere here. It reads the code first and shows which handlers could leave your data wrong when requests overlap: two clicks, two tabs, a lost response, a webhook twice. Nothing runs yet, and no model is used.")
-        .font(Theme.sans(15)).foregroundStyle(Theme.dim).lineSpacing(4)
+      Text("Choose its folder, or drop it on this window. We read the code and point at the handlers that could go wrong when requests overlap. Nothing runs yet.")
+        .font(Theme.sans(15)).foregroundStyle(Theme.dim).lineSpacing(5)
         .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: 520, alignment: .leading)
-        .padding(.top, 18)
+        .frame(maxWidth: 440, alignment: .leading)
+        .padding(.top, 20)
         .rise(0.05)
-      HStack(spacing: 14) {
-        Button("Choose Folder…", action: choose)
-          .buttonStyle(ActionButtonStyle(prominent: true))
-          .keyboardShortcut("o", modifiers: .command)
-        Text(dropping ? "Let go to read it" : "or drop it on this window")
-          .font(Theme.sans(12.5)).foregroundStyle(dropping ? Theme.text : Theme.faint)
-          .contentTransition(.opacity)
+      HStack(spacing: 18) {
+        Button(action: choose) {
+          HStack(spacing: 8) {
+            Text("Choose Folder…")
+            KeyHint("⌘O")
+          }
+        }
+        .buttonStyle(ActionButtonStyle(prominent: true, large: true))
+        .keyboardShortcut("o", modifiers: .command)
+        HStack(spacing: 7) {
+          Image(systemName: dropping ? "arrow.down.circle.fill" : "arrow.down.to.line")
+            .font(.system(size: 11, weight: .semibold))
+            .contentTransition(.symbolEffect(.replace))
+          Text(dropping ? "Let go to read it" : "or drop it here")
+        }
+        .font(Theme.sans(13))
+        .foregroundStyle(dropping ? Theme.text : Theme.faint)
       }
-      .padding(.top, 30)
+      .padding(.top, 32)
       .rise(0.1)
       if !model.recents.isEmpty {
         VStack(alignment: .leading, spacing: 0) {
-          Text("Opened before").label(Theme.ghost).padding(.bottom, 4)
-          ForEach(model.recents.prefix(4), id: \.self) { path in
-            RecentPick(path: path)
+          Text("Recent").label(Theme.ghost).padding(.bottom, 8)
+          ForEach(model.recents.prefix(3), id: \.self) { path in
+            RecentRow(path: path) {
+              model.setup.choose(path)
+              withAnimation { model.setup.step = .read }
+            }
           }
         }
         .frame(width: 420, alignment: .leading)
-        .padding(.top, 44)
+        .padding(.top, 52)
         .rise(0.15)
       }
-      Spacer(minLength: 40)
-      MacStatus().padding(.bottom, 34)
+      Spacer(minLength: 32)
+      MacStatus().padding(.bottom, 30)
     }
-    .padding(.leading, 88)
+    .padding(.leading, Theme.startMargin)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
   }
 
@@ -119,32 +140,6 @@ private struct PickApp: View {
   }
 }
 
-private struct RecentPick: View {
-  @Environment(AppModel.self) private var model
-  let path: String
-  @State private var hovering = false
-
-  var body: some View {
-    Button {
-      model.setup.choose(path)
-      withAnimation { model.setup.step = .read }
-    } label: {
-      HStack(spacing: 10) {
-        Text((path as NSString).lastPathComponent).font(Theme.sans(13)).foregroundStyle(hovering ? Theme.text : Theme.text.opacity(0.85))
-        Text(Fmt.tilde((path as NSString).deletingLastPathComponent)).font(Theme.sans(12)).foregroundStyle(Theme.faint).lineLimit(1)
-        Spacer()
-      }
-      .padding(.horizontal, 8)
-      .frame(height: 30)
-      .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(hovering ? Theme.hover : .clear))
-      .contentShape(Rectangle())
-    }
-    .buttonStyle(.plain)
-    .padding(.horizontal, -8)
-    .onHover { hovering = $0 }
-  }
-}
-
 /// How the Mac stands, in a line: quiet when it's ready, a button when something's missing.
 private struct MacStatus: View {
   @Environment(AppModel.self) private var model
@@ -154,84 +149,87 @@ private struct MacStatus: View {
     HStack(spacing: 8) {
       if setup.toolchainProblem != nil {
         Circle().fill(Theme.fail).frame(width: 6, height: 6)
-        Text(setup.toolchainProblem?.localizedDescription ?? "").font(Theme.sans(12)).foregroundStyle(Theme.dim).lineLimit(1)
+        Text(setup.toolchainProblem?.localizedDescription ?? "").foregroundStyle(Theme.dim).lineLimit(1)
         review("How to Fix")
       } else if setup.report == nil {
-        BrailleSpinner(color: Theme.faint, size: 10)
-        Text("Checking this Mac").font(Theme.sans(12)).foregroundStyle(Theme.faint)
+        DitherBar(width: 22, height: 4)
+        Text("Checking this Mac").foregroundStyle(Theme.faint)
       } else if let report = setup.report, !report.steps.isEmpty {
         Circle().fill(Theme.flaky).frame(width: 6, height: 6)
         Text(report.steps.count == 1 ? "One thing to set up on this Mac" : "\(report.steps.count) things to set up on this Mac")
-          .font(Theme.sans(12)).foregroundStyle(Theme.dim)
+          .foregroundStyle(Theme.dim)
         review("Review")
       } else {
         Image(systemName: "checkmark").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(Theme.accent)
-        Text("This Mac is ready").font(Theme.sans(12)).foregroundStyle(Theme.faint)
+        Text("This Mac is ready").foregroundStyle(Theme.faint)
         review("Details")
       }
     }
+    .font(Theme.sans(12))
     .animation(Theme.spring, value: setup.report)
   }
 
   private func review(_ title: String) -> some View {
     Button(title) { model.setup.showMac = true }
-      .buttonStyle(.plain).font(Theme.sans(12, .medium)).foregroundStyle(Theme.text.opacity(0.85))
+      .buttonStyle(LinkButtonStyle(color: Theme.text.opacity(0.85)))
       .padding(.leading, 4)
   }
 }
 
 // MARK: - Read the app
 
-/// The app's handlers as the scan read them, the ones worth a look first, beside what to do next.
+/// The app's handlers as the scan read them, the ones worth a look first; beside them, in a column
+/// of its own, what to do next.
 private struct ReadApp: View {
   @Environment(AppModel.self) private var model
 
   var body: some View {
     let setup = model.setup
-    HStack(alignment: .top, spacing: 64) {
+    HStack(spacing: 0) {
       ScrollView {
         VStack(alignment: .leading, spacing: 0) {
           Button {
             withAnimation { setup.step = .app }
           } label: {
-            HStack(spacing: 5) {
-              Image(systemName: "chevron.left").font(.system(size: 9.5, weight: .semibold))
-              Text("Another app")
-            }
+            Label("Another app", systemImage: "chevron.left")
           }
-          .buttonStyle(.plain).font(Theme.sans(12)).foregroundStyle(Theme.faint)
-          .padding(.bottom, 30)
+          .buttonStyle(LinkButtonStyle())
           if let folder = setup.folder {
-            Text(folder.name).font(.system(size: 36, weight: .semibold)).tracking(-0.9).foregroundStyle(Theme.text)
-            Text(facts(folder)).font(Theme.sans(13)).foregroundStyle(Theme.faint).padding(.top, 6)
+            Text(folder.name)
+              .font(Theme.title).tracking(Theme.titleTracking).foregroundStyle(Theme.text)
+              .padding(.top, 26)
+              .rise()
+            Text(facts(folder))
+              .font(Theme.sans(13)).foregroundStyle(Theme.faint)
+              .padding(.top, 6)
               .help(Fmt.tilde(folder.app))
-            Findings(folder: folder).padding(.top, 36)
+              .rise(0.03)
+            Findings(folder: folder).padding(.top, 40)
           }
         }
-        .padding(.top, 72)
+        .padding(.leading, Theme.startMargin)
+        .padding(.trailing, 56)
+        .padding(.top, 64)
         .padding(.bottom, 56)
-        .frame(maxWidth: 640, alignment: .leading)
+        .frame(maxWidth: 820, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
       }
       .scrollIndicators(.never)
       if let folder = setup.folder {
-        NextSteps(folder: folder)
-          .frame(width: 300)
-          .padding(.top, 150)
+        Hairline(vertical: true)
+        NextSteps(folder: folder).frame(width: 340)
       }
     }
-    .padding(.horizontal, 72)
-    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     .onAppear { setup.watch() }
   }
 
   private func facts(_ folder: AppFolder) -> String {
-    var parts = [folder.next.map { "Next.js \($0)" }, folder.packageManager, folder.database].compactMap { $0 }
-    if let scan = model.setup.scan { parts.append("\(Fmt.plural(scan.routes.count, "handler")), \(Fmt.plural(scan.pages, "page"))") }
-    return parts.joined(separator: "  ·  ")
+    [folder.next.map { "Next.js \($0)" }, folder.packageManager, folder.database].compactMap { $0 }.joined(separator: "  ·  ")
   }
 }
 
-/// What the scan found: the handlers worth a look, each pattern in a sentence, then the rest.
+/// What the scan found: how many handlers could go wrong, then each of them with the steps it
+/// takes and what in them could go wrong, then the rest. Shown top to bottom behind a scan line.
 private struct Findings: View {
   @Environment(AppModel.self) private var model
   let folder: AppFolder
@@ -244,49 +242,120 @@ private struct Findings: View {
       } else if let scan = setup.scan {
         let risky = scan.routes.filter { !$0.risks.isEmpty }.sorted { $0.risks.count > $1.risks.count }
         let quiet = scan.routes.filter { $0.risks.isEmpty }
-        Text(risky.isEmpty
-          ? "Nothing in the handlers stands out. Experiments go after what code can't show: timing."
-          : "\(risky.count == 1 ? "One handler" : "\(risky.count) handlers") could leave your data wrong when requests overlap.")
-          .font(Theme.sans(17, .medium)).foregroundStyle(Theme.text).fixedSize(horizontal: false, vertical: true)
-          .rise()
-        Text("Read from the code in a moment, before anything runs. Hints, not findings: the experiments are what show it.")
-          .font(Theme.sans(12.5)).foregroundStyle(Theme.faint).padding(.top, 6)
-          .rise(0.03)
         VStack(alignment: .leading, spacing: 0) {
-          ForEach(Array(risky.enumerated()), id: \.element.id) { i, route in
-            RouteFinding(route: route).rise(0.06 + 0.05 * Double(i))
-          }
-          ForEach(scan.helpers, id: \.flag) { helper in
-            Hairline()
-            Sentence(text: helper.says).padding(.vertical, 16)
-          }
-        }
-        .padding(.top, 24)
-        if !quiet.isEmpty {
-          Hairline()
-          VStack(alignment: .leading, spacing: 6) {
-            Text("Also read").label(Theme.ghost)
-            Text(quiet.map { "\($0.method) \($0.path.isEmpty ? $0.file : $0.path)" }.joined(separator: "   "))
-              .font(Theme.mono(11.5)).foregroundStyle(Theme.faint).lineSpacing(4)
+          HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text("\(risky.count)").font(Theme.figure(52)).foregroundStyle(Theme.text)
+            Text(risky.isEmpty
+              ? "of \(Fmt.plural(scan.routes.count, "handler")) stand out"
+              : "of \(Fmt.plural(scan.routes.count, "handler")) could leave your data wrong when requests overlap")
+              .font(Theme.sans(15)).foregroundStyle(Theme.dim)
               .fixedSize(horizontal: false, vertical: true)
           }
-          .padding(.top, 18)
+          HandlerMap(routes: risky + quiet).padding(.top, 14)
+          Text(risky.isEmpty
+            ? "Read from the code, nothing run. Experiments go after what code can't show: timing."
+            : "Read from the code, nothing run. Hints for where to aim: the experiments are what prove it.")
+            .font(Theme.sans(12)).foregroundStyle(Theme.faint)
+            .padding(.top, 14)
+          VStack(alignment: .leading, spacing: 0) {
+            ForEach(risky) { route in
+              RouteFinding(route: route)
+            }
+            ForEach(scan.helpers, id: \.flag) { helper in
+              Hairline()
+              Sentence(text: helper.says).padding(.vertical, 18)
+            }
+          }
+          .padding(.top, 32)
+          if !quiet.isEmpty {
+            Hairline()
+            VStack(alignment: .leading, spacing: 8) {
+              Text("Also read").label(Theme.ghost)
+              FlowLayout(spacing: 18, lineSpacing: 6) {
+                ForEach(quiet) { route in
+                  HStack(spacing: 6) {
+                    Text(route.method).foregroundStyle(Theme.ghost)
+                    Text(route.path.isEmpty ? route.file : route.path).foregroundStyle(Theme.faint)
+                  }
+                  .font(Theme.mono(11))
+                  .help(route.comment ?? route.file)
+                }
+              }
+            }
+            .padding(.top, 20)
+          }
         }
+        .modifier(ScanReveal())
       } else if let error = setup.scanError {
         Text(error).font(Theme.sans(13)).foregroundStyle(Theme.fail.opacity(0.9)).fixedSize(horizontal: false, vertical: true)
         Button("Try Again") { setup.read() }.buttonStyle(ActionButtonStyle()).padding(.top, 14)
       } else {
-        HStack(spacing: 10) {
-          BrailleSpinner(color: Theme.faint, size: 11)
-          Text("Reading the code").font(Theme.sans(14)).foregroundStyle(Theme.faint)
+        HStack(spacing: 12) {
+          DitherBar(width: 48, height: 6)
+          Text("Reading the code").font(Theme.sans(13)).foregroundStyle(Theme.faint)
         }
+        .padding(.top, 8)
       }
     }
   }
 }
 
-/// One handler: its method and path, the comment over it, what could go wrong, and its steps on
-/// request.
+/// One cell per handler, the ones that could go wrong first, in amber; the rest faint.
+private struct HandlerMap: View {
+  let routes: [ScanReport.Route]
+
+  var body: some View {
+    HStack(spacing: 3) {
+      ForEach(routes) { route in
+        RoundedRectangle(cornerRadius: 1)
+          .fill(route.risks.isEmpty ? Theme.overlay(0.1) : Theme.flaky.opacity(0.85))
+          .frame(width: 8, height: 18)
+          .help("\(route.method) \(route.path.isEmpty ? route.file : route.path)" + (route.risks.isEmpty ? "" : ": \(Fmt.plural(route.risks.count, "thing")) to look at"))
+      }
+    }
+  }
+}
+
+/// Shows its content top to bottom behind a sweeping band of light, once, as if scanned.
+private struct ScanReveal: ViewModifier {
+  @State private var progress: CGFloat = 0
+  @State private var done = false
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+  func body(content: Content) -> some View {
+    content
+      .mask(alignment: .top) {
+        GeometryReader { geo in
+          Rectangle().frame(height: geo.size.height * progress)
+        }
+      }
+      .overlay(alignment: .top) {
+        GeometryReader { geo in
+          if !done {
+            ScanBand()
+              .frame(width: geo.size.width + 24, height: 40)
+              .offset(x: -12, y: geo.size.height * progress - 40)
+              .transition(.opacity)
+          }
+        }
+      }
+      .onAppear {
+        guard !reduceMotion else {
+          progress = 1
+          done = true
+          return
+        }
+        withAnimation(.easeInOut(duration: 1.2)) { progress = 1 }
+        Task {
+          try? await Task.sleep(for: .seconds(1.2))
+          withAnimation(.easeOut(duration: 0.35)) { done = true }
+        }
+      }
+  }
+}
+
+/// One handler: its method and path, the comment over it, the steps it takes (the tables that could
+/// go wrong lit), what could go wrong, and what guards it.
 private struct RouteFinding: View {
   let route: ScanReport.Route
   @State private var open = false
@@ -294,42 +363,107 @@ private struct RouteFinding: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       Hairline()
-      HStack(alignment: .firstTextBaseline, spacing: 10) {
-        Text(route.method).font(Theme.mono(11, .medium)).foregroundStyle(Theme.faint)
-        Text(route.path.isEmpty ? "server action" : route.path).font(Theme.mono(14, .medium)).foregroundStyle(Theme.text)
-        Spacer(minLength: 12)
-        Button {
-          withAnimation(Theme.snappy) { open.toggle() }
-        } label: {
-          Text(route.file).font(Theme.mono(11)).foregroundStyle(open ? Theme.dim : Theme.ghost).lineLimit(1).truncationMode(.head)
-        }
-        .buttonStyle(.plain)
-        .help("What it does, in order")
+      HStack(alignment: .firstTextBaseline, spacing: 0) {
+        Text(route.method).font(Theme.mono(11, .medium)).foregroundStyle(Theme.faint).frame(width: 52, alignment: .leading)
+        ScrambleText(text: route.path.isEmpty ? "server action" : route.path, font: Theme.mono(13, .medium), color: Theme.text, duration: 0.7)
+        Spacer(minLength: 16)
+        Text(route.file).font(Theme.mono(11)).foregroundStyle(Theme.ghost).lineLimit(1).truncationMode(.head)
       }
-      .padding(.top, 18)
-      if let comment = route.comment {
-        Text(comment).font(Theme.sans(12.5)).foregroundStyle(Theme.faint).padding(.top, 4)
-      }
-      VStack(alignment: .leading, spacing: 8) {
-        ForEach(route.risks, id: \.flag) { risk in
-          Sentence(text: risk.says).help(risk.flag)
+      .padding(.top, 20)
+      VStack(alignment: .leading, spacing: 0) {
+        if let comment = route.comment {
+          Text(comment).font(Theme.sans(13)).foregroundStyle(Theme.faint).padding(.top, 5)
+            .fixedSize(horizontal: false, vertical: true)
         }
-        ForEach(route.guards, id: \.self) { guardText in
-          HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Image(systemName: "checkmark").font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.accent).frame(width: 10)
-            Text(guardText.prefix(1).uppercased() + guardText.dropFirst()).font(Theme.sans(13)).foregroundStyle(Theme.faint)
+        let steps = Self.steps(route.does)
+        if !steps.isEmpty {
+          Text(Self.chain(steps, lit: Self.tables(route)))
+            .font(Theme.mono(11)).lineSpacing(5)
+            .lineLimit(open ? nil : 2).truncationMode(.tail)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 10)
+            .contentShape(Rectangle())
+            .onTapGesture { withAnimation(Theme.snappy) { open.toggle() } }
+            .help(route.does)
+        }
+        VStack(alignment: .leading, spacing: 9) {
+          ForEach(route.risks, id: \.flag) { risk in
+            Sentence(text: risk.says).help(risk.flag)
+          }
+          ForEach(route.guards, id: \.self) { guardText in
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+              Image(systemName: "checkmark").font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.accent).frame(width: 10)
+              Text(guardText.prefix(1).uppercased() + guardText.dropFirst()).font(Theme.sans(13)).foregroundStyle(Theme.faint)
+            }
           }
         }
+        .padding(.top, 14)
       }
-      .padding(.top, 12)
-      if open {
-        Text(route.does).font(Theme.mono(11)).foregroundStyle(Theme.dim).lineSpacing(3).textSelection(.enabled)
-          .well(padding: 12)
-          .padding(.top, 12)
-          .transition(.opacity)
+      .padding(.leading, 52)
+    }
+    .padding(.bottom, 22)
+  }
+
+  /// The tables the risks name: `payments` in "Adds a row to `payments` …".
+  static func tables(_ route: ScanReport.Route) -> Set<String> {
+    Set(route.risks.flatMap { risk in
+      risk.says.split(separator: "`", omittingEmptySubsequences: false).enumerated().filter { $0.offset % 2 == 1 }.map { String($0.element) }
+    })
+  }
+
+  /// The handler's steps from the scan's `does`, in order: the SQL each runs (verb and table),
+  /// where its transaction opens and closes, and calls out to other services. The rest (clauses,
+  /// helper names) is in the tooltip.
+  static func steps(_ does: String) -> [String] {
+    let ns = does as NSString
+    var out: [String] = []
+    var braces: [Bool] = []
+    for m in stepPattern.matches(in: does, range: NSRange(location: 0, length: ns.length)) {
+      let s = ns.substring(with: m.range)
+      if s == "tx{" {
+        braces.append(true)
+        out.append("tx{")
+      } else if s == "{" {
+        braces.append(false)
+      } else if s == "}" {
+        if braces.popLast() == true { out.append("}") }
+      } else if m.range(at: 1).location != NSNotFound {
+        out.append("\(ns.substring(with: m.range(at: 1))) \(ns.substring(with: m.range(at: 2)))")
+      } else if m.range(at: 3).location != NSNotFound {
+        out.append("call \(ns.substring(with: m.range(at: 3)))")
       }
     }
-    .padding(.bottom, 18)
+    return out
+  }
+
+  private static let stepPattern = try! NSRegularExpression(
+    pattern: #"tx\{|\{|\}|(?<!DO )\b(SELECT|INSERT|UPDATE|DELETE)\s+(?:INTO\s+|FROM\s+)?([A-Za-z_][\w.+]*)|(\w+)→fet"#)
+
+  /// `tx{ INSERT payments · UPDATE orders }`: verbs quiet, tables brighter, the ones at risk in amber.
+  static func chain(_ steps: [String], lit: Set<String>) -> AttributedString {
+    var out = AttributedString()
+    func add(_ text: String, _ color: Color) {
+      var a = AttributedString(text)
+      a.foregroundColor = color
+      out += a
+    }
+    for (i, step) in steps.enumerated() {
+      let previous = i > 0 ? steps[i - 1] : nil
+      if step == "}" {
+        add(" }", Theme.ghost)
+        continue
+      }
+      if let previous, previous != "tx{" { add("  ·  ", Theme.ghost) }
+      if step == "tx{" {
+        add("tx{ ", Theme.ghost)
+        continue
+      }
+      let parts = step.split(separator: " ", maxSplits: 1).map(String.init)
+      add(parts[0] + " ", Theme.faint)
+      let table = parts.count > 1 ? parts[1] : ""
+      add(table, table.split(separator: "+").contains { lit.contains(String($0)) } ? Theme.flaky : Theme.dim)
+    }
+    return out
   }
 }
 
@@ -339,8 +473,8 @@ private struct Sentence: View {
 
   var body: some View {
     HStack(alignment: .firstTextBaseline, spacing: 10) {
-      Rectangle().fill(Theme.accent.opacity(0.7)).frame(width: 10, height: 1.5).alignmentGuide(.firstTextBaseline) { $0[.bottom] + 4 }
-      Text(Self.styled(text)).font(Theme.sans(13.5)).foregroundStyle(Theme.text.opacity(0.88)).lineSpacing(3)
+      Rectangle().fill(Theme.flaky.opacity(0.8)).frame(width: 10, height: 1.5).alignmentGuide(.firstTextBaseline) { $0[.bottom] + 4 }
+      Text(Self.styled(text)).font(Theme.sans(13)).foregroundStyle(Theme.text.opacity(0.88)).lineSpacing(3)
         .fixedSize(horizontal: false, vertical: true)
     }
   }
@@ -350,7 +484,7 @@ private struct Sentence: View {
     for (i, part) in text.split(separator: "`", omittingEmptySubsequences: false).enumerated() {
       var a = AttributedString(String(part))
       if i % 2 == 1 {
-        a.font = Theme.mono(12.5)
+        a.font = Theme.mono(12)
         a.foregroundColor = Theme.text
       }
       out += a
@@ -366,17 +500,18 @@ private struct Unsupported: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       Text(folder.next == nil ? "This doesn't look like a Next.js app." : "This app isn't in a git repository.")
-        .font(Theme.sans(17, .medium)).foregroundStyle(Theme.text)
+        .font(Theme.sans(17, .semibold)).foregroundStyle(Theme.text)
       Text(folder.next == nil
         ? "Wind Tunnel runs Next.js apps with a Postgres database for now. Choose the folder with the app's package.json, or the repository it's in."
         : "It makes isolated copies of the code with git worktrees. Run git init in the app's folder and commit once, then choose it again.")
-        .font(Theme.sans(13.5)).foregroundStyle(Theme.dim).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+        .font(Theme.sans(13)).foregroundStyle(Theme.dim).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: 520, alignment: .leading)
     }
   }
 }
 
 /// The right column: open the app if it's set up; else an agent to set it up, the folder watched
-/// for the file it writes.
+/// for the file it writes. The Mac's state at the foot.
 private struct NextSteps: View {
   @Environment(AppModel.self) private var model
   let folder: AppFolder
@@ -384,35 +519,99 @@ private struct NextSteps: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
       if folder.config != nil {
-        Text("Set up already").label(Theme.ghost)
-        Text(folder.experiments > 0 ? "\(Fmt.plural(folder.experiments, "experiment")) written, \(Fmt.plural(folder.flows, "flow"))." : "Its config is there; no experiments yet.")
-          .font(Theme.sans(14)).foregroundStyle(Theme.text).padding(.top, 8).fixedSize(horizontal: false, vertical: true)
-        Button("Open \(folder.name)") { model.finishSetup(open: folder) }
-          .buttonStyle(ActionButtonStyle(prominent: true))
-          .keyboardShortcut(.defaultAction)
-          .padding(.top, 18)
+        ready
       } else if folder.supported {
-        Text("Next").label(Theme.ghost)
-        Text("Your coding agent sets it up: it writes windtunnel.config.yaml (how to start the app, its database and seed, two test users) and asks before it does.")
-          .font(Theme.sans(13)).foregroundStyle(Theme.dim).lineSpacing(3).padding(.top, 8).fixedSize(horizontal: false, vertical: true)
-        VStack(alignment: .leading, spacing: 0) {
-          ForEach(agents, id: \.host) { agent in
-            AgentRow(agent: agent, folder: folder)
-          }
-        }
-        .padding(.top, 14)
-        Watcher(folder: folder).padding(.top, 16)
-        Button("Open \(folder.name)") { model.finishSetup(open: folder) }
-          .buttonStyle(ActionButtonStyle(prominent: true))
-          .keyboardShortcut(.defaultAction)
-          .disabled(folder.config == nil)
-          .padding(.top, 18)
+        setUp
+      } else {
+        Text("Nothing to set up").font(Theme.sans(17, .semibold)).foregroundStyle(Theme.text)
+        Text("Choose the folder of a Next.js app in a git repository.").font(Theme.sans(13)).foregroundStyle(Theme.dim)
+          .fixedSize(horizontal: false, vertical: true).padding(.top, 6)
+        Button("Choose Another App") { withAnimation { model.setup.step = .app } }
+          .buttonStyle(ActionButtonStyle(large: true, wide: true))
+          .padding(.top, 24)
       }
-      MacStatus().padding(.top, 36)
+      Spacer(minLength: 24)
+      MacStatus()
     }
+    .padding(.horizontal, 32)
+    .padding(.top, 116)
+    .padding(.bottom, 30)
+    .frame(maxHeight: .infinity, alignment: .top)
+    .background(Theme.overlay(0.018))
   }
 
-  /// The agents found first; the report decides, else all three.
+  private var ready: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Label("Set up", systemImage: "checkmark").labelStyle(.titleAndIcon).label(Theme.accent)
+      Text("Ready to open").font(Theme.sans(17, .semibold)).foregroundStyle(Theme.text).padding(.top, 10)
+      Text(folder.experiments > 0
+        ? "\(Fmt.plural(folder.experiments, "experiment")) and \(Fmt.plural(folder.flows, "flow")) are written. Open it to run them, or send an agent to find more."
+        : "Its config is there, with no experiments yet. Open it and send an agent to write some.")
+        .font(Theme.sans(13)).foregroundStyle(Theme.dim).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+        .padding(.top, 6)
+      openButton.padding(.top, 24)
+      let names = experimentNames
+      if !names.isEmpty {
+        VStack(alignment: .leading, spacing: 7) {
+          Text("Experiments").label(Theme.ghost).padding(.bottom, 3)
+          ForEach(names.prefix(9), id: \.self) { name in
+            Text(name).font(Theme.mono(11)).foregroundStyle(Theme.faint).lineLimit(1).truncationMode(.middle)
+          }
+          if names.count > 9 {
+            Text("and \(names.count - 9) more").font(Theme.sans(12)).foregroundStyle(Theme.ghost)
+          }
+        }
+        .padding(.top, 36)
+      }
+    }
+    .rise()
+  }
+
+  /// The experiments in the app's folder, by file name.
+  private var experimentNames: [String] {
+    let dir = ((folder.app as NSString).appendingPathComponent(".windtunnel") as NSString).appendingPathComponent("experiments")
+    return ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? [])
+      .filter { $0.hasSuffix(".yaml") || $0.hasSuffix(".yml") }
+      .map { ($0 as NSString).deletingPathExtension }
+      .sorted()
+  }
+
+  private var setUp: some View {
+    VStack(alignment: .leading, spacing: 0) {
+      Text("Next").label(Theme.ghost)
+      Text("Set it up with your agent").font(Theme.sans(17, .semibold)).foregroundStyle(Theme.text).padding(.top, 10)
+      (Text("It writes ") + Text("windtunnel.config.yaml").font(Theme.mono(12)) + Text(": how to start the app, its database and seed, and two test users. It asks before it writes."))
+        .font(Theme.sans(13)).foregroundStyle(Theme.dim).lineSpacing(3).fixedSize(horizontal: false, vertical: true)
+        .padding(.top, 6)
+      VStack(alignment: .leading, spacing: 0) {
+        ForEach(agents, id: \.host) { agent in
+          Hairline()
+          AgentRow(agent: agent, folder: folder)
+        }
+        Hairline()
+      }
+      .padding(.top, 20)
+      Watcher(folder: folder).padding(.top, 18)
+      openButton.padding(.top, 18)
+    }
+    .rise()
+  }
+
+  private var openButton: some View {
+    Button {
+      model.finishSetup(open: folder)
+    } label: {
+      HStack(spacing: 8) {
+        Text("Open \(folder.name)")
+        KeyHint("↩")
+      }
+    }
+    .buttonStyle(ActionButtonStyle(prominent: true, large: true, wide: true))
+    .keyboardShortcut(.defaultAction)
+    .disabled(folder.config == nil)
+  }
+
+  /// The agents found first; the report decides, else the two most likely.
   private var agents: [InstallReport.Agent] {
     let found = model.setup.report?.agents ?? [
       .init(host: "claude", name: "Claude Code", found: true, plugin: true),
@@ -428,15 +627,15 @@ private struct AgentRow: View {
   let folder: AppFolder
 
   var body: some View {
-    HStack(spacing: 10) {
-      VStack(alignment: .leading, spacing: 2) {
+    HStack(spacing: 12) {
+      VStack(alignment: .leading, spacing: 3) {
         Text(agent.name).font(Theme.sans(13, .medium)).foregroundStyle(Theme.text)
         Text(prompt).font(Theme.mono(11)).foregroundStyle(Theme.faint)
       }
       Spacer(minLength: 8)
       if !agent.plugin {
         Button("Add Plugin…") { model.setup.showMac = true }
-          .buttonStyle(.plain).font(Theme.sans(12)).foregroundStyle(Theme.flaky)
+          .buttonStyle(LinkButtonStyle(color: Theme.flaky))
           .help("The plugin brings the init skill. Set Up adds it.")
       } else {
         Button(agent.host == "claude" ? "Open" : "Open in Terminal") { open() }
@@ -444,7 +643,7 @@ private struct AgentRow: View {
           .help(agent.host == "claude" ? "Opens your Claude Code in this folder with \(prompt) typed, not sent." : "Opens \(agent.host) in Terminal in this folder, with \(prompt) on the clipboard to paste.")
       }
     }
-    .frame(height: 46)
+    .frame(height: 54)
   }
 
   private var prompt: String { agent.host == "muse" ? "windtunnel-init" : "/windtunnel:init" }
@@ -464,20 +663,19 @@ private struct Watcher: View {
   let folder: AppFolder
 
   var body: some View {
-    HStack(alignment: .firstTextBaseline, spacing: 10) {
+    let found = folder.config != nil
+    HStack(alignment: .center, spacing: 10) {
       Group {
-        if folder.config != nil {
+        if found {
           Image(systemName: "checkmark").font(.system(size: 10, weight: .semibold)).foregroundStyle(Theme.accent)
         } else {
-          BrailleSpinner(color: Theme.faint, size: 10)
+          DitherBar(width: 20, height: 4)
         }
       }
-      .frame(width: 12)
-      Text(folder.config != nil
-        ? "windtunnel.config.yaml is there" + (folder.flows > 0 ? ", with \(Fmt.plural(folder.flows, "flow"))" : "") + ". Open the app when your agent is done."
-        : "Waiting for windtunnel.config.yaml")
-        .font(Theme.sans(12.5)).foregroundStyle(folder.config != nil ? Theme.text : Theme.faint)
-        .fixedSize(horizontal: false, vertical: true)
+      .frame(width: 20, alignment: .leading)
+      (Text(found ? "Found " : "Waiting for ") + Text("windtunnel.config.yaml").font(Theme.mono(11)) + Text(found && folder.flows > 0 ? ", \(Fmt.plural(folder.flows, "flow"))" : ""))
+        .font(Theme.sans(12)).foregroundStyle(found ? Theme.text : Theme.faint)
+        .lineLimit(1)
     }
     .animation(Theme.spring, value: folder.config)
   }
@@ -493,7 +691,7 @@ private struct MacSheet: View {
   var body: some View {
     let setup = model.setup
     VStack(alignment: .leading, spacing: 0) {
-      Text("This Mac").font(Theme.sans(20, .semibold)).foregroundStyle(Theme.text)
+      Text("This Mac").font(Theme.sans(22, .semibold)).foregroundStyle(Theme.text)
       Text("Your app, its database and a browser run here; your coding agent needs the plugin.")
         .font(Theme.sans(13)).foregroundStyle(Theme.dim).padding(.top, 6).fixedSize(horizontal: false, vertical: true)
       VStack(alignment: .leading, spacing: 0) {
@@ -603,7 +801,7 @@ private struct CheckRow: View {
         .foregroundStyle(row.state == .optional ? Theme.faint : Theme.text)
         .frame(width: 128, alignment: .leading)
       Text(row.detail)
-        .font(Theme.sans(12.5))
+        .font(Theme.sans(12))
         .foregroundStyle(row.state == .bad ? Theme.fail.opacity(0.9) : Theme.faint)
         .lineLimit(1).truncationMode(.middle)
       Spacer(minLength: 0)
@@ -625,7 +823,7 @@ private struct ToDo: View {
       VStack(alignment: .leading, spacing: 4) {
         Text(report.steps.count == 1 ? "One thing to set up" : "\(report.steps.count) things to set up")
           .font(Theme.sans(13, .semibold)).foregroundStyle(Theme.text)
-        Text(summary).font(Theme.sans(12.5)).foregroundStyle(Theme.faint).fixedSize(horizontal: false, vertical: true)
+        Text(summary).font(Theme.sans(12)).foregroundStyle(Theme.faint).fixedSize(horizontal: false, vertical: true)
       }
       if setup.installing || !setup.installOutput.isEmpty {
         ScrollViewReader { proxy in
@@ -660,9 +858,9 @@ private struct ToDo: View {
         .help("Runs windtunnel install --yes")
         if !setup.installing {
           Button(showCommands ? "Hide Commands" : "Show Commands") { withAnimation(Theme.snappy) { showCommands.toggle() } }
-            .buttonStyle(.plain).font(Theme.sans(12)).foregroundStyle(Theme.faint)
+            .buttonStyle(LinkButtonStyle())
           Button("Copy") { model.copy(setup.commands) }
-            .buttonStyle(.plain).font(Theme.sans(12)).foregroundStyle(Theme.faint)
+            .buttonStyle(LinkButtonStyle())
         }
         if setup.installFailed {
           Text("Some steps failed: see above.").font(Theme.sans(12)).foregroundStyle(Theme.fail)
@@ -704,7 +902,7 @@ private struct ToolchainFix: View {
           .fixedSize(horizontal: false, vertical: true)
         ShellCommand(text: "npx windtunnel-cli install")
         Button("Choose the windtunnel Command…") { chooseCLI() }
-          .buttonStyle(.plain).font(Theme.sans(12)).foregroundStyle(Theme.faint)
+          .buttonStyle(LinkButtonStyle())
       }
     }
     .rise()
@@ -737,7 +935,7 @@ private struct ShellCommand: View {
         model.copy(text)
         copied = true
       }
-      .buttonStyle(.plain).font(Theme.sans(11.5, .medium)).foregroundStyle(copied ? Theme.accent : Theme.faint)
+      .buttonStyle(.plain).font(Theme.sans(11, .medium)).foregroundStyle(copied ? Theme.accent : Theme.faint)
     }
     .padding(.horizontal, 12)
     .frame(height: 34)

@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 /// `WindTunnel --snapshot <name> <out.png> [width height]`: renders one view to a PNG and exits.
-/// Names: glow (at time $T if set), parts, icon. LIGHT=1 renders it light.
+/// Names: glow, field (the start screens' trace), runs (Hunt's), each at time $T if set; parts, icon. LIGHT=1 renders it light.
 /// For checking the look without a screen (the views here don't need the bridge).
 enum Snapshot {
   static func runIfAsked() -> Bool {
@@ -34,6 +34,18 @@ enum Snapshot {
     switch name {
     case "glow":
       Glow(time: Double(ProcessInfo.processInfo.environment["T"] ?? "") ?? 0)
+    case "field":
+      // The start screens' backdrop at time $T: the glow, and the trace over it.
+      let t = Double(ProcessInfo.processInfo.environment["T"] ?? "") ?? 6
+      ZStack {
+        Glow(corner: .bottomTrailing, strength: 0.6, time: t)
+        RequestTrace(time: t).mask(StartScreenFade())
+      }
+    case "runs":
+      let t = Double(ProcessInfo.processInfo.environment["T"] ?? "") ?? 6
+      RequestTrace(trailing: 14, lanes: 6, top: 0.1, bottom: 0.9, speed: 30, runs: (0..<16).map { $0 % 5 == 2 }, time: t)
+        .frame(width: 280, height: 132)
+        .padding(40)
     case "icon":
       AppIcon()
     case "parts":

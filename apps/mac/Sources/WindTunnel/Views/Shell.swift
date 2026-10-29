@@ -88,8 +88,8 @@ struct TopBar: View {
       .disabled(model.runningJob != nil || model.experiments.isEmpty)
       .help("Run every experiment against the working tree. No model involved.")
     }
-    .padding(.leading, 24)
-    .padding(.trailing, 16)
+    .padding(.leading, Theme.gutter)
+    .padding(.trailing, Theme.gutter)
     .frame(height: 52)
     .contentShape(Rectangle())
     .gesture(WindowDragGesture())
@@ -118,7 +118,7 @@ struct Sidebar: View {
       Spacer(minLength: 20)
       HStack(spacing: 6) {
         LiveDot(on: model.live)
-        Text(model.live ? "Live" : "Offline").font(Theme.sans(11.5, .medium)).foregroundStyle(Theme.faint)
+        Text(model.live ? "Live" : "Offline").font(Theme.sans(11, .medium)).foregroundStyle(Theme.faint)
         Spacer()
         SettingsLink {
           Image(systemName: "gearshape").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.faint)
@@ -161,7 +161,7 @@ private struct ProjectSwitcher: View {
         LogoMark(size: 18).frame(width: 22)
         VStack(alignment: .leading, spacing: 1) {
           Text(model.status?.project.name ?? "—").font(Theme.sans(13, .semibold)).foregroundStyle(Theme.text).lineLimit(1)
-          Text(Fmt.tilde(model.status?.project.root ?? "")).font(Theme.sans(10.5)).foregroundStyle(Theme.faint).lineLimit(1).truncationMode(.head)
+          Text(Fmt.tilde(model.status?.project.root ?? "")).font(Theme.sans(11)).foregroundStyle(Theme.faint).lineLimit(1).truncationMode(.head)
         }
         Spacer(minLength: 0)
         Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(Theme.faint)
@@ -240,7 +240,7 @@ struct NoticeToast: View {
       if let notice = model.notice {
         HStack(spacing: 10) {
           Image(systemName: "exclamationmark.circle.fill").font(.system(size: 13)).foregroundStyle(Theme.flaky)
-          Text(notice).font(Theme.sans(12.5)).foregroundStyle(Theme.text).lineLimit(3)
+          Text(notice).font(Theme.sans(12)).foregroundStyle(Theme.text).lineLimit(3)
           Button {
             model.notice = nil
           } label: {
@@ -267,76 +267,91 @@ struct NoticeToast: View {
 
 // MARK: - Welcome and connecting
 
+/// The start page: what the app is for, the last project one key away, the rest listed, over the
+/// same trace as the first run.
 struct WelcomeView: View {
   @Environment(AppModel.self) private var model
   let error: String?
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 0) {
-      LogoMark(size: 32)
-        .padding(.bottom, 24)
-        .rise()
-      Text("Wind Tunnel")
-        .font(.system(size: 40, weight: .semibold))
-        .tracking(-1)
-        .foregroundStyle(Theme.text)
-        .rise(0.04)
-      Text("Find the bugs that only happen when things happen at once.")
-        .font(Theme.sans(15))
-        .foregroundStyle(Theme.dim)
-        .padding(.top, 8)
-        .rise(0.08)
-      if let error {
-        HStack(alignment: .top, spacing: 10) {
-          Rectangle().fill(Theme.fail).frame(width: 2)
-          Text(error).font(Theme.sans(12.5)).foregroundStyle(Theme.text).textSelection(.enabled)
-        }
-        .fixedSize(horizontal: false, vertical: true)
-        .padding(.top, 24)
-      }
-      HStack(spacing: 8) {
-        Button("Open Folder…") { model.chooseProject() }
-          .buttonStyle(ActionButtonStyle(prominent: model.recents.isEmpty || error != nil))
-          .keyboardShortcut("o", modifiers: .command)
-        if error != nil, model.projectPath != nil {
-          Button("Try Again") { model.reconnect() }.buttonStyle(ActionButtonStyle())
-        } else if let last = model.recents.first {
-          Button {
-            model.open(project: last)
-          } label: {
-            HStack(spacing: 8) {
-              Text("Open \((last as NSString).lastPathComponent)")
-              Text("↩").font(Theme.sans(11)).opacity(0.5)
+    ZStack {
+      Glow(corner: .bottomTrailing, strength: 0.5)
+      RequestTrace().mask(StartScreenFade()).opacity(0.85)
+      VStack(alignment: .leading, spacing: 0) {
+        Brand().padding(.top, 46)
+        Spacer(minLength: 32)
+        Text("Find the bugs that only happen when things happen at once.")
+          .font(Theme.display).tracking(Theme.displayTracking)
+          .foregroundStyle(Theme.text)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: 500, alignment: .leading)
+          .rise()
+        if let error {
+          HStack(alignment: .top, spacing: 12) {
+            Rectangle().fill(Theme.fail).frame(width: 2)
+            VStack(alignment: .leading, spacing: 4) {
+              Text("Couldn't open the project").font(Theme.sans(13, .semibold)).foregroundStyle(Theme.text)
+              Text(error).font(Theme.sans(12)).foregroundStyle(Theme.dim).textSelection(.enabled).lineLimit(4)
             }
           }
-          .buttonStyle(ActionButtonStyle(prominent: true))
-          .keyboardShortcut(.defaultAction)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(maxWidth: 460, alignment: .leading)
+          .padding(.top, 28)
         }
-        Spacer()
-        Button("Set Up a New App…") {
+        HStack(spacing: 10) {
+          if error != nil, model.projectPath != nil {
+            Button("Try Again") { model.reconnect() }
+              .buttonStyle(ActionButtonStyle(prominent: true, large: true))
+              .keyboardShortcut(.defaultAction)
+          } else if let last = model.recents.first {
+            Button {
+              model.open(project: last)
+            } label: {
+              HStack(spacing: 8) {
+                Text("Open \((last as NSString).lastPathComponent)")
+                KeyHint("↩")
+              }
+            }
+            .buttonStyle(ActionButtonStyle(prominent: true, large: true))
+            .keyboardShortcut(.defaultAction)
+          }
+          Button {
+            model.chooseProject()
+          } label: {
+            HStack(spacing: 8) {
+              Text("Open Folder…")
+              KeyHint("⌘O")
+            }
+          }
+          .buttonStyle(ActionButtonStyle(prominent: model.recents.isEmpty && error == nil, large: true))
+          .keyboardShortcut("o", modifiers: .command)
+        }
+        .padding(.top, 32)
+        .rise(0.06)
+        if model.recents.count > 1 || (error != nil && !model.recents.isEmpty) {
+          VStack(alignment: .leading, spacing: 0) {
+            Text("Recent").label(Theme.ghost).padding(.bottom, 8)
+            ForEach(model.recents.prefix(5), id: \.self) { path in
+              RecentRow(path: path, onRemove: { model.forget(path) }) { model.open(project: path) }
+            }
+          }
+          .frame(width: 420, alignment: .leading)
+          .padding(.top, 52)
+          .rise(0.12)
+        }
+        Spacer(minLength: 32)
+        Button {
           model.setup.folder = nil
           model.beginSetup(at: .app)
+        } label: {
+          Label("Set Up a New App…", systemImage: "plus")
         }
-        .buttonStyle(.plain).font(Theme.sans(12.5)).foregroundStyle(Theme.faint)
+        .buttonStyle(LinkButtonStyle())
+        .padding(.bottom, 30)
       }
-      .padding(.top, 30)
-      .rise(0.12)
-      if !model.recents.isEmpty {
-        VStack(alignment: .leading, spacing: 0) {
-          Hairline().padding(.bottom, 14)
-          Text("Recent").label().padding(.leading, 8).padding(.bottom, 6)
-          ForEach(model.recents.prefix(5), id: \.self) { path in
-            RecentRow(path: path)
-          }
-        }
-        .padding(.top, 40)
-        .padding(.horizontal, -8)
-        .rise(0.16)
-      }
+      .padding(.leading, Theme.startMargin)
+      .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
-    .frame(width: 480, alignment: .leading)
-    .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(Glow(corner: .bottomTrailing, strength: 0.45))
     .overlay(alignment: .top) {
       Color.clear.frame(height: 40).contentShape(Rectangle()).gesture(WindowDragGesture())
     }
@@ -344,48 +359,57 @@ struct WelcomeView: View {
   }
 }
 
-private struct RecentRow: View {
-  @Environment(AppModel.self) private var model
+/// A folder opened before: its name, where it is, and on hover a way to drop it from the list.
+struct RecentRow: View {
   let path: String
+  var onRemove: (() -> Void)? = nil
+  let action: () -> Void
   @State private var hovering = false
 
   var body: some View {
     HStack(spacing: 10) {
-      Text((path as NSString).lastPathComponent).font(Theme.sans(13)).foregroundStyle(hovering ? Theme.text : Theme.text.opacity(0.85))
+      Image(systemName: "folder").font(.system(size: 12)).foregroundStyle(hovering ? Theme.dim : Theme.faint).frame(width: 16)
+      Text((path as NSString).lastPathComponent).font(Theme.sans(13, .medium)).foregroundStyle(hovering ? Theme.text : Theme.text.opacity(0.88))
       Text(Fmt.tilde((path as NSString).deletingLastPathComponent)).font(Theme.sans(12)).foregroundStyle(Theme.faint).lineLimit(1).truncationMode(.middle)
-      Spacer()
+      Spacer(minLength: 8)
       if hovering {
-        Button {
-          model.forget(path)
-        } label: {
-          Image(systemName: "xmark").font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.faint)
+        if let onRemove {
+          Button(action: onRemove) {
+            Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+          }
+          .buttonStyle(LinkButtonStyle())
+          .help("Remove from Recent")
         }
-        .buttonStyle(.plain)
-        .help("Remove from Recent")
+        Image(systemName: "arrow.right").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.dim)
       }
     }
-    .padding(.vertical, 6)
-    .padding(.horizontal, 8)
+    .padding(.horizontal, 10)
+    .frame(height: 34)
     .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(hovering ? Theme.hover : .clear))
     .contentShape(Rectangle())
-    .onTapGesture { model.open(project: path) }
+    .padding(.horizontal, -10)
+    .onTapGesture(perform: action)
     .onHover { hovering = $0 }
+    .help(Fmt.tilde(path))
   }
 }
 
+/// While the bridge starts: the mark, and what's opening.
 struct ConnectingView: View {
   let path: String
 
   var body: some View {
-    VStack(spacing: 22) {
-      LogoMark(size: 30)
-      HStack(spacing: 9) {
-        BrailleSpinner(size: 12)
-        Text("Opening \((path as NSString).lastPathComponent)").font(Theme.sans(13)).foregroundStyle(Theme.dim)
+    ZStack {
+      Glow(corner: .bottomTrailing, strength: 0.35)
+      VStack(spacing: 20) {
+        LogoMark(size: 30)
+        HStack(spacing: 10) {
+          DitherBar(width: 28, height: 4)
+          Text("Opening \((path as NSString).lastPathComponent)").font(Theme.sans(13)).foregroundStyle(Theme.dim)
+        }
       }
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
-    .background(Glow(corner: .bottomTrailing, strength: 0.35))
     .overlay(alignment: .top) {
       Color.clear.frame(height: 40).contentShape(Rectangle()).gesture(WindowDragGesture())
     }
@@ -399,9 +423,9 @@ struct EmptyState: View {
   let text: String
 
   var body: some View {
-    VStack(spacing: 12) {
-      Text(title).font(Theme.sans(14, .semibold)).foregroundStyle(Theme.text)
-      Text(text).font(Theme.sans(12.5)).foregroundStyle(Theme.faint).multilineTextAlignment(.center).frame(maxWidth: 340)
+    VStack(spacing: 8) {
+      Text(title).font(Theme.sans(15, .semibold)).foregroundStyle(Theme.text)
+      Text(text).font(Theme.sans(13)).foregroundStyle(Theme.faint).multilineTextAlignment(.center).lineSpacing(2).frame(maxWidth: 340)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }

@@ -55,8 +55,10 @@ Sources/WindTunnel/
   Bridge/     Toolchain (login-shell PATH, Node, the CLI), Bridge (child process, API, events), Keychain
   Model/      the API's shapes, formatting
   App/        also Setup: the first-run state (the CLI's install report, the folder inspected and watched)
-  Design/     Theme (backdrop, sections, buttons, tab strip, meters), Ascii (spinner, live dot, the mark),
-              Glow (a corner light: a slowly drifting mesh gradient in the hue under film grain)
+  Design/     Theme (type scale, gutter, backdrop, sections, buttons, links, tab strip, meters), Ascii (spinner,
+              live dot, the mark), Glow (a corner light: a slowly drifting mesh gradient in the hue under film
+              grain), RequestTrace (requests in lanes, two at once caught in red: start screens and Hunt),
+              Dither (ordered-dither pieces: the scan band, loading bars)
   Views/      Shell (window, top bar, sidebar, welcome), SetupView (first run),
               Overview, Runs, RunDetail, Timeline, Evidence (trace, database, network, log),
               Experiments, Hunt, Usage
@@ -71,14 +73,30 @@ and amber only where something failed or is flaky, and passing runs stay grey so
 what you see. SF Pro for the interface, SF Mono only for data (rules, SQL, logs). Details live in
 tooltips.
 
-No illustrations: what the screens show is the user's own project, its code on the first run and
-its runs after. The one ornament is a soft light in a corner of the start and first-run screens,
-a mesh gradient in the hue drifting very slowly under film grain, so it never bands or looks flat.
+Type comes from one scale: 11, 12, 13, 15 and 17 for the interface, 22 for titles, 30 and 44 for
+the start screens; mono 10 to 13. The top bar and every pane share one gutter, so titles, content
+and the buttons on the right line up.
+
+What the screens show is the user's own project, its code on the first run and its runs after.
+The ornaments are a soft light in a corner of the start screens (a mesh gradient in the hue under
+film grain) and one picture of what the app finds, drawn in vector (`Design/RequestTrace.swift`):
+
+- **The trace**, beside the start and first-run screens: requests in lanes, one per tab or worker,
+  each drawn at "now" while it runs and carried off to the left after. Every few seconds two run at
+  once: the stretch where both were running turns red, joined by a dashed line, and brackets close
+  on it with the kind of bug it stands for (double submit, second tab, lost update…).
+- **On Hunt**, the same trace plays back the project's last 16 runs, each two requests at once,
+  red where that run broke a rule.
+- Smaller pieces in dithered cells (`Design/Dither.swift`): a band that sweeps the first-run
+  findings in as they arrive, and bars for loading and waiting.
+
+They hold still with Reduce Motion and while the window isn't active. `--snapshot field|runs`
+renders them to PNG.
 
 For working on the views:
 
 ```sh
-T=40 .build/debug/WindTunnel --snapshot glow /tmp/g.png 1200 760  # render a view to PNG (glow at time T, parts, icon)
+T=40 .build/debug/WindTunnel --snapshot glow /tmp/g.png 1200 760  # render a view to PNG (glow, field or runs at time T, parts, icon)
 open "build/Wind Tunnel.app" --args --project <app folder> --pane runs --run <run id> --tab timeline
 open "build/Wind Tunnel.app" --args --welcome --appearance light   # light, dark or system (saved as the setting)
 open "build/Wind Tunnel.app" --args --setup read --folder <app folder>  # a first-run screen: app, read, or mac (the checks)

@@ -217,7 +217,7 @@ struct RaceView: View {
           ForEach(Array(stride(from: 0.0, through: span, by: step).enumerated()), id: \.offset) { _, t in
             VStack(alignment: .leading, spacing: 4) {
               Rectangle().fill(Theme.ghost).frame(width: 1, height: 4)
-              Text(Fmt.ms(t)).font(Theme.sans(10)).monospacedDigit().foregroundStyle(Theme.faint).fixedSize()
+              Text(Fmt.ms(t)).font(Theme.sans(11)).monospacedDigit().foregroundStyle(Theme.faint).fixedSize()
             }
             .offset(x: CGFloat(t / span) * geo.size.width)
           }
@@ -233,37 +233,37 @@ struct RaceView: View {
     case .step(let s):
       VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 8) {
-          Text("\(s.tab) · \(s.step)\(s.attempt.map { " · \($0)" } ?? "")").font(Theme.mono(11.5, .semibold)).foregroundStyle(Theme.text)
-          Text("\(Fmt.ms(s.start)) → \(Fmt.ms(s.end))  (\(Fmt.ms(s.end - s.start)))").font(Theme.mono(10.5)).foregroundStyle(Theme.faint)
+          Text("\(s.tab) · \(s.step)\(s.attempt.map { " · \($0)" } ?? "")").font(Theme.mono(11, .semibold)).foregroundStyle(Theme.text)
+          Text("\(Fmt.ms(s.start)) → \(Fmt.ms(s.end))  (\(Fmt.ms(s.end - s.start)))").font(Theme.mono(11)).foregroundStyle(Theme.faint)
         }
-        ForEach(s.harness ?? [], id: \.self) { h in Text("↺ \(h)").font(Theme.mono(10.5)).foregroundStyle(Theme.dim) }
+        ForEach(s.harness ?? [], id: \.self) { h in Text("↺ \(h)").font(Theme.mono(11)).foregroundStyle(Theme.dim) }
         ForEach(Array((s.actions ?? []).prefix(4).enumerated()), id: \.offset) { _, a in
-          Text("› \(a.action)").font(Theme.mono(10.5)).foregroundStyle(Theme.dim).lineLimit(1)
+          Text("› \(a.action)").font(Theme.mono(11)).foregroundStyle(Theme.dim).lineLimit(1)
         }
         if let seen = s.seen {
-          Text("page \(seen.path): \(seen.text)").font(Theme.mono(10.5)).foregroundStyle(Theme.faint).lineLimit(1)
+          Text("page \(seen.path): \(seen.text)").font(Theme.mono(11)).foregroundStyle(Theme.faint).lineLimit(1)
         }
-        if let e = s.error { Text(e).font(Theme.mono(10.5)).foregroundStyle(Theme.fail).lineLimit(2) }
+        if let e = s.error { Text(e).font(Theme.mono(11)).foregroundStyle(Theme.fail).lineLimit(2) }
       }
     case .request(let r):
       VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 8) {
-          Text("\(r.method) \(r.path)").font(Theme.mono(11.5, .semibold)).foregroundStyle(Theme.text)
+          Text("\(r.method) \(r.path)").font(Theme.mono(11, .semibold)).foregroundStyle(Theme.text)
           Text(r.status.map(String.init) ?? (r.failure ?? "–")).font(Theme.mono(11)).foregroundStyle((r.status ?? 0) >= 400 ? Theme.fail : Theme.dim)
-          Text(Fmt.ms((r.end ?? r.start) - r.start)).font(Theme.mono(10.5)).foregroundStyle(Theme.faint)
-          if divergent.contains(r.id) { Text("first divergence").font(Theme.sans(11.5, .medium)).foregroundStyle(Theme.fail) }
+          Text(Fmt.ms((r.end ?? r.start) - r.start)).font(Theme.mono(11)).foregroundStyle(Theme.faint)
+          if divergent.contains(r.id) { Text("first divergence").font(Theme.sans(11, .medium)).foregroundStyle(Theme.fail) }
         }
         HStack(spacing: 10) {
           if let h = r.handler { Text(h).foregroundStyle(Theme.accent.opacity(0.85)) }
           if let sql = r.sql { Text("\(sql.total) statements · \(sql.writes) writes\(sql.errors > 0 ? " · \(sql.errors) errors" : "")").foregroundStyle(Theme.dim) }
           if let step = r.step { Text("step \(step)").foregroundStyle(Theme.faint) }
         }
-        .font(Theme.mono(10.5))
+        .font(Theme.mono(11))
       }
     case .webhook(let what, let at, let status):
       HStack(spacing: 8) {
-        Text("Webhook \(what)").font(Theme.mono(11.5, .semibold)).foregroundStyle(Theme.text)
-        Text("at \(Fmt.ms(at)) → \(status.map(String.init) ?? "no answer")").font(Theme.mono(10.5)).foregroundStyle(Theme.dim)
+        Text("Webhook \(what)").font(Theme.mono(11, .semibold)).foregroundStyle(Theme.text)
+        Text("at \(Fmt.ms(at)) → \(status.map(String.init) ?? "no answer")").font(Theme.mono(11)).foregroundStyle(Theme.dim)
       }
     case nil:
       Text("Hover a step or a request for its details.")
@@ -306,7 +306,7 @@ struct AlignedView: View {
         let isFirst = index == firstRow
         HStack(alignment: .top, spacing: 12) {
           VStack(alignment: .leading, spacing: 3) {
-            Text(row.step).font(Theme.mono(11.5, .medium)).foregroundStyle(Theme.text)
+            Text(row.step).font(Theme.mono(11, .medium)).foregroundStyle(Theme.text)
             HStack(spacing: 6) {
               RoundedRectangle(cornerRadius: 1).fill(Theme.actor(tabs.firstIndex(of: row.tab) ?? 0)).frame(width: 3, height: 9)
               Text(row.tab).font(Theme.sans(11)).foregroundStyle(Theme.faint)
@@ -339,7 +339,7 @@ private struct CellView: View {
     if let cell {
       VStack(alignment: .leading, spacing: 4) {
         if cell.requests.isEmpty && cell.writes == nil {
-          Text(cell.quiet ? "no requests" : "–").font(Theme.mono(10.5)).foregroundStyle(Theme.ghost)
+          Text(cell.quiet ? "no requests" : "–").font(Theme.mono(11)).foregroundStyle(Theme.ghost)
         }
         ForEach(Array(cell.requests.enumerated()), id: \.offset) { _, r in
           HStack(spacing: 6) {
@@ -352,8 +352,8 @@ private struct CellView: View {
           }
           .font(Theme.mono(11))
         }
-        if let writes = cell.writes { Text("\(writes) writes").font(Theme.mono(10.5)).foregroundStyle(Theme.dim) }
-        ForEach(cell.harness, id: \.self) { h in Text("↺ \(h)").font(Theme.mono(10.5)).foregroundStyle(Theme.faint).lineLimit(1) }
+        if let writes = cell.writes { Text("\(writes) writes").font(Theme.mono(11)).foregroundStyle(Theme.dim) }
+        ForEach(cell.harness, id: \.self) { h in Text("↺ \(h)").font(Theme.mono(11)).foregroundStyle(Theme.faint).lineLimit(1) }
         if let seen = cell.seen {
           Text("\(seen.path) · …\(seen.text.split(separator: " ").suffix(7).joined(separator: " "))")
             .font(Theme.mono(10))
@@ -363,7 +363,7 @@ private struct CellView: View {
         if let e = cell.error { Text(e).font(Theme.mono(10)).foregroundStyle(Theme.fail).lineLimit(2) }
       }
     } else {
-      Text("(not in this run)").font(Theme.mono(10.5)).foregroundStyle(Theme.ghost)
+      Text("(not in this run)").font(Theme.mono(11)).foregroundStyle(Theme.ghost)
     }
   }
 }

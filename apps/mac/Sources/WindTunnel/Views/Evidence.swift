@@ -20,7 +20,7 @@ struct TraceTab: View {
                 ChainEventRow(event: e, last: i == table.events.count - 1)
               }
               if let more = table.more, more > 0 {
-                Text("\(more) more").font(Theme.sans(11.5)).foregroundStyle(Theme.faint)
+                Text("\(more) more").font(Theme.sans(11)).foregroundStyle(Theme.faint)
               }
             }
           }
@@ -57,12 +57,12 @@ private struct ChainEventRow: View {
             Text(event.result ?? "").foregroundStyle(event.error != nil ? Theme.fail : Theme.faint)
             if let ms = event.ms { Text("\(Int(ms)) ms").foregroundStyle(Theme.ghost) }
           }
-          .font(Theme.sans(11.5))
+          .font(Theme.sans(11))
           Text(SQL.highlight(sql.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)))
-            .font(Theme.mono(11.5)).textSelection(.enabled).lineLimit(4)
+            .font(Theme.mono(11)).textSelection(.enabled).lineLimit(4)
           if let params = event.params, !params.isEmpty {
             Text("params " + params.enumerated().map { "$\($0.offset + 1)=\($0.element ?? "null")" }.joined(separator: "  "))
-              .font(Theme.mono(10.5)).foregroundStyle(Theme.faint).lineLimit(1)
+              .font(Theme.mono(11)).foregroundStyle(Theme.faint).lineLimit(1)
           }
           ForEach(Array((event.sources ?? []).enumerated()), id: \.offset) { _, s in
             HStack(spacing: 6) {
@@ -71,7 +71,7 @@ private struct ChainEventRow: View {
               if let what = s.what { Text(what).foregroundStyle(Theme.dim) }
               if let h = s.handler { Text("\(h)\(s.lines.map { ":" + $0.joined(separator: ",") } ?? "")").foregroundStyle(Theme.accent.opacity(0.85)) }
             }
-            .font(Theme.mono(10.5))
+            .font(Theme.mono(11))
           }
         } else {
           Text(event.text ?? "").font(Theme.sans(12)).italic().foregroundStyle(Theme.dim)
@@ -120,7 +120,7 @@ struct DatabaseTab: View {
                       }
                     }
                   }
-                  .font(Theme.mono(11.5))
+                  .font(Theme.mono(11))
                 }
               }
               ForEach(Array(t.changed.prefix(20).enumerated()), id: \.offset) { _, c in
@@ -141,7 +141,7 @@ struct DatabaseTab: View {
                     }
                   }
                 }
-                .font(Theme.mono(11.5))
+                .font(Theme.mono(11))
               }
             }
           }
@@ -164,7 +164,7 @@ struct NetworkTab: View {
       let requests = rep.requests.filter { all || $0.notable }
       Panel("Requests", rule: false, accessory: {
         Toggle(isOn: $all.animation(Theme.spring)) {
-          Text("Page loads").font(Theme.sans(11.5)).foregroundStyle(Theme.faint)
+          Text("Page loads").font(Theme.sans(11)).foregroundStyle(Theme.faint)
         }
         .toggleStyle(.checkbox)
         .controlSize(.mini)
@@ -217,7 +217,7 @@ struct LogTab: View {
         }
         TerminalPanel(title: "App log", lines: rep.log, rule: !console.isEmpty || !errors.isEmpty)
         if let traces = rep.traces, !traces.isEmpty {
-          Panel("Playwright traces", accessory: { Text("npx playwright show-trace <file>").font(Theme.mono(10.5)) }) {
+          Panel("Playwright traces", accessory: { Text("npx playwright show-trace <file>").font(Theme.mono(11)) }) {
             VStack(alignment: .leading, spacing: 4) {
               ForEach(traces, id: \.self) { t in
                 Text(Fmt.tilde(t)).font(Theme.mono(11)).foregroundStyle(Theme.dim).textSelection(.enabled)
@@ -282,7 +282,7 @@ struct EmptyBlock: View {
 
   var body: some View {
     Text(text)
-      .font(Theme.sans(12.5))
+      .font(Theme.sans(12))
       .foregroundStyle(Theme.faint)
       .padding(.vertical, 20)
   }

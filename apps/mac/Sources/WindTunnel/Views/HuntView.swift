@@ -30,18 +30,22 @@ struct HuntView: View {
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 36) {
-        composer.rise()
+        HStack(alignment: .top, spacing: 40) {
+          composer
+          RecentTrace()
+        }
+        .rise()
         if let hunt = current {
           HuntSession(hunt: hunt).id(hunt.id)
         }
         ActivityPanel().rise(0.06)
         if !model.hunts.isEmpty { PastHunts().rise(0.1) }
       }
-      .padding(.horizontal, 28)
+      .padding(.horizontal, Theme.gutter)
       .padding(.top, 4)
       .padding(.bottom, 32)
-      .frame(maxWidth: 1100, alignment: .leading)
-      .frame(maxWidth: .infinity)
+      .frame(maxWidth: Theme.measure, alignment: .leading)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
     .scrollIndicators(.automatic)
     .sheet(isPresented: $showKey) { KeySheet().environment(model) }
@@ -61,26 +65,27 @@ struct HuntView: View {
     ZStack(alignment: .topLeading) {
       VStack(alignment: .leading, spacing: 0) {
         Text("Send an agent to break your app")
-          .font(Theme.sans(20, .semibold)).tracking(-0.2).foregroundStyle(Theme.text)
+          .font(Theme.sans(22, .semibold)).tracking(-0.4).foregroundStyle(Theme.text)
         Text("It finds the risky spots, writes experiments, and keeps the ones that break a rule.")
           .font(Theme.sans(13)).foregroundStyle(Theme.dim)
           .padding(.top, 6)
         HStack(spacing: 10) {
+          Image(systemName: "scope").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.faint)
           TextField("", text: $area, prompt: Text("The whole app, or an area like checkout").foregroundStyle(Theme.faint))
             .textFieldStyle(.plain)
-            .font(Theme.sans(14))
+            .font(Theme.sans(15))
             .foregroundStyle(Theme.text)
             .onSubmit(start)
           Text(prompt).font(Theme.mono(11)).foregroundStyle(Theme.ghost).lineLimit(1)
         }
         .padding(.horizontal, 14)
-        .frame(height: 42)
+        .frame(height: 44)
         .frame(maxWidth: 600)
         .background(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).fill(Theme.well))
         .overlay(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).strokeBorder(Theme.line, lineWidth: 1))
         .padding(.top, 22)
         HStack(spacing: 16) {
-          TabStrip(items: HuntHost.allCases, selection: $host, size: 12.5) { h, _ in
+          TabStrip(items: HuntHost.allCases, selection: $host, size: 12) { h, _ in
             Text(h.title).opacity(available(h) ? 1 : 0.55)
           }
           if host == .claudeAPI, available(.claudeAPI) {
@@ -186,6 +191,32 @@ struct HuntView: View {
   }
 }
 
+/// The project's recent runs played back as a trace, whoever started them: a hunt here, your agent
+/// in its own terminal, or Run all. Each sends requests at once; red where that broke a rule.
+private struct RecentTrace: View {
+  @Environment(AppModel.self) private var model
+
+  var body: some View {
+    let recent = Array(model.runs.filter { $0.outcome != "running" }.prefix(16))
+    let failed = recent.map { $0.outcome == "fail" || $0.outcome == "error" }
+    let broke = failed.filter { $0 }.count
+    VStack(spacing: 14) {
+      RequestTrace(trailing: 14, lanes: 6, top: 0.1, bottom: 0.9, speed: 30, runs: failed, busy: model.runningHunt != nil)
+        .frame(width: 280, height: 132)
+        .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.35)], startPoint: .leading, endPoint: .trailing))
+      VStack(spacing: 3) {
+        Text(model.runningHunt != nil ? "Hunting" : recent.isEmpty ? "Listening for runs" : "Last \(Fmt.plural(recent.count, "run"))")
+          .font(Theme.sans(12, .medium)).foregroundStyle(Theme.dim)
+        Text(recent.isEmpty ? "They show up here as they start" : broke == 0 ? "Every rule held" : "\(broke) broke a rule")
+          .font(Theme.sans(12)).foregroundStyle(broke > 0 ? Theme.fail : Theme.faint)
+      }
+    }
+    .frame(width: 280)
+    .padding(.top, 4)
+    .help("Recent runs played back. Each sends requests at once; red where that broke a rule.")
+  }
+}
+
 /// A hunt started from this window: the agent's messages and tool calls as they stream in.
 private struct HuntSession: View {
   @Environment(AppModel.self) private var model
@@ -199,9 +230,9 @@ private struct HuntSession: View {
       HStack(spacing: 12) {
         if running { BrailleSpinner(size: 12) } else { Circle().fill(Tone(hunt.status).color).frame(width: 6, height: 6) }
         VStack(alignment: .leading, spacing: 2) {
-          Text(hunt.prompt).font(Theme.mono(12.5, .medium)).foregroundStyle(Theme.text).lineLimit(1)
+          Text(hunt.prompt).font(Theme.mono(12, .medium)).foregroundStyle(Theme.text).lineLimit(1)
           Text("\(hunt.host ?? "muse")\(hunt.model.map { " · \($0)" } ?? "") · \(Fmt.clock(ISO.date(hunt.startedAt)))")
-            .font(Theme.sans(11.5)).foregroundStyle(Theme.faint)
+            .font(Theme.sans(11)).foregroundStyle(Theme.faint)
         }
         Spacer()
         Metric(label: "Tokens", value: Fmt.kilo(hunt.usage.input + hunt.usage.output))
@@ -272,13 +303,13 @@ private struct EventLine: View {
       case "message":
         Text(event.text ?? "").font(Theme.sans(13)).foregroundStyle(Theme.text).lineSpacing(2).textSelection(.enabled)
       case "stderr":
-        Text(event.text ?? "").font(Theme.mono(10.5)).foregroundStyle(Theme.fail.opacity(0.8)).lineLimit(3)
+        Text(event.text ?? "").font(Theme.mono(11)).foregroundStyle(Theme.fail.opacity(0.8)).lineLimit(3)
       case "end":
         Text(event.text ?? "Ended").font(Theme.sans(12, .medium)).foregroundStyle(Theme.dim)
       case "usage":
         Text("\(Fmt.kilo(event.usage?.input ?? 0)) in · \(Fmt.kilo(event.usage?.output ?? 0)) out").font(Theme.sans(11)).foregroundStyle(Theme.ghost)
       default:
-        Text(event.text ?? event.type ?? event.kind).font(Theme.mono(10.5)).foregroundStyle(Theme.faint).lineLimit(2)
+        Text(event.text ?? event.type ?? event.kind).font(Theme.mono(11)).foregroundStyle(Theme.faint).lineLimit(2)
       }
       Spacer(minLength: 0)
     }
@@ -330,7 +361,6 @@ private struct ActivityRow: View {
       Text(text).font(Theme.sans(13)).foregroundStyle(Theme.text.opacity(0.88)).lineLimit(1)
       Spacer()
       Text(Fmt.clock(a.at)).font(Theme.sans(12)).monospacedDigit().foregroundStyle(Theme.ghost)
-      Image(systemName: "chevron.right").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(hovering && a.run != nil ? Theme.dim : .clear)
     }
     .padding(.horizontal, 10)
     .frame(height: 32)
@@ -400,9 +430,9 @@ struct KeySheet: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 16) {
       VStack(alignment: .leading, spacing: 6) {
-        Text("Anthropic API key").font(Theme.sans(16, .semibold)).foregroundStyle(Theme.text)
+        Text("Anthropic API key").font(Theme.sans(15, .semibold)).foregroundStyle(Theme.text)
         Text("For hunts in this window. Kept in your keychain and given only to the bridge; the hunt runs claude --bare, which never reads your Claude login.")
-          .font(Theme.sans(12.5)).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
+          .font(Theme.sans(12)).foregroundStyle(Theme.dim).fixedSize(horizontal: false, vertical: true)
       }
       SecureField("", text: $key, prompt: Text("sk-ant-…").foregroundStyle(Theme.ghost))
         .textFieldStyle(.plain)

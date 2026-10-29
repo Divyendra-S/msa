@@ -97,7 +97,7 @@ struct ExperimentDetail: View {
       VStack(alignment: .leading, spacing: 32) {
         VStack(alignment: .leading, spacing: 0) {
           HStack(alignment: .center, spacing: 8) {
-            Text(experiment.id).font(Theme.sans(20, .semibold)).tracking(-0.2).foregroundStyle(Theme.text).lineLimit(1)
+            Text(experiment.id).font(Theme.sans(22, .semibold)).tracking(-0.2).foregroundStyle(Theme.text).lineLimit(1)
               .minimumScaleFactor(0.8).layoutPriority(1)
             Spacer(minLength: 12)
             Button("Open File") { model.openFile(experiment.file) }
@@ -162,14 +162,14 @@ struct ExperimentDetail: View {
         }
 
         Panel("Source", accessory: { Text((experiment.file as NSString).lastPathComponent).font(Theme.mono(11)) }) {
-          Text(YAML.highlight(source)).font(Theme.mono(11.5)).textSelection(.enabled).lineSpacing(3)
+          Text(YAML.highlight(source)).font(Theme.mono(12)).textSelection(.enabled).lineSpacing(4)
             .well(padding: 16)
         }
       }
-      .padding(.horizontal, 28)
+      .padding(.horizontal, Theme.gutter)
       .padding(.top, 10)
       .padding(.bottom, 32)
-      .frame(maxWidth: 1000, alignment: .leading)
+      .frame(maxWidth: Theme.measure, alignment: .leading)
     }
     .task(id: experiment.id) {
       source = (try? String(contentsOfFile: experiment.file, encoding: .utf8)) ?? "(couldn't read \(experiment.file))"
@@ -199,7 +199,6 @@ private struct HistoryRow: View {
         .foregroundStyle(Theme.dim).lineLimit(1)
       Spacer()
       Text(Fmt.ago(run.started)).font(Theme.sans(12)).monospacedDigit().foregroundStyle(Theme.ghost)
-      Image(systemName: "chevron.right").font(.system(size: 9.5, weight: .semibold)).foregroundStyle(hovering ? Theme.dim : .clear)
     }
     .padding(.horizontal, 10)
     .frame(height: 32)
@@ -220,7 +219,7 @@ struct JobPanel: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 10) {
       if let error = job.error {
-        Text(error).font(Theme.sans(12.5)).foregroundStyle(Theme.fail)
+        Text(error).font(Theme.sans(12)).foregroundStyle(Theme.fail)
       }
       TerminalPanel(title: job.status == "running" ? "Running" : Tone.word(job.status), lines: job.output, tint: job.status == "running" || Tone(job.status) == .pass ? nil : Tone(job.status).color, follow: true)
     }

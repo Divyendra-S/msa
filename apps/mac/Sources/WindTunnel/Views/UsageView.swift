@@ -54,7 +54,7 @@ struct UsageView: View {
                   Text(Fmt.usd(job.usd)).foregroundStyle(job.usd > 0 ? Theme.text : Theme.faint)
                   Text(Fmt.ago(ISO.date(job.last))).foregroundStyle(Theme.faint)
                 }
-                .font(Theme.sans(12.5))
+                .font(Theme.sans(12))
                 .monospacedDigit()
               }
             }
@@ -64,11 +64,11 @@ struct UsageView: View {
           EmptyState(title: "No usage yet", text: "Tokens and decisions show up after your agent's first job.").frame(height: 420)
         }
       }
-      .padding(.horizontal, 28)
+      .padding(.horizontal, Theme.gutter)
       .padding(.top, 8)
       .padding(.bottom, 32)
-      .frame(maxWidth: 1100, alignment: .leading)
-      .frame(maxWidth: .infinity)
+      .frame(maxWidth: Theme.measure, alignment: .leading)
+      .frame(maxWidth: .infinity, alignment: .leading)
     }
   }
 
@@ -98,7 +98,7 @@ private struct Metric: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 0) {
-      Text(title).font(Theme.sans(12.5)).foregroundStyle(Theme.faint)
+      Text(title).font(Theme.sans(12)).foregroundStyle(Theme.faint)
       Text(value).font(Theme.figure(36)).foregroundStyle(Theme.text).contentTransition(.numericText()).padding(.top, 6)
       Meter(value: fraction ?? 0).padding(.top, 12).opacity(fraction == nil ? 0 : 1)
       Text(caption).font(Theme.sans(12)).foregroundStyle(Theme.faint).padding(.top, 10)
@@ -153,7 +153,7 @@ struct SettingsView: View {
           .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(Theme.well))
           .overlay(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).strokeBorder(Theme.line, lineWidth: 1))
         Text("Path to the CLI's bin.js. Empty: windtunnel on your PATH, else this checkout.")
-          .font(Theme.sans(11.5)).foregroundStyle(Theme.faint)
+          .font(Theme.sans(11)).foregroundStyle(Theme.faint)
       }
       if let info = model.info {
         VStack(alignment: .leading, spacing: 8) {
@@ -185,7 +185,7 @@ struct MenuBarView: View {
         LogoMark(size: 18)
         VStack(alignment: .leading, spacing: 0) {
           Text("Wind Tunnel").font(Theme.sans(13, .semibold)).foregroundStyle(Theme.text)
-          Text(model.status?.project.name ?? "No project open").font(Theme.sans(11.5)).foregroundStyle(Theme.faint)
+          Text(model.status?.project.name ?? "No project open").font(Theme.sans(11)).foregroundStyle(Theme.faint)
         }
         Spacer()
         LiveDot(on: model.live)
@@ -195,7 +195,7 @@ struct MenuBarView: View {
           BrailleSpinner()
           Text("Hunting \(hunt.prompt)").font(Theme.sans(12)).foregroundStyle(Theme.text).lineLimit(1)
           Spacer()
-          Text(Fmt.usd(hunt.usage.usd)).font(Theme.sans(11.5)).monospacedDigit().foregroundStyle(Theme.dim)
+          Text(Fmt.usd(hunt.usage.usd)).font(Theme.sans(11)).monospacedDigit().foregroundStyle(Theme.dim)
         }
       }
       if let job = model.runningJob {

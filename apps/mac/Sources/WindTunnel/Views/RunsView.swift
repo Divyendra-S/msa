@@ -87,7 +87,7 @@ struct RunsList: View {
           }
           if filtered.isEmpty {
             Text(model.runs.isEmpty ? "No runs yet." : "Nothing matches.")
-              .font(Theme.sans(12.5)).foregroundStyle(Theme.faint)
+              .font(Theme.sans(12)).foregroundStyle(Theme.faint)
               .frame(maxWidth: .infinity).padding(.top, 30)
           }
         }
@@ -147,7 +147,7 @@ private struct BatchHeader: View {
       if !first { Hairline().padding(.horizontal, 10).padding(.bottom, 14) }
       HStack(spacing: 8) {
         Text("\(Fmt.day(batch.started).capitalized), \(Fmt.time(batch.started))")
-          .font(Theme.sans(11.5, .medium)).foregroundStyle(Theme.dim)
+          .font(Theme.sans(11, .medium)).foregroundStyle(Theme.dim)
         Spacer()
         if running > 0 {
           BrailleSpinner(size: 9)
@@ -158,7 +158,7 @@ private struct BatchHeader: View {
           Text(batch.runs.count == 1 ? "held" : "all \(batch.runs.count) held").foregroundStyle(Theme.ghost)
         }
       }
-      .font(Theme.sans(11.5))
+      .font(Theme.sans(11))
       .monospacedDigit()
       .padding(.horizontal, 10)
       .padding(.bottom, 6)
@@ -199,9 +199,9 @@ private struct RunRow: View {
       }
       Spacer(minLength: 6)
       if let progress = run.running {
-        Text("\(progress.done)/\(progress.total)").font(Theme.sans(11.5)).monospacedDigit().foregroundStyle(Theme.accent)
+        Text("\(progress.done)/\(progress.total)").font(Theme.sans(11)).monospacedDigit().foregroundStyle(Theme.accent)
       } else if streak == .new {
-        Text("new").font(Theme.sans(11.5, .medium)).foregroundStyle(Theme.fail)
+        Text("new").font(Theme.sans(11, .medium)).foregroundStyle(Theme.fail)
           .frame(height: 17)
           .help(Streak.new.help)
       }
@@ -232,7 +232,7 @@ private struct FoldRow: View {
         Image(systemName: "chevron.right").font(.system(size: 8.5, weight: .semibold))
           .rotationEffect(.degrees(open ? 90 : 0))
           .frame(width: 10)
-        Text("\(count) held").font(Theme.sans(12.5))
+        Text("\(count) held").font(Theme.sans(12))
         Spacer()
       }
       .foregroundStyle(hovering ? Theme.dim : Theme.faint)
@@ -256,7 +256,7 @@ struct SearchField: View {
       Image(systemName: "magnifyingglass").font(.system(size: 11, weight: .medium)).foregroundStyle(focused ? Theme.dim : Theme.faint)
       TextField("", text: $text, prompt: Text(prompt).foregroundStyle(Theme.faint))
         .textFieldStyle(.plain)
-        .font(Theme.sans(12.5))
+        .font(Theme.sans(12))
         .foregroundStyle(Theme.text)
         .focused($focused)
       if !text.isEmpty {
