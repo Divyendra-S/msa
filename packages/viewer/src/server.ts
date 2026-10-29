@@ -11,6 +11,7 @@ import {
   type LaneRef,
   listRuns,
   listUsage,
+  loadExperiments,
   repView,
   type Runner,
   runDetail,
@@ -18,7 +19,8 @@ import {
   type ViewerState,
 } from "@windtunnel/core";
 import { Workspace } from "@windtunnel/mcp";
-import { HuntError, type HuntEvent, type HuntInfo, HuntManager } from "./hunt.ts";
+import { HuntError, type HuntEvent, type HuntInfo, HuntManager, type HuntOptions } from "./hunt.ts";
+import { JobError, type RunJob, RunJobs } from "./jobs.ts";
 import { StoreWatcher } from "./watch.ts";
 
 export const DEFAULT_PORT = 4477;
@@ -37,6 +39,10 @@ export interface ViewerOptions {
   distDir?: string;
   /** Environment for the hunt (default: this process's). */
   env?: NodeJS.ProcessEnv;
+  /** The command that runs the windtunnel CLI (e.g. node and its bin), for runs started here. */
+  cli?: string[];
+  /** The Wind Tunnel plugin folder, for hunts in Claude Code. */
+  pluginDir?: string;
 }
 
 export interface Viewer {
@@ -63,7 +69,8 @@ export async function startViewer(options: ViewerOptions): Promise<Viewer> {
   const { project } = runner;
   const token = randomBytes(24).toString("hex");
   const distDir = options.distDir ?? DIST_DIR;
-  const hunts = new HuntManager(project.stateDir, project.root, project.config.hunt.command, options.env ?? process.env);
+  const hunts = new HuntManager(project.stateDir, project.root, project.config.hunt.command, options.env ?? process.env, { pluginDir: options.pluginDir });
+  const jobs = new RunJobs(project.root, options.cli, options.env ?? process.env);
   const watcher = new StoreWatcher(runner.store, project.stateDir);
   const clients = new Set<ServerResponse>();
   let port = 0;
@@ -76,13 +83,14 @@ export async function startViewer(options: ViewerOptions): Promise<Viewer> {
   });
 
   const routes: { method: string; pattern: RegExp; handler: Handler }[] = [
-    { method: "GET", pattern: /^\/api\/status$/, handler: async () => status(workspace, runner, hunts) },
+    { method: "GET", pattern: /^\/api\/status$/, handler: async () => status(workspace, runner, hunts, jobs) },
     {
       method: "GET",
       pattern: /^\/api\/runs$/,
       handler: async (_q, _s, _p, url) => listRuns(runner.store, clamp(Number(url.searchParams.get("limit") ?? 100), 1, 300)),
     },
     { method: "GET", pattern: /^\/api\/runs\/([\w-]+)$/, handler: async (_q, _s, [id]) => runDetail(runner.store, id!) },
+    { method: "GET", pattern: /^\/api\/runs\/([\w-]+)\/evidence$/, handler: async (_q, _s, [id]) => ({ text: await workspace.evidence(id!) }) },
     {
       method: "GET",
       pattern: /^\/api\/runs\/([\w-]+)\/reps\/(\d+)$/,
@@ -112,6 +120,18 @@ export async function startViewer(options: ViewerOptions): Promise<Viewer> {
       pattern: /^\/api\/usage$/,
       handler: async () => ({ budget: project.config.budget, jobs: await listUsage(project.stateDir, 30) }),
     },
+    { method: "GET", pattern: /^\/api\/experiments$/, handler: async () => experiments(runner) },
+    {
+      method: "POST",
+      pattern: /^\/api\/experiments\/run$/,
+      handler: async (req) => jobs.start((await readBody(req)) as { experiments?: unknown; repeat?: unknown }),
+    },
+    { method: "GET", pattern: /^\/api\/jobs$/, handler: async () => jobs.list() },
+    {
+      method: "POST",
+      pattern: /^\/api\/jobs\/([\w-]+)\/stop$/,
+      handler: async (_q, _s, [id]) => ({ stopping: jobs.stop(id!) }),
+    },
     { method: "GET", pattern: /^\/api\/decisions$/, handler: async () => (await workspace.decisions()).open() },
     { method: "GET", pattern: /^\/api\/hunts$/, handler: async () => hunts.list(30) },
     {
@@ -123,9 +143,11 @@ export async function startViewer(options: ViewerOptions): Promise<Viewer> {
       method: "POST",
       pattern: /^\/api\/hunts$/,
       handler: async (req) => {
-        const body = (await readBody(req)) as { prompt?: unknown };
+        const body = (await readBody(req)) as { prompt?: unknown; host?: unknown; model?: unknown; budgetUsd?: unknown };
         if (typeof body.prompt !== "string") throw new HttpError(400, "prompt (a string) is required");
-        return hunts.start(body.prompt);
+        if (body.model !== undefined && typeof body.model !== "string") throw new HttpError(400, "model: a string");
+        if (body.budgetUsd !== undefined && typeof body.budgetUsd !== "number") throw new HttpError(400, "budgetUsd: a number");
+        return hunts.start(body.prompt, { host: body.host, model: body.model, budgetUsd: body.budgetUsd } as HuntOptions);
       },
     },
     {
@@ -154,6 +176,10 @@ export async function startViewer(options: ViewerOptions): Promise<Viewer> {
 
   const unsubscribe = hunts.subscribe((id, event?: HuntEvent, info?: HuntInfo) => {
     const message = event ? { type: "hunt-event", id, event } : { type: "hunt", id, info };
+    for (const c of clients) send(c, message);
+  });
+  const unsubscribeJobs = jobs.subscribe((id, line?: string, info?: RunJob) => {
+    const message = line !== undefined ? { type: "job-output", id, line } : { type: "job", id, info };
     for (const c of clients) send(c, message);
   });
 
@@ -216,9 +242,11 @@ export async function startViewer(options: ViewerOptions): Promise<Viewer> {
     root: project.root,
     async close() {
       unsubscribe();
+      unsubscribeJobs();
       watcher.close();
       for (const c of clients) c.end();
       await hunts.close();
+      await jobs.close();
       await new Promise<void>((r) => server.close(() => r()));
       server.closeAllConnections();
       // Only our own state file: another viewer may have started since.
@@ -244,16 +272,42 @@ function notFound(message: string): never {
   throw new HttpError(404, message);
 }
 
-async function status(workspace: Workspace, runner: Runner, hunts: HuntManager) {
+async function status(workspace: Workspace, runner: Runner, hunts: HuntManager, jobs: RunJobs) {
   const { project } = runner;
   const hunt = await hunts.availability();
   return {
     project: { name: basename(project.root), root: project.root, repoRoot: project.repoRoot, appSubdir: project.appSubdir },
     hunt: { ...hunt, skill: project.config.hunt.skill, running: hunts.running() ?? null },
+    jobs: { running: jobs.running() ?? null },
     decider: (await workspace.decider()).level,
     budget: project.config.budget,
     users: Object.keys(project.config.users),
   };
+}
+
+/** Every experiment with its newest run, for the Mac app's list. */
+async function experiments(runner: Runner) {
+  const all = await loadExperiments(runner.project).catch((err: unknown) => {
+    // A file that doesn't parse: the message says which and why.
+    throw err instanceof ConfigError ? new HttpError(400, err.message) : err;
+  });
+  const last = new Map<string, { run: string; outcome: string; headline: string; startedAt: string }>();
+  // Newest first, with runs still going on top.
+  for (const r of await listRuns(runner.store, 300)) {
+    if (!last.has(r.experiment)) last.set(r.experiment, { run: r.id, outcome: r.outcome, headline: r.headline, startedAt: r.startedAt });
+  }
+  return all
+    .map((e) => ({
+      id: e.id,
+      ...(e.description ? { description: e.description } : {}),
+      flow: e.flow,
+      ...(e.users ? { users: e.users } : {}),
+      repeat: e.repeat,
+      file: e.file,
+      ...(e.perturb.length ? { perturb: e.perturb.length } : {}),
+      ...(last.has(e.id) ? { last: last.get(e.id) } : {}),
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
 }
 
 /** The app map's request → handler lookup, rebuilt at most every 30 s (it parses the code). */
@@ -278,7 +332,7 @@ function send(res: ServerResponse, data: unknown): void {
 
 function fail(res: ServerResponse, err: unknown): void {
   const status =
-    err instanceof HttpError || err instanceof HuntError
+    err instanceof HttpError || err instanceof HuntError || err instanceof JobError
       ? err.status
       : err instanceof ConfigError || /^(no run|bad run id|run .* has no)/.test((err as Error)?.message ?? "")
         ? 404

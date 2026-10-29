@@ -44,7 +44,7 @@ import {
 import { findProjectDir, serveStdio, Workspace } from "@windtunnel/mcp";
 import { buildUi, startViewer, uiStatus } from "@windtunnel/viewer";
 import { type Host, HOSTS, install } from "./install.ts";
-import { writeSkills } from "./skills.ts";
+import { PLUGIN_DIR, writeSkills } from "./skills.ts";
 
 export interface Flags {
   cwd?: string;
@@ -134,6 +134,8 @@ Options
                       the bug; the fix is then --base itself unless --patch is given
   --port <n>          (view) port on 127.0.0.1 (default 4477, or the next free one)
   --no-open           (view) don't open the browser
+                      (view --json: print the address and token as one line of JSON for the Mac app,
+                      without a browser; it stops when its stdin closes)
   --all               (clean) also drop snapshots and delete worktrees
   --yes, -y           (install) don't ask before making changes
   --dry-run           (install) only show what would be done
@@ -584,25 +586,51 @@ async function skills(flags: Flags): Promise<number> {
   return 0;
 }
 
-/** Serves the viewer until Ctrl-C; a viewer already running for the project is reused. */
+/**
+ * Serves the viewer until Ctrl-C; a viewer already running for the project is reused. With --json
+ * (the Mac app): one line of JSON with the address and token, no browser or web UI build, and it
+ * stops when its stdin closes (the app quit).
+ */
 async function view(flags: Flags): Promise<number> {
   const dir = await findProjectDir(flags.cwd ? resolve(flags.cwd) : process.cwd());
   const project = await openProject(dir);
   const running = await runningViewer(project.stateDir);
   if (running && !flags.port) {
+    if (flags.json) {
+      process.stdout.write(`${JSON.stringify({ url: running.url, port: running.port, token: running.token, pid: running.pid, root: project.root, reused: true })}\n`);
+      return 0;
+    }
     const url = `${running.url}/?token=${running.token}`;
     process.stdout.write(`The viewer for this project is already running (pid ${running.pid}):\n  ${url}\n`);
     if (!flags["no-open"]) openBrowser(url);
     return 0;
   }
-  const ui = await uiStatus();
-  if (ui !== "ok") {
-    process.stderr.write(ui === "missing" ? "Building the viewer (once)…\n" : "The viewer's UI changed: rebuilding…\n");
-    await buildUi();
+  if (!flags.json) {
+    const ui = await uiStatus();
+    if (ui !== "ok") {
+      process.stderr.write(ui === "missing" ? "Building the viewer (once)…\n" : "The viewer's UI changed: rebuilding…\n");
+      await buildUi();
+    }
   }
   const port = flags.port === undefined ? undefined : Number(flags.port);
   if (port !== undefined && !(Number.isInteger(port) && port >= 0 && port < 65536)) throw new ConfigError(`--port: not a port: ${flags.port}`);
-  const viewer = await startViewer({ cwd: dir, ...(port !== undefined ? { port } : {}) });
+  const viewer = await startViewer({
+    cwd: dir,
+    ...(port !== undefined ? { port } : {}),
+    // Runs started from the viewer use this same CLI.
+    cli: [process.execPath, ...process.execArgv, process.argv[1]!],
+    pluginDir: PLUGIN_DIR,
+  });
+  stopOnSignals(() => viewer.close());
+  if (flags.json) {
+    process.stdout.write(`${JSON.stringify({ url: viewer.url, port: viewer.port, token: viewer.token, pid: process.pid, root: viewer.root, reused: false })}\n`);
+    if (!process.stdin.isTTY) {
+      const stop = () => void viewer.close().finally(() => process.exit(0));
+      process.stdin.once("end", stop).once("close", stop).resume();
+    }
+    await new Promise(() => undefined);
+    return 0;
+  }
   process.stdout.write(
     [
       `Wind Tunnel viewer for ${viewer.root}`,
@@ -614,7 +642,6 @@ async function view(flags: Flags): Promise<number> {
     ].join("\n"),
   );
   if (!flags["no-open"]) openBrowser(viewer.openUrl);
-  stopOnSignals(() => viewer.close());
   await new Promise(() => undefined);
   return 0;
 }

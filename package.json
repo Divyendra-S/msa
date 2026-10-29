@@ -19,6 +19,8 @@
     "viewer:build": "pnpm --filter @windtunnel/viewer build",
     "wt": "node packages/cli/src/bin.ts",
     "cli:build": "node packages/cli/build.ts",
+    "mac:build": "apps/mac/build.sh",
+    "mac:open": "apps/mac/build.sh --open",
     "bench": "node bench/src/cli.ts"
   },
   "devDependencies": {

@@ -30,8 +30,16 @@ export interface HuntUsage {
   usd: number;
 }
 
+export type HuntHost = "muse" | "claude";
+
 export interface HuntInfo {
   id: string;
+  /** muse: Muse Code on the Meta key · claude: Claude Code headless on an Anthropic API key. */
+  host: HuntHost;
+  /** The model asked for (claude). */
+  model?: string;
+  /** Spending cap passed to the host (claude). */
+  budgetUsd?: number;
   prompt: string;
   /** The command, without the prompt. */
   command: string[];
@@ -44,24 +52,72 @@ export interface HuntInfo {
   events: number;
 }
 
-export interface HuntAvailability {
+export interface HostAvailability {
   ok: boolean;
   /** Why the button is off, in words for the user. */
   reason?: string;
   command: string[];
 }
 
+export interface ClaudeAvailability extends HostAvailability {
+  models: string[];
+  defaultModel: string;
+}
+
+/** Muse Code's availability at the top (what the web viewer reads), and each host's. */
+export interface HuntAvailability extends HostAvailability {
+  hosts: { muse: HostAvailability; claude: ClaudeAvailability };
+}
+
+export interface HuntOptions {
+  host?: HuntHost;
+  model?: string;
+  budgetUsd?: number;
+}
+
+export const CLAUDE_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"];
+const CLAUDE_DEFAULT_BUDGET = 5;
+
+/**
+ * Claude Code, headless, billed to an Anthropic API key only: `--bare` makes the key the only
+ * credential it reads (never the user's login or keychain), and it gets a config folder of its own.
+ */
+export const CLAUDE_COMMAND = [
+  "claude",
+  "-p",
+  "{prompt}",
+  "--bare",
+  "--output-format",
+  "stream-json",
+  "--verbose",
+  "--plugin-dir",
+  "{plugin_dir}",
+  "--model",
+  "{model}",
+  "--max-budget-usd",
+  "{budget}",
+  "--permission-mode",
+  "acceptEdits",
+  "--allowedTools",
+  "mcp__plugin_windtunnel_windtunnel,Read,Grep,Glob,Edit,Write",
+];
+
 const MAX_RAW = 4_000;
 const MAX_EVENTS = 5_000;
 /** Credentials of other agents' providers never reach the hunt's process. */
 const FOREIGN_ENV = /^(ANTHROPIC_|CLAUDE_|CLAUDECODE|OPENAI_|CODEX_)/;
+/** Claude Code gets ANTHROPIC_API_KEY and nothing else of anyone's: no Meta key, no base URL pointing elsewhere. */
+const NOT_FOR_CLAUDE = /^(MODEL_API_KEY$|META_API_KEY$|OPENAI_|CODEX_|CLAUDECODE|CLAUDE_|ANTHROPIC_)/;
 
 /**
- * Starts a headless Muse Code run (`muse exec --json`) from the viewer and turns its JSONL
- * stream into events. Billed to the Meta key in the viewer's shell; one hunt at a time.
+ * Starts a headless hunt from the viewer and turns its JSONL stream into events: Muse Code
+ * (`muse exec --json`, billed to the Meta key in the viewer's shell) or Claude Code (`claude -p`,
+ * billed to an Anthropic API key). One hunt at a time.
  */
 export class HuntManager {
   private readonly dir: string;
+  private readonly stateDir: string;
+  private readonly pluginDir?: string;
   private current?: { info: HuntInfo; child: ChildProcess; events: HuntEvent[]; started: number };
   private readonly listeners = new Set<(id: string, event?: HuntEvent, info?: HuntInfo) => void>();
 
@@ -69,8 +125,10 @@ export class HuntManager {
   private readonly command: string[];
   private readonly env: NodeJS.ProcessEnv;
 
-  constructor(stateDir: string, root: string, command: string[], env: NodeJS.ProcessEnv = process.env) {
+  constructor(stateDir: string, root: string, command: string[], env: NodeJS.ProcessEnv = process.env, options: { pluginDir?: string } = {}) {
     this.dir = join(stateDir, HUNTS_DIR);
+    this.stateDir = stateDir;
+    this.pluginDir = options.pluginDir;
     this.root = root;
     this.command = command;
     this.env = env;
@@ -83,6 +141,11 @@ export class HuntManager {
   }
 
   async availability(): Promise<HuntAvailability> {
+    const muse = await this.museAvailability();
+    return { ...muse, hosts: { muse, claude: await this.claudeAvailability() } };
+  }
+
+  private async museAvailability(): Promise<HostAvailability> {
     const command = this.command;
     const program = basename(command[0]!).replace(/\.(cmd|exe)$/i, "");
     if (program === "claude" || program === "codex") {
@@ -101,31 +164,72 @@ export class HuntManager {
     return { ok: true, command };
   }
 
+  private async claudeAvailability(): Promise<ClaudeAvailability> {
+    const base = { command: CLAUDE_COMMAND.filter((a) => a !== "{prompt}"), models: CLAUDE_MODELS, defaultModel: CLAUDE_MODELS[0]! };
+    if (!this.pluginDir) return { ...base, ok: false, reason: "The Wind Tunnel plugin folder is unknown: start the viewer with windtunnel view." };
+    if (!(await findExecutable("claude", this.env.PATH ?? ""))) {
+      return { ...base, ok: false, reason: "Claude Code (claude) is not on the PATH of the shell that started the viewer." };
+    }
+    if (!this.env.ANTHROPIC_API_KEY) {
+      return {
+        ...base,
+        ok: false,
+        reason: "Add an Anthropic API key (Settings in the Mac app, or ANTHROPIC_API_KEY in the viewer's shell). Headless runs never use your Claude login: for that, use Hunt in Claude Code.",
+      };
+    }
+    return { ...base, ok: true };
+  }
+
   running(): HuntInfo | undefined {
     return this.current?.info;
   }
 
-  async start(prompt: string): Promise<HuntInfo> {
+  async start(prompt: string, options: HuntOptions = {}): Promise<HuntInfo> {
     if (this.current) throw new HuntError(409, `hunt ${this.current.info.id} is still running`);
     const text = prompt.trim();
     if (!text) throw new HuntError(400, "empty prompt");
     if (text.length > 20_000) throw new HuntError(400, "prompt longer than 20,000 characters");
-    const available = await this.availability();
+    // The prompt is an argument of the agent's command: it must not read as one of its flags.
+    if (text.startsWith("-")) throw new HuntError(400, "a prompt can't start with -");
+    const host = options.host ?? "muse";
+    if (host !== "muse" && host !== "claude") throw new HuntError(400, `host: muse or claude, not ${String(host)}`);
+    const claude = host === "claude";
+    const model = claude ? (options.model ?? CLAUDE_MODELS[0]!) : undefined;
+    if (model !== undefined && !/^claude-[a-z0-9.-]+$/.test(model)) throw new HuntError(400, `model: not a Claude model id: ${model}`);
+    const budgetUsd = claude ? (options.budgetUsd ?? CLAUDE_DEFAULT_BUDGET) : undefined;
+    if (budgetUsd !== undefined && !(typeof budgetUsd === "number" && budgetUsd >= 0.1 && budgetUsd <= 50)) throw new HuntError(400, "budgetUsd: from 0.1 to 50");
+    const available = claude ? await this.claudeAvailability() : await this.museAvailability();
     if (!available.ok) throw new HuntError(412, available.reason!);
 
     const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(2, 14);
     const id = `${stamp.slice(0, 6)}-${stamp.slice(6)}-${randomBytes(2).toString("hex")}`;
     await mkdir(this.dir, { recursive: true });
-    const env = Object.fromEntries(Object.entries(this.env).filter(([k]) => !FOREIGN_ENV.test(k)));
-    // Muse Code reads META_API_KEY in headless runs: the same Meta key.
-    if (env.MODEL_API_KEY && !env.META_API_KEY) env.META_API_KEY = env.MODEL_API_KEY;
+    let env: NodeJS.ProcessEnv;
+    if (claude) {
+      env = Object.fromEntries(Object.entries(this.env).filter(([k]) => k === "ANTHROPIC_API_KEY" || !NOT_FOR_CLAUDE.test(k)));
+      // A config folder of its own: no login, settings or plugins of the user's Claude Code.
+      env.CLAUDE_CONFIG_DIR = join(this.stateDir, "cache", "claude-headless");
+      await mkdir(env.CLAUDE_CONFIG_DIR, { recursive: true });
+    } else {
+      env = Object.fromEntries(Object.entries(this.env).filter(([k]) => !FOREIGN_ENV.test(k)));
+      // Muse Code reads META_API_KEY in headless runs: the same Meta key.
+      if (env.MODEL_API_KEY && !env.META_API_KEY) env.META_API_KEY = env.MODEL_API_KEY;
+    }
     // The MCP server the agent starts counts its usage under this job, if the host passes the variable on.
     env.WINDTUNNEL_JOB = `hunt-${id}`;
-    const child = spawn(this.command[0]!, [...this.command.slice(1), text], { cwd: this.root, env, stdio: ["ignore", "pipe", "pipe"] });
+    const template = claude ? CLAUDE_COMMAND : this.command;
+    const fill = (a: string) =>
+      a.replaceAll("{plugin_dir}", this.pluginDir ?? "").replaceAll("{model}", model ?? "").replaceAll("{budget}", String(budgetUsd ?? ""));
+    const command = template.filter((a) => a !== "{prompt}").map(fill);
+    const args = template.includes("{prompt}") ? template.map((a) => (a === "{prompt}" ? text : fill(a))) : [...command, text];
+    const child = spawn(args[0]!, args.slice(1), { cwd: this.root, env, stdio: ["ignore", "pipe", "pipe"] });
     const info: HuntInfo = {
       id,
+      host,
+      ...(model ? { model } : {}),
+      ...(budgetUsd !== undefined ? { budgetUsd } : {}),
       prompt: text,
-      command: this.command,
+      command,
       startedAt: new Date().toISOString(),
       status: "running",
       usage: { input: 0, output: 0, cached: 0, usd: 0 },
@@ -172,7 +276,7 @@ export class HuntManager {
       await this.save(info);
       this.emit(id, undefined, info);
     };
-    child.on("error", (err) => void finish(null, `could not start ${this.command[0]}: ${err.message}`));
+    child.on("error", (err) => void finish(null, `could not start ${args[0]}: ${err.message}`));
     child.on("close", (code) => void finish(code));
     return info;
   }
@@ -197,7 +301,7 @@ export class HuntManager {
     const files = (await readdir(this.dir).catch(() => [] as string[])).filter((f) => f.endsWith(".json")).sort().reverse().slice(0, limit);
     const out: HuntInfo[] = [];
     for (const f of files) {
-      const info = f === `${this.current?.info.id}.json` ? this.current!.info : await readJson<HuntInfo>(join(this.dir, f));
+      const info = f === `${this.current?.info.id}.json` ? this.current!.info : withHost(await readJson<HuntInfo>(join(this.dir, f)));
       if (info) out.push(info.status === "running" && info !== this.current?.info ? { ...info, status: "stopped" } : info);
     }
     return out;
@@ -206,7 +310,7 @@ export class HuntManager {
   async get(id: string): Promise<{ info: HuntInfo; events: HuntEvent[] } | undefined> {
     if (!/^[\w-]+$/.test(id)) return undefined;
     if (this.current?.info.id === id) return { info: this.current.info, events: this.current.events };
-    const info = await readJson<HuntInfo>(join(this.dir, `${id}.json`));
+    const info = withHost(await readJson<HuntInfo>(join(this.dir, `${id}.json`)));
     if (!info) return undefined;
     const text = await readFile(join(this.dir, `${id}.jsonl`), "utf8").catch(() => "");
     // A hunt still "running" on disk belonged to a viewer that is gone.
@@ -319,10 +423,13 @@ function findUsage(o: Record<string, any>, depth = 0): HuntUsage | undefined {
   return undefined;
 }
 
-/** Turn-by-turn counts add up; a final summary event replaces the sum when it is larger. */
+/**
+ * Turn-by-turn counts add up; a final summary event replaces the sum when it is larger, or when it
+ * reports a cost (the host's own total: Claude Code repeats a turn's usage on each of its messages).
+ */
 export function addUsage(total: HuntUsage, u: HuntUsage, type?: string): void {
   if (type && /result|summary|session\.(end|completed)|thread\.completed|^done$|^end$/i.test(type)) {
-    if (u.input + u.output >= total.input + total.output) Object.assign(total, u);
+    if (u.usd > 0 || u.input + u.output >= total.input + total.output) Object.assign(total, u);
     return;
   }
   total.input += u.input;
@@ -341,6 +448,11 @@ async function findExecutable(command: string, path: string): Promise<string | u
     if (await access(c, constants.X_OK).then(() => true, () => false)) return c;
   }
   return undefined;
+}
+
+/** Hunts saved before there was a choice of host ran Muse Code. */
+function withHost(info: HuntInfo | undefined): HuntInfo | undefined {
+  return info && !info.host ? { ...info, host: "muse" } : info;
 }
 
 async function readJson<T>(path: string): Promise<T | undefined> {

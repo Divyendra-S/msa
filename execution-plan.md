@@ -98,11 +98,11 @@
 
 - [ ] S1 Proof gate (`Stop` hook)
 - [ ] S3 Shrinking (minimal failing experiment)
-- [ ] S4 Headless `claude -p` / `codex exec` with API keys
+- [ ] S4 Headless `claude -p` / `codex exec` with API keys (Claude Code done as a hunt host of the local API, `--bare` on ANTHROPIC_API_KEY; unverified with a real key; codex and CI not yet)
 - [ ] S5 Cross-agent check
 - [ ] S6 Express support
 - [ ] S7 Visual fallback (Muse Spark on cropped screenshot)
-- [ ] S8 Swift Mac app (menu bar, notifications, Run hunt, viewer window)
+- [x] S8 Swift Mac app (menu bar, notifications, Run hunt, viewer window): `apps/mac`, native views over `windtunnel view --json`; hunts with Claude 5 (your Claude Code, or headless on an API key: S4 for Claude Code)
 
 ## Later (after the hackathon)
 
@@ -114,4 +114,4 @@
 - [ ] CI mode (GitHub Action)
 - [ ] Reproduce a Sentry issue as an experiment
 - [ ] Channels; Codex app-server; mobile apps
-- [ ] Fully native Swift views in the Mac app
+- [x] Fully native Swift views in the Mac app (done with S8)

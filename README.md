@@ -52,6 +52,9 @@ packages/
   mcp/        MCP server (map, validate, run, evidence, branch, prove, decide) with the usage meter
   cli/        `windtunnel` CLI, `install`; build.ts bundles the npm package (windtunnel-cli)
   viewer/     local API (HTTP + event stream) and web viewer (Vite + React in app/), Run hunt
+apps/
+  mac/        native Mac app (SwiftUI) over the local API: runs, races, trace chain, experiments,
+              hunts with Claude 5 (your Claude Code, or an API key) and Muse Code
 plugins/
   windtunnel/ plugin for Claude Code and Codex: skills (init, hunt, prove, test), MCP server,
               helper subagent
@@ -227,3 +230,13 @@ rule, and shows the trace chain from request to handler line to SQL, the databas
 rules and screenshots. **Run hunt** starts Muse Code without a terminal, billed to the Meta
 key in the viewer's shell, and streams its progress. **Open in Claude Code** opens a terminal
 with the prompt typed for you to send. See [`docs/viewer.md`](docs/viewer.md).
+
+## Mac app
+
+```sh
+pnpm mac:open
+```
+
+The same views as native SwiftUI, plus experiments you can run from the app and hunts with
+Claude 5: in your own Claude Code (the app follows every run it starts) or headless on an
+Anthropic API key. See [`apps/mac`](apps/mac/README.md).

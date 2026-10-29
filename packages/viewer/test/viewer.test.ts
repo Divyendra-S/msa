@@ -116,6 +116,13 @@ describe("viewer", () => {
     assert.equal((await get("/api/compare?lanes=../x")).status, 400);
   });
 
+  it("gives a run's evidence packet as text", async () => {
+    const { text } = await json<{ text: string }>(`/api/runs/${RUN}/evidence`);
+    assert.match(text, /send-twice/);
+    assert.match(text, /at-most-one-hit/);
+    assert.equal((await get("/api/runs/261029-000000-zzzz/evidence")).status, 404);
+  });
+
   it("runs a hunt with the Meta key only, and streams its events", async () => {
     const events = await openEvents(viewer);
     const started = await post("/api/hunts", { prompt: "Use the windtunnel-hunt skill on checkout." });

@@ -120,18 +120,42 @@ must send JSON, and must come from the viewer's own origin when it has an `Origi
 
 | Route | Returns |
 |---|---|
-| `GET /api/status` | project, hunt availability (and why not), Level 1, budget, test users |
+| `GET /api/status` | project, hunt availability per host (`hunt.hosts.muse`, `hunt.hosts.claude`, and why not), the run started from here (`jobs.running`), Level 1, budget, test users |
 | `GET /api/runs?limit=` | runs newest first; unfinished ones carry `running: {done, total}` |
 | `GET /api/runs/<run>` | experiment, result, repetitions, the one to show first (`focus`), the run to compare with (`reference`), failure sorting |
 | `GET /api/runs/<run>/reps/<n>` | steps, requests (handler, SQL counts), rules, errors, database diff, trace chain, race, webhooks, charges, console, screenshots, app log |
 | `GET /api/runs/<run>/reps/<n>/screens/<tab>.jpg` | a screenshot taken where the flow failed |
+| `GET /api/runs/<run>/evidence` | `{text}`: the evidence packet the agent gets from `windtunnel_evidence` |
 | `GET /api/compare?lanes=<run>/<n>,…` | up to 8 runs: lanes, rows lined up by tab and step, the reference lane, each lane's first divergence |
+| `GET /api/experiments` | every experiment (id, description, flow, users, repeat, file, perturbations) with its newest run |
+| `POST /api/experiments/run {experiments?, repeat?}` | runs them with the CLI (`windtunnel run`), one run at a time (409 while one goes) |
+| `GET /api/jobs`, `POST /api/jobs/<id>/stop` | runs started here, with the CLI's output; stops one |
 | `GET /api/usage` | budget and every job's totals |
 | `GET /api/decisions` | decisions waiting for the agent |
 | `GET /api/hunts`, `GET /api/hunts/<id>` | hunts, and one hunt's events |
-| `POST /api/hunts {prompt}` | starts a hunt (409 while one runs, 412 when the button is off) |
+| `POST /api/hunts {prompt, host?, model?, budgetUsd?}` | starts a hunt: `host` is `muse` (default) or `claude` (Claude Code headless on an Anthropic API key, below); 409 while one runs, 412 when the host is off |
 | `POST /api/hunts/<id>/stop` | stops it |
-| `GET /api/events` | server-sent events: `{type: "runs", changed: [ids]}`, `{type: "usage"}`, `{type: "hunt", id, info}`, `{type: "hunt-event", id, event}` |
+| `GET /api/events` | server-sent events: `{type: "runs", changed: [ids]}`, `{type: "usage"}`, `{type: "hunt", id, info}`, `{type: "hunt-event", id, event}`, `{type: "job", id, info}`, `{type: "job-output", id, line}` |
 
 The viewer polls the run store and the usage logs once a second while a page is listening, so
 anything that writes them shows up without a reload.
+
+## Without the web page: `windtunnel view --json`
+
+The Mac app ([`apps/mac`](../apps/mac/README.md)) starts the local API with `windtunnel view --json`:
+no browser and no web build, one line of JSON on stdout (`{url, port, token, pid, root, reused}`),
+and the server stops when its stdin closes. With `reused: true`, a viewer for the project was
+already running and the command exits at once, leaving that viewer to whoever started it.
+
+## Claude Code as a hunt host
+
+`POST /api/hunts` with `host: "claude"` runs Claude Code headless:
+`claude -p <prompt> --bare --output-format stream-json --plugin-dir <plugin> --model <model>
+--max-budget-usd <cap> --permission-mode acceptEdits --allowedTools <Wind Tunnel's tools, Read, Grep, Glob, Edit, Write>`.
+It is on only when `ANTHROPIC_API_KEY` is set in the viewer's environment, and it is billed to that
+key alone: `--bare` makes the key the only credential Claude Code reads (never a Claude login or
+the keychain), it gets a config folder of its own (`.windtunnel/cache/claude-headless`), and every
+other `ANTHROPIC_*`/`CLAUDE_*` variable and the Meta key are left out of its environment. To hunt
+on your own Claude plan, use Claude Code yourself (**Open in Claude Code**): the viewer follows the
+runs it starts.
+
