@@ -443,7 +443,50 @@ final class AppModel {
     return out
   }
 
+  /// Each experiment's runs, newest first.
+  var runsByExperiment: [String: [RunListEntry]] { Dictionary(grouping: runs, by: \.experiment) }
+
   func run(_ id: String) -> RunListEntry? { runs.first { $0.id == id } }
+
+  /// How a run's experiment had been doing up to it: whether this failure is new.
+  func streak(of run: RunListEntry) -> Streak? {
+    guard let all = runsByExperiment[run.experiment], let i = all.firstIndex(of: run) else { return nil }
+    return Streak(Array(all[i...]))
+  }
+}
+
+/// A failing run's place in its experiment's history: the first failure after runs that held,
+/// one of several in a row, or an experiment that has never held.
+enum Streak: Equatable {
+  case new
+  case row(Int)
+  case never
+
+  /// From runs newest first, the newest being the one asked about.
+  init?(_ runs: [RunListEntry]) {
+    let finished = runs.filter { $0.outcome != "running" }
+    guard let first = finished.first, first.outcome != "pass" else { return nil }
+    let n = finished.prefix { $0.outcome != "pass" }.count
+    if n == finished.count { self = .never }
+    else if n == 1 { self = .new }
+    else { self = .row(n) }
+  }
+
+  var text: String {
+    switch self {
+    case .new: "new"
+    case .row(let n): "\(n) in a row"
+    case .never: "never held"
+    }
+  }
+
+  var help: String {
+    switch self {
+    case .new: "The run before this one held: this broke just now."
+    case .row(let n): "Failed the last \(n) times it ran."
+    case .never: "It has failed every time it ran."
+    }
+  }
 }
 
 struct Batch: Identifiable, Hashable {

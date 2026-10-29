@@ -47,7 +47,7 @@ struct RunDetailView: View {
           Hairline()
           Group {
             switch tab {
-            case .summary: SummaryTab(detail: detail, rep: rep, comparison: comparison)
+            case .summary: SummaryTab(detail: detail, rep: rep, comparison: comparison) { t in withAnimation(Theme.spring) { tab = t } }
             case .timeline: TimelineTab(rep: rep, comparison: comparison)
             case .trace: TraceTab(rep: rep)
             case .database: DatabaseTab(rep: rep)
@@ -182,7 +182,6 @@ struct RunHeader: View {
 
   private var meta: String {
     var parts: [String] = []
-    if let broken = rep?.rules.filter({ !$0.ok }).map(\.id), !broken.isEmpty { parts.append("broke \(broken.joined(separator: ", "))") }
     if let started = ISO.date(detail.result?.startedAt) { parts.append("\(Fmt.day(started).capitalized) at \(Fmt.clock(started))") }
     if let ms = detail.result?.durationMs { parts.append(Fmt.ms(ms)) }
     parts.append(Fmt.plural(detail.total, "repetition"))
@@ -209,18 +208,31 @@ struct RunHeader: View {
 
 // MARK: - Summary
 
+/// A run in reading order: what went wrong and where it started, then which tab to open next,
+/// then the rest of the evidence.
 struct SummaryTab: View {
   let detail: RunDetail
   let rep: RepView?
   let comparison: Comparison?
+  let open: (RunTab) -> Void
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 30) {
-      if let comparison, let i = comparison.divergence.firstIndex(where: { $0 != nil }), let d = comparison.divergence[i] {
-        DivergenceCallout(divergence: d, lane: comparison.lanes[i], reference: comparison.reference >= 0 ? comparison.lanes[comparison.reference] : nil)
-      }
+    VStack(alignment: .leading, spacing: 32) {
       if let rep {
-        RulesPanel(rules: rep.rules, first: comparison == nil)
+        Verdict(detail: detail, rep: rep, comparison: comparison)
+        let leads = leads(rep)
+        if !leads.isEmpty {
+          Panel("Look next") {
+            VStack(spacing: 0) {
+              ForEach(leads, id: \.tab) { lead in
+                LeadRow(tab: lead.tab, text: lead.text) { open(lead.tab) }
+              }
+            }
+            .padding(.horizontal, -10)
+          }
+          .rise(0.08)
+        }
+        RulesPanel(rules: rep.rules)
         if let diff = rep.diff, !diff.tables.isEmpty {
           Panel("Database changes") {
             FlowLayout(spacing: 22, lineSpacing: 8) {
@@ -242,11 +254,6 @@ struct SummaryTab: View {
             VStack(alignment: .leading, spacing: 6) {
               ForEach(warnings, id: \.self) { w in Text(w).font(Theme.sans(12.5)).foregroundStyle(Theme.dim) }
             }
-          }
-        }
-        if let error = rep.error {
-          Panel("Error", tint: Theme.error) {
-            Text(error).font(Theme.mono(11.5)).foregroundStyle(Theme.text).textSelection(.enabled)
           }
         }
         if let webhooks = rep.webhooks, !webhooks.isEmpty {
@@ -272,6 +279,31 @@ struct SummaryTab: View {
     }
   }
 
+  /// The tabs worth opening for this repetition, most telling first. None when it held.
+  private func leads(_ rep: RepView) -> [(tab: RunTab, text: String)] {
+    guard rep.outcome != "ok" else { return [] }
+    var out: [(tab: RunTab, text: String)] = []
+    if comparison != nil {
+      out.append((.timeline, "Both runs step by step, from where they split"))
+    } else {
+      out.append((.timeline, "Each tab and webhook on one time axis"))
+    }
+    if let focus = rep.trace?.focus, !focus.isEmpty {
+      out.append((.trace, "Every write to \(focus.joined(separator: ", ")), and the code behind it"))
+    }
+    if rep.error != nil {
+      out.append((.log, "The app's log up to the error"))
+    }
+    let notable = rep.requests.filter(\.notable).count
+    if notable > 0 {
+      out.append((.network, "\(Fmt.plural(notable, "request")) worth a look"))
+    }
+    if let diff = rep.diff, !diff.tables.isEmpty {
+      out.append((.database, "\(Fmt.plural(diff.tables.count, "table")) changed, row by row"))
+    }
+    return Array(out.prefix(3))
+  }
+
   private func counts(_ t: DbDiff.Table) -> String {
     var parts: [String] = []
     if !t.added.isEmpty { parts.append("+\(t.added.count)") }
@@ -281,20 +313,86 @@ struct SummaryTab: View {
   }
 }
 
-/// Where this run first went another way than one that held: a red rule down the side, the two
-/// steps one above the other.
-struct DivergenceCallout: View {
-  let divergence: Divergence
-  let lane: LaneView
-  let reference: LaneView?
+/// The answer first: the promise that broke, in words, with the rows that break it, and where
+/// this run first went another way than one that held. A rule down the side in the outcome's
+/// colour.
+struct Verdict: View {
+  let detail: RunDetail
+  let rep: RepView
+  let comparison: Comparison?
 
   var body: some View {
-    HStack(alignment: .top, spacing: 16) {
-      Rectangle().fill(Theme.fail).frame(width: 2)
-      VStack(alignment: .leading, spacing: 12) {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-          Text("First divergence").font(Theme.sans(13, .semibold)).foregroundStyle(Theme.text)
-          Text("at \(Fmt.ms(divergence.at)), \(divergence.tab)").font(Theme.sans(12)).foregroundStyle(Theme.faint)
+    let broken = rep.rules.filter { !$0.ok }
+    let tone: Tone = !broken.isEmpty ? .fail : rep.error != nil ? .error : .pass
+    HStack(alignment: .top, spacing: 18) {
+      Rectangle().fill(tone == .pass ? Theme.lineStrong : tone.color).frame(width: 2)
+      VStack(alignment: .leading, spacing: 26) {
+        if !broken.isEmpty {
+          ForEach(broken) { rule in
+            VStack(alignment: .leading, spacing: 0) {
+              Text(label("Rule broken")).font(Theme.sans(11.5, .medium)).foregroundStyle(Theme.fail)
+              Text(rule.description ?? rule.id)
+                .font(Theme.sans(17, .semibold)).tracking(-0.2).foregroundStyle(Theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 6)
+              if rule.description != nil {
+                Text(rule.id).font(Theme.mono(11.5)).foregroundStyle(Theme.faint).textSelection(.enabled).padding(.top, 4)
+              }
+              if let rows = rule.rows, !rows.isEmpty {
+                RowsTable(rows: Array(rows.prefix(8)))
+                  .padding(.top, 14)
+                if rows.count > 8 {
+                  Text("and \(rows.count - 8) more rows").font(Theme.sans(12)).foregroundStyle(Theme.faint).padding(.top, 6)
+                }
+              }
+              if let e = rule.error { Text(e).font(Theme.mono(11)).foregroundStyle(Theme.error).padding(.top, 8) }
+            }
+          }
+        } else if let error = rep.error {
+          VStack(alignment: .leading, spacing: 6) {
+            Text(label("Didn't finish")).font(Theme.sans(11.5, .medium)).foregroundStyle(Theme.error)
+            Text(error).font(Theme.mono(12.5)).foregroundStyle(Theme.text).textSelection(.enabled)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        } else {
+          VStack(alignment: .leading, spacing: 6) {
+            Text(label(otherRepsBroke > 0 ? "This repetition held" : "Held")).font(Theme.sans(11.5, .medium)).foregroundStyle(Theme.dim)
+            Text("Every rule held").font(Theme.sans(17, .semibold)).tracking(-0.2).foregroundStyle(Theme.text)
+            Text(otherRepsBroke > 0
+              ? "\(otherRepsBroke) of \(detail.total) repetitions broke a rule: pick a red dot above to see one."
+              : "\(Fmt.plural(rep.rules.count, "rule")) checked after the run.")
+              .font(Theme.sans(13)).foregroundStyle(Theme.dim)
+          }
+        }
+        if let comparison, let i = comparison.divergence.firstIndex(where: { $0 != nil }), let d = comparison.divergence[i] {
+          Divergence(divergence: d, lane: comparison.lanes[i], reference: comparison.reference >= 0 ? comparison.lanes[comparison.reference] : nil)
+        }
+      }
+      .padding(.vertical, 2)
+    }
+    .fixedSize(horizontal: false, vertical: true)
+    .rise(0.04)
+  }
+
+  private var brokenReps: Int { detail.reps.filter { $0.outcome != "ok" }.count }
+  private var otherRepsBroke: Int { rep.outcome == "ok" ? brokenReps : 0 }
+
+  /// `Rule broken · in 2 of 2 repetitions`, when it was repeated.
+  private func label(_ head: String) -> String {
+    detail.total > 1 && rep.outcome != "ok" ? "\(head)  ·  in \(brokenReps) of \(detail.total) repetitions" : head
+  }
+
+  /// Where this run first went another way than one that held: the two steps one above the other.
+  private struct Divergence: View {
+    let divergence: WindTunnel.Divergence
+    let lane: LaneView
+    let reference: LaneView?
+
+    var body: some View {
+      VStack(alignment: .leading, spacing: 10) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+          Text("Where it started").font(Theme.sans(13, .semibold)).foregroundStyle(Theme.text)
+          Text("\(Fmt.ms(divergence.at)) in, \(divergence.tab)").font(Theme.sans(12)).foregroundStyle(Theme.faint)
         }
         Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 6) {
           GridRow {
@@ -307,47 +405,53 @@ struct DivergenceCallout: View {
           }
         }
       }
+      .help("Both runs did the same up to this step: the bug is in what happens here.")
     }
-    .fixedSize(horizontal: false, vertical: true)
-    .help("Both runs did the same up to this step: the bug is in what happens here.")
-    .rise(0.05)
   }
 }
 
+/// A tab worth opening, and why: the whole row opens it.
+private struct LeadRow: View {
+  let tab: RunTab
+  let text: String
+  let action: () -> Void
+  @State private var hovering = false
+
+  var body: some View {
+    Button(action: action) {
+      HStack(spacing: 14) {
+        Text(tab.title).font(Theme.sans(13, .medium)).foregroundStyle(Theme.text).frame(width: 74, alignment: .leading)
+        Text(text).font(Theme.sans(13)).foregroundStyle(Theme.dim).lineLimit(1)
+        Spacer(minLength: 8)
+        Image(systemName: "arrow.right").font(.system(size: 11, weight: .medium)).foregroundStyle(hovering ? Theme.text : Theme.ghost)
+      }
+      .padding(.horizontal, 10)
+      .frame(height: 34)
+      .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(hovering ? Theme.hover : .clear))
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .onHover { hovering = $0 }
+  }
+}
+
+/// How each rule is checked: the query for each broken one, then the ones that held.
 struct RulesPanel: View {
   let rules: [RuleResult]
-  /// The first section on the page: no rule above it.
-  var first = false
   @State private var showHeld = false
 
   var body: some View {
     let broken = rules.filter { !$0.ok }
     let held = rules.filter(\.ok)
-    Panel(broken.isEmpty ? "Rules" : broken.count == 1 ? "Broken rule" : "Broken rules", rule: !first, accessory: {
+    Panel("Rules", accessory: {
       Text("\(held.count) of \(rules.count) held")
     }) {
-      VStack(alignment: .leading, spacing: 22) {
-        ForEach(broken) { rule in
+      VStack(alignment: .leading, spacing: 16) {
+        ForEach(broken.filter { $0.sql != nil }) { rule in
           VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-              Text(rule.id).font(Theme.mono(12.5, .medium)).foregroundStyle(Theme.fail)
-              if let n = rule.rows?.count { Text(Fmt.plural(n, "row")).font(Theme.sans(12)).foregroundStyle(Theme.faint) }
-            }
-            if let d = rule.description { Text(d).font(Theme.sans(13)).foregroundStyle(Theme.dim) }
-            if rule.sql != nil || rule.rows?.isEmpty == false {
-              VStack(alignment: .leading, spacing: 12) {
-                if let sql = rule.sql {
-                  Text(SQL.highlight(sql)).font(Theme.mono(11.5)).textSelection(.enabled).lineSpacing(2)
-                }
-                if let rows = rule.rows, !rows.isEmpty {
-                  if rule.sql != nil { Hairline() }
-                  RowsTable(rows: Array(rows.prefix(8)), tint: Theme.fail)
-                }
-              }
+            if broken.count > 1 { Text(rule.id).font(Theme.mono(12)).foregroundStyle(Theme.fail) }
+            Text(SQL.highlight(rule.sql ?? "")).font(Theme.mono(11.5)).textSelection(.enabled).lineSpacing(2)
               .well(padding: 14)
-              .padding(.top, 4)
-            }
-            if let e = rule.error { Text(e).font(Theme.mono(11)).foregroundStyle(Theme.error) }
           }
         }
         if !held.isEmpty {

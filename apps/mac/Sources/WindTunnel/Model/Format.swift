@@ -34,6 +34,12 @@ nonisolated enum Fmt {
     return date.formatted(date: .omitted, time: .standard)
   }
 
+  /// Hours and minutes, for headings: 12:32 PM.
+  static func time(_ date: Date?) -> String {
+    guard let date else { return "" }
+    return date.formatted(date: .omitted, time: .shortened)
+  }
+
   static func day(_ date: Date?) -> String {
     guard let date else { return "" }
     if Calendar.current.isDateInToday(date) { return "today" }

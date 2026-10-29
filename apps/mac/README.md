@@ -18,8 +18,8 @@ Settings overrides both. It finds Node 22.18+ on that PATH, in nvm's folder or i
 
 | | |
 |---|---|
-| **Overview** | the project at a glance: experiments holding, failing and flaky; what needs attention; which rules break most; every batch of runs over time |
-| **Runs** | every run, grouped by batch, filtered by outcome or name; a run's repetitions and orderings, the first divergence from a passing run, the broken rules with their SQL and rows; a **race** timeline (each tab and the webhooks on one time axis), the runs side by side step by step, the trace chain per table, database changes, requests, the app log |
+| **Overview** | the project at a glance: experiments holding and failing; what needs attention, and whether it just broke or keeps breaking; which rules break most; each experiment's recent runs as a strip |
+| **Runs** | every run, grouped by batch, failures first with the rule they broke and held runs folded; filtered by outcome or name. A run opens on the answer: the rule that broke, in words, with its rows, where the run first went another way than one that held, and which tab to look at next. Then its repetitions and orderings, the rules' SQL; a **race** timeline (each tab and the webhooks on one time axis), the runs side by side step by step, the trace chain per table, database changes, requests, the app log |
 | **Experiments** | each experiment, its source and history; **Run** with a repeat count, with the CLI's output live |
 | **Hunt** | send an agent to break the app (below), and follow everything it runs |
 | **Usage** | tokens Wind Tunnel's tools returned to the agent, its small decisions, hunt costs |

@@ -43,6 +43,8 @@ struct RunsList: View {
   @Environment(AppModel.self) private var model
   @State private var filter: RunFilter = .all
   @State private var query = ""
+  /// Batches whose held runs are unfolded.
+  @State private var unfolded: Set<String> = []
 
   var body: some View {
     VStack(spacing: 0) {
@@ -59,16 +61,28 @@ struct RunsList: View {
 
       ScrollView {
         LazyVStack(alignment: .leading, spacing: 0) {
-          ForEach(filtered) { batch in
+          ForEach(Array(filtered.enumerated()), id: \.element.id) { i, batch in
+            let bad = batch.runs.filter { $0.outcome != "pass" }.sorted { rank($0.outcome) < rank($1.outcome) }
+            let held = batch.runs.filter { $0.outcome == "pass" }
+            let fold = folds(held)
             Section {
-              ForEach(batch.runs) { run in
-                RunRow(run: run, selected: model.selectedRun == run.id)
-                  // Rows in a lazy section can keep an old rendering: rebuild one when its run moves on.
-                  .id("\(run.id)·\(run.outcome)·\(run.running?.done ?? -1)")
-                  .onTapGesture { withAnimation(Theme.snappy) { model.selectedRun = run.id } }
+              ForEach(bad) { run in
+                row(run)
+              }
+              if fold {
+                FoldRow(count: held.count, open: unfolded.contains(batch.id)) {
+                  withAnimation(Theme.snappy) {
+                    if unfolded.contains(batch.id) { unfolded.remove(batch.id) } else { unfolded.insert(batch.id) }
+                  }
+                }
+              }
+              if !fold || unfolded.contains(batch.id) {
+                ForEach(held) { run in
+                  row(run)
+                }
               }
             } header: {
-              BatchHeader(batch: batch)
+              BatchHeader(batch: batch, first: i == 0)
             }
           }
           if filtered.isEmpty {
@@ -81,6 +95,29 @@ struct RunsList: View {
         .padding(.bottom, 12)
       }
       .scrollIndicators(.never)
+    }
+  }
+
+  private func row(_ run: RunListEntry) -> some View {
+    RunRow(run: run, selected: model.selectedRun == run.id, streak: run.outcome == "pass" ? nil : model.streak(of: run))
+      // Rows in a lazy section can keep an old rendering: rebuild one when its run moves on.
+      .id("\(run.id)·\(run.outcome)·\(run.running?.done ?? -1)")
+      .onTapGesture { withAnimation(Theme.snappy) { model.selectedRun = run.id } }
+  }
+
+  /// Held runs fold under one row when there are a few of them, so what failed is what you see;
+  /// not while filtering, and never over the selected run.
+  private func folds(_ held: [RunListEntry]) -> Bool {
+    filter == .all && query.isEmpty && held.count >= 3 && !held.contains { $0.id == model.selectedRun }
+  }
+
+  private func rank(_ outcome: String) -> Int {
+    switch outcome {
+    case "fail": 0
+    case "error": 1
+    case "flaky": 2
+    case "running": 3
+    default: 4
     }
   }
 
@@ -98,30 +135,49 @@ struct RunsList: View {
   }
 }
 
+/// When a batch started, and how it went: how many failed, or that all held.
 private struct BatchHeader: View {
   let batch: Batch
+  let first: Bool
 
   var body: some View {
-    HStack(spacing: 8) {
-      Text("\(Fmt.day(batch.started).capitalized), \(Fmt.clock(batch.started))")
-        .font(Theme.sans(11.5, .medium)).foregroundStyle(Theme.faint)
-      Spacer()
-      if batch.count("running") > 0 { BrailleSpinner(size: 9) }
+    let failed = batch.runs.filter { $0.outcome != "pass" && $0.outcome != "running" }.count
+    let running = batch.count("running")
+    VStack(spacing: 0) {
+      if !first { Hairline().padding(.horizontal, 10).padding(.bottom, 14) }
+      HStack(spacing: 8) {
+        Text("\(Fmt.day(batch.started).capitalized), \(Fmt.time(batch.started))")
+          .font(Theme.sans(11.5, .medium)).foregroundStyle(Theme.dim)
+        Spacer()
+        if running > 0 {
+          BrailleSpinner(size: 9)
+          Text("\(running) running").foregroundStyle(Theme.accent)
+        } else if failed > 0 {
+          Text("\(failed) failed").foregroundStyle(Theme.fail) + Text(" of \(batch.runs.count)").foregroundStyle(Theme.ghost)
+        } else {
+          Text(batch.runs.count == 1 ? "held" : "all \(batch.runs.count) held").foregroundStyle(Theme.ghost)
+        }
+      }
+      .font(Theme.sans(11.5))
+      .monospacedDigit()
+      .padding(.horizontal, 10)
+      .padding(.bottom, 6)
     }
-    .padding(.horizontal, 10)
-    .padding(.top, 14)
-    .padding(.bottom, 4)
+    .padding(.top, first ? 12 : 10)
   }
 }
 
+/// A run: failures on two lines, the rule they broke under the name; held runs quiet, on one.
 private struct RunRow: View {
   let run: RunListEntry
   let selected: Bool
+  let streak: Streak?
   @State private var hovering = false
 
   var body: some View {
     let tone = Tone(run.outcome)
-    HStack(spacing: 10) {
+    let loud = tone == .fail || tone == .error || tone == .flaky
+    HStack(alignment: loud ? .top : .center, spacing: 10) {
       Group {
         if run.outcome == "running" {
           BrailleSpinner(size: 10)
@@ -129,27 +185,64 @@ private struct RunRow: View {
           Circle().fill(tone.color).frame(width: 6, height: 6)
         }
       }
-      .frame(width: 10)
-      Text(run.experiment)
-        .font(Theme.sans(13, selected ? .medium : .regular))
-        .foregroundStyle(selected ? Theme.text : tone == .fail ? Theme.text.opacity(0.92) : Theme.dim)
-        .lineLimit(1)
+      .frame(width: 10, height: loud ? 17 : nil)
+      VStack(alignment: .leading, spacing: 2) {
+        Text(run.experiment)
+          .font(Theme.sans(13, loud || selected ? .medium : .regular))
+          .foregroundStyle(loud || selected ? Theme.text : Theme.faint)
+          .lineLimit(1)
+        if loud {
+          Text(run.brokenRules.isEmpty ? Tone.word(run.outcome).lowercased() : run.brokenRules.joined(separator: ", "))
+            .font(Theme.mono(11)).foregroundStyle(Theme.faint)
+            .lineLimit(1)
+        }
+      }
       Spacer(minLength: 6)
       if let progress = run.running {
         Text("\(progress.done)/\(progress.total)").font(Theme.sans(11.5)).monospacedDigit().foregroundStyle(Theme.accent)
-      } else {
-        Text(Fmt.ago(run.started)).font(Theme.sans(11.5)).monospacedDigit().foregroundStyle(Theme.ghost)
+      } else if streak == .new {
+        Text("new").font(Theme.sans(11.5, .medium)).foregroundStyle(Theme.fail)
+          .frame(height: 17)
+          .help(Streak.new.help)
       }
     }
     .padding(.horizontal, 10)
-    .frame(height: 30)
+    .padding(.vertical, loud ? 7 : 0)
+    .frame(minHeight: loud ? 46 : 28)
     .background {
       RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous)
         .fill(selected ? Theme.selection : hovering ? Theme.hover : .clear)
     }
     .contentShape(Rectangle())
     .onHover { hovering = $0 }
-    .help(run.brokenRules.isEmpty ? Tone.word(run.outcome) : "Broke \(run.brokenRules.joined(separator: ", "))")
+    .help("\(Tone.word(run.outcome)) · \(Fmt.ago(run.started))" + (streak.map { "\n\($0.help)" } ?? ""))
+  }
+}
+
+/// `› 12 held`: the batch's runs that held, folded.
+private struct FoldRow: View {
+  let count: Int
+  let open: Bool
+  let toggle: () -> Void
+  @State private var hovering = false
+
+  var body: some View {
+    Button(action: toggle) {
+      HStack(spacing: 10) {
+        Image(systemName: "chevron.right").font(.system(size: 8.5, weight: .semibold))
+          .rotationEffect(.degrees(open ? 90 : 0))
+          .frame(width: 10)
+        Text("\(count) held").font(Theme.sans(12.5))
+        Spacer()
+      }
+      .foregroundStyle(hovering ? Theme.dim : Theme.faint)
+      .padding(.horizontal, 10)
+      .frame(height: 28)
+      .background(RoundedRectangle(cornerRadius: Theme.controlRadius, style: .continuous).fill(hovering ? Theme.hover : .clear))
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .onHover { hovering = $0 }
   }
 }
 
