@@ -23,7 +23,8 @@ import { StoreWatcher } from "./watch.ts";
 
 export const DEFAULT_PORT = 4477;
 const PACKAGE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-export const DIST_DIR = join(PACKAGE_DIR, "dist");
+/** The built UI: dist/ of this package, or ui/ in the published CLI (whose code is in dist/). */
+export const DIST_DIR = join(PACKAGE_DIR, import.meta.url.endsWith(".ts") ? "dist" : "ui");
 const MAX_LANES = 8;
 const MAX_BODY = 64 * 1024;
 

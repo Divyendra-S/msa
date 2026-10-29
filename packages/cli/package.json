@@ -15,5 +15,8 @@
     "@windtunnel/explorer": "workspace:*",
     "@windtunnel/mcp": "workspace:*",
     "@windtunnel/viewer": "workspace:*"
+  },
+  "devDependencies": {
+    "rolldown": "1.2.15"
   }
 }

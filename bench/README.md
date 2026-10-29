@@ -114,6 +114,8 @@ time) · `--batch <name>` (default `<date>-<time>-<host>`) · `--trials <dir>` �
 `--max-steps 200` · `--model` · `--fix-runs 5` · `--regression-runs 1` · `--repro-runs 3` ·
 `--no-install` · `--no-score` · `--no-publish` · `--shared-home` (use your own HOME) · `--quiet`
 
+`pnpm bench check [--paid]`: day-0 check of the Muse setup ([`docs/muse.md`](../docs/muse.md)).
+
 ## Fairness
 
 - Same model, prompt, time cap and step cap for every setup. Scripts and raw results are
@@ -133,5 +135,5 @@ Muse Code isn't installed here. From its docs: `--json`, `--disable-approval`,
 `~/.config/muse/settings.json`, project skills in `.agents/skills`, and CI runs read
 `META_API_KEY`. Not documented, so unverified: `--model` on `exec`, the JSONL event schema
 (the reader handles Codex- and Claude-style events), whether HOME isolation keeps Muse Code
-signed in, and whether its sandbox lets the agent reach Postgres and local ports. Check these
-on day 0 of the Muse setup (Phase 8).
+signed in, and whether its sandbox lets the agent reach Postgres and local ports. `pnpm bench check --paid`
+checks all of them in the Muse shell, for a few cents; see [`docs/muse.md`](../docs/muse.md).

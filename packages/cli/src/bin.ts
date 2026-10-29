@@ -29,6 +29,9 @@ const { values, positionals } = parseArgs({
     "no-triage": { type: "boolean", default: false },
     port: { type: "string" },
     "no-open": { type: "boolean", default: false },
+    yes: { type: "boolean", short: "y", default: false },
+    "dry-run": { type: "boolean", default: false },
+    hosts: { type: "string" },
     help: { type: "boolean", short: "h", default: false },
   },
 });

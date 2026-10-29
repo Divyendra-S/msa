@@ -5,12 +5,14 @@
 //   pnpm bench prepare --case 05 --setup B [--host manual]
 //   pnpm bench score <trial folder> [--tokens <n> --minutes <m>]
 //   pnpm bench board [--batch <name>]
+//   pnpm bench check [--paid]        day-0 check of the Muse setup, in the Muse shell
 import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { writeBoard } from "./board.ts";
 import { loadCases, REPO_ROOT } from "./cases.ts";
+import { checkMuse } from "./check.ts";
 import { DEFAULT_MODEL, manualInstructions, MUSE_COMMAND, refusedHost, runHost } from "./hosts.ts";
 import { publishScore, type ScoreOptions, scoreTrial, type TrialScore } from "./score.ts";
 import { loadTrial, prepareTrial, type Setup, SETUPS, trialName } from "./trial.ts";
@@ -44,6 +46,7 @@ const { values, positionals } = parseArgs({
     usd: { type: "string" },
     quiet: { type: "boolean", default: false },
     parallel: { type: "string", default: "1" },
+    paid: { type: "boolean", default: false },
   },
 });
 
@@ -175,6 +178,8 @@ async function main(): Promise<number> {
     return 0;
   }
 
+  if (command === "check") return await checkMuse({ paid: values.paid!, ...(values.model ? { model: values.model } : {}) });
+
   if (command === "board") {
     const batch = values.batch ?? (await readdir(RESULTS_DIR).catch(() => [] as string[])).filter((d) => !d.startsWith(".")).sort().at(-1);
     if (!batch) throw new Error(`no results in ${RESULTS_DIR}`);
@@ -190,6 +195,7 @@ async function main(): Promise<number> {
       "  prepare  --case 05 --setup B [--host manual]     make one trial folder (manual: prints what to run in Claude Code)",
       "  score    <trial folder> [--tokens n --minutes m] score a finished trial and add it to bench/results",
       "  board    [--batch <name>]                        print and write the scoreboard",
+      "  check    [--paid]                                day-0 check of the Muse setup (in the Muse shell); --paid spends a few cents",
       "options: --batch <name> --trials <dir> (default $TMPDIR/windtunnel-bench) --parallel 1 --fix-runs 5 --regression-runs 1 --repro-runs 3 --no-install --no-score --no-publish --shared-home --quiet",
     ].join("\n"),
   );

@@ -20,6 +20,9 @@ importers:
       '@windtunnel/core':
         specifier: workspace:*
         version: link:../packages/core
+      '@windtunnel/explorer':
+        specifier: workspace:*
+        version: link:../packages/explorer
       '@windtunnel/viewer':
         specifier: workspace:*
         version: link:../packages/viewer
@@ -41,6 +44,10 @@ importers:
       '@windtunnel/viewer':
         specifier: workspace:*
         version: link:../viewer
+    devDependencies:
+      rolldown:
+        specifier: 1.2.15
+        version: 1.2.15
 
   packages/core:
     dependencies:

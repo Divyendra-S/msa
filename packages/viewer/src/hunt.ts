@@ -117,6 +117,8 @@ export class HuntManager {
     const id = `${stamp.slice(0, 6)}-${stamp.slice(6)}-${randomBytes(2).toString("hex")}`;
     await mkdir(this.dir, { recursive: true });
     const env = Object.fromEntries(Object.entries(this.env).filter(([k]) => !FOREIGN_ENV.test(k)));
+    // Muse Code reads META_API_KEY in headless runs: the same Meta key.
+    if (env.MODEL_API_KEY && !env.META_API_KEY) env.META_API_KEY = env.MODEL_API_KEY;
     // The MCP server the agent starts counts its usage under this job, if the host passes the variable on.
     env.WINDTUNNEL_JOB = `hunt-${id}`;
     const child = spawn(this.command[0]!, [...this.command.slice(1), text], { cwd: this.root, env, stdio: ["ignore", "pipe", "pipe"] });

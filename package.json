@@ -15,8 +15,10 @@
     "zoo:verify": "node zoo/cases/verify.ts",
     "zoo:prove": "node zoo/cases/prove.ts",
     "zoo:heal": "node zoo/cases/heal.ts",
+    "demo:setup": "node zoo/demo/setup.ts",
     "viewer:build": "pnpm --filter @windtunnel/viewer build",
     "wt": "node packages/cli/src/bin.ts",
+    "cli:build": "node packages/cli/build.ts",
     "bench": "node bench/src/cli.ts"
   },
   "devDependencies": {

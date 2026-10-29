@@ -9,7 +9,8 @@ import { exists } from "../project.ts";
 export const FLOWS_DIR = "flows";
 export const LOGIN_FLOW = "login";
 const EXTENSIONS = [".ts", ".mts", ".js", ".mjs"];
-const FLOW_API_URL = new URL("../flow-api.ts", import.meta.url).href;
+// In the published CLI the code is bundled into dist/, with the flow API as its own file there.
+const FLOW_API_URL = (import.meta.url.endsWith(".ts") ? new URL("../flow-api.ts", import.meta.url) : new URL("./flow-api.js", import.meta.url)).href;
 
 let hooksRegistered = false;
 const flowDirs = new Set<string>();

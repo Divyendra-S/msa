@@ -6,25 +6,41 @@ evidence. Everything an agent can do also works from the CLI.
 
 ## Install
 
-The plugin in [`plugins/windtunnel`](../plugins/windtunnel) works in Claude Code and Codex: four
-skills, an MCP server and (Claude Code) a helper subagent. Muse Code reads the same skills;
-see [`plugins/muse-code`](../plugins/muse-code/README.md).
-
 ```sh
-# Claude Code: load the plugin from a checkout…
-claude --plugin-dir ./plugins/windtunnel
-# …or install it from this repository's marketplace
-/plugin marketplace add Divyendra-S/msa
-/plugin install windtunnel@windtunnel
-
-# Codex
-codex plugin marketplace add Divyendra-S/msa
+npx windtunnel-cli install        # or, from a checkout: pnpm wt install
 ```
 
-The MCP server is `windtunnel mcp`. In a checkout of this repository the plugin starts it
-from `packages/cli` (finding Node 22.18+ through nvm if the default `node` is older);
-elsewhere it needs the `windtunnel` CLI on `PATH`. It finds `windtunnel.config.yaml` in the
-current folder, a parent, or (when there is exactly one) a subfolder up to three levels down.
+It checks Node, git, Docker, Postgres and Playwright's Chromium, installs the CLI globally (so
+`windtunnel` is on `PATH` for the skills), and adds the plugin to each agent it finds, after
+one confirmation (`--yes` skips it, `--dry-run` only shows it, `--hosts claude,codex,muse`
+limits it):
+
+| Agent | What it does |
+|---|---|
+| Claude Code | `claude plugin marketplace add <package>`, `claude plugin install windtunnel@windtunnel` |
+| Codex | `codex plugin marketplace add <package>`, `codex plugin add windtunnel@windtunnel` |
+| Muse Code | skills in `~/.agents/skills/windtunnel-*`, the MCP server in `~/.config/muse/settings.json` (other settings kept, a backup made); see [`plugins/muse-code`](../plugins/muse-code/README.md) |
+
+The marketplaces point at the installed package (or this checkout), so the plugin matches
+the CLI's version. Running it again is safe. By hand instead:
+
+```sh
+claude --plugin-dir ./plugins/windtunnel              # Claude Code, from a checkout
+/plugin marketplace add Divyendra-S/msa               # or from this repository (default branch)
+/plugin install windtunnel@windtunnel
+codex plugin marketplace add Divyendra-S/msa          # Codex
+codex plugin add windtunnel@windtunnel
+```
+
+The plugin in [`plugins/windtunnel`](../plugins/windtunnel) works in Claude Code and Codex: four
+skills, an MCP server and (Claude Code) a helper subagent. Muse Code reads the same skills.
+
+The MCP server is `windtunnel mcp`. Without `windtunnel` on `PATH`, the Claude Code plugin
+starts the CLI next to it (in the npm package or a checkout), finding Node 22.18+ through nvm
+if the default `node` is older. It finds `windtunnel.config.yaml` in the current folder, a
+parent, or (when there is exactly one) a subfolder up to three levels down. Codex starts a
+plugin's server in the plugin's folder; the server then starts from the session's folder
+(`PWD`) instead.
 
 Fixed context cost in Claude Code: about 255 tokens (skill and agent descriptions; MCP tool
 schemas load on demand). Check with `claude --plugin-dir ./plugins/windtunnel plugin details windtunnel`.

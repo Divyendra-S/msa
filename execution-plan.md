@@ -89,10 +89,10 @@
 
 ## Phase 8 — Submission
 
-- [ ] Muse setup: Muse Code host, Muse Wonder + Spark, `scripts/muse-env.sh`
-- [ ] `npx windtunnel install`
-- [ ] README with install steps + benchmark table
-- [ ] Demo script + video
+- [ ] Muse setup: Muse Code host, Muse Wonder + Spark, `scripts/muse-env.sh`. Done so far: `scripts/muse-env.sh` (the key from the environment, a file or a prompt; `--claude` for the backup host), `pnpm bench check [--paid]` (day-0 checks of the unverified Muse Code details: exec flags, JSONL usage, sandbox reaching Postgres and ports, skills and MCP server under its own HOME), [`docs/muse.md`](docs/muse.md). Waiting on Muse Code and the Meta key: running the checks, then the benchmark on Muse Wonder
+- [x] `npx windtunnel-cli install` (npm `windtunnel` and `@windtunnel/*` are taken; the command is still `windtunnel`): checks, global CLI install from npx, plugin added through Claude Code's and Codex's marketplaces (pointed at the installed package) and Muse Code's settings and skills folder. `pnpm cli:build` bundles the package (Node won't strip types in `node_modules`). Not published yet
+- [ ] README with install steps + benchmark table (install done; the table waits for the Muse runs)
+- [ ] Demo script + video: the demo app (`pnpm demo:setup`, three bugs in one patch) and the script in [`docs/demo.md`](docs/demo.md) are done; the video waits for the Muse setup
 
 ## Stretch
 

@@ -1,4 +1,5 @@
 export { Branch, Branches, type BranchInfo, type CreateBranchOptions } from "./branches/branches.ts";
+export { chromiumStatus, playwrightCli } from "./browser.ts";
 export { type CodeVersion, type CodeVersionSpec, CodeVersions, type PreparedVersion } from "./branches/code-versions.ts";
 export { PgServer } from "./branches/postgres.ts";
 export { clean, type CleanResult, stopOnSignals } from "./cleanup.ts";

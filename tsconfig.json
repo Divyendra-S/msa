@@ -3,9 +3,11 @@
   "include": [
     "packages/*/src",
     "packages/*/test",
+    "packages/cli/build.ts",
     "zoo/mock-pay/src",
     "zoo/mock-pay/test",
     "zoo/cases/*.ts",
+    "zoo/demo/*.ts",
     "bench/src",
     "bench/test"
   ]

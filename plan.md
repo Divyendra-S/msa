@@ -236,7 +236,7 @@ Linux or host troubleshooting, spatial/XR canvas, hosted cloud service, testing 
 
 ## 9. User workflows
 
-1. **Install:** `npx windtunnel install` sets up whichever hosts it finds (Muse Code, Claude Code, Codex) and checks Docker, Postgres and Playwright browsers.
+1. **Install:** `npx windtunnel-cli install` sets up whichever hosts it finds (Muse Code, Claude Code, Codex) and checks Docker, Postgres and Playwright browsers. (The npm names `windtunnel` and `@windtunnel/*` belong to other projects; the command is still `windtunnel`.)
 2. **Init:** `/windtunnel:init`. The agent reads the repo, writes `windtunnel.config.yaml`, builds the seed snapshot and the app map, and runs the free sweep. **One confirmation.**
 3. **Hunt:** `/windtunnel:hunt checkout`.
    - The agent reads the map, flags risky code and proposes rules plus experiments in **one approval**.
@@ -359,7 +359,7 @@ Assumes two people: **H** (harness and runner) and **A** (agent, plugin and view
   - **Playwright's primary language is TypeScript.** Its test runner, fixtures, parallel workers and test agents are Node-only.
   - **Parsing Next.js routes and handlers needs real TS/TSX parsing.** The TypeScript compiler API does this natively; Python would need tree-sitter.
   - **One language for the core, viewer (React) and Bug Zoo app (Next.js).** That means shared schemas between the local API and the viewer, and one toolchain.
-  - **Easy install for web developers:** they already have Node, so `npx windtunnel install` works with no Python setup.
+  - **Easy install for web developers:** they already have Node, so `npx windtunnel-cli install` works with no Python setup.
   - **The MCP TypeScript SDK is the reference implementation.** Agent plugins usually launch MCP servers with `npx`.
 - **Not Swift for the core.** Playwright has no Swift API, and the core must run on Mac, Linux, Windows and in CI.
 - **Swift Mac app: yes, as a client.** The daemon exposes a local API (HTTP + event stream). The web viewer and the Swift app both use that API, so the logic lives in one place. See S8.

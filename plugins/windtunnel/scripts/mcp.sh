@@ -1,10 +1,12 @@
 #!/bin/sh
-# Starts the Wind Tunnel MCP server: the installed `windtunnel` CLI, or, when the plugin is
-# loaded from a checkout of the repository, the CLI next to it. Needs Node 22.18 or newer.
+# Starts the Wind Tunnel MCP server: the installed `windtunnel` CLI, or the CLI next to the
+# plugin (in the npm package, or in a checkout of the repository). Needs Node 22.18 or newer.
 set -e
 if command -v windtunnel >/dev/null 2>&1; then exec windtunnel mcp "$@"; fi
 
-cli="$(cd "$(dirname "$0")/../../.." && pwd)/packages/cli/src/bin.ts"
+plugin="$(cd "$(dirname "$0")/.." && pwd)"
+cli="$plugin/../dist/bin.js"
+[ -f "$cli" ] || cli="$plugin/../../packages/cli/src/bin.ts"
 if [ ! -f "$cli" ]; then
   echo "windtunnel: CLI not found. Install it and make sure \`windtunnel\` is on PATH." >&2
   exit 1

@@ -9,6 +9,19 @@ and database, traces what broke, and proves a fix by re-running the experiment.
 - Product plan: [`plan.md`](plan.md)
 - Build plan by phase: [`execution-plan.md`](execution-plan.md)
 
+## Install
+
+```sh
+npx windtunnel-cli install
+```
+
+Checks Node 22.18+, git, Docker, Postgres and Playwright's Chromium, puts the `windtunnel`
+CLI on your PATH, and adds the plugin to the coding agents it finds (Claude Code, Codex,
+Muse Code) after one confirmation. Then, in your app's folder, ask your agent for
+`/windtunnel:init` (Claude Code, Codex) or the `windtunnel-init` skill (Muse Code), then
+`/windtunnel:hunt checkout`. Next.js + Postgres apps for now. Details:
+[`docs/agents.md`](docs/agents.md); the Meta setup for Muse Code: [`docs/muse.md`](docs/muse.md).
+
 **Status:** Phases 1–7 are done: isolated branches; the experiment engine (flows,
 perturbations, ordered races, webhook control, rules, database diff, repeat runs, run
 store); the agent connection (an MCP server, skills and a plugin for Claude Code, Codex
@@ -22,7 +35,9 @@ agent; and a usage meter with per-job budgets); and the local viewer (runs as th
 aligned timelines, first divergence, trace chain, database changes, rules, usage, a Run hunt
 button for Muse Code and an Open in Claude Code link); and the full Bug Zoo (ten cases and
 three clean controls, with rules that can read what users got and saw) with the benchmark
-harness for setups A, B and C, scored without a model.
+harness for setups A, B and C, scored without a model. Phase 8 (submission) so far: the npm
+package and `windtunnel install`, the Muse shell and day-0 check, and the demo app; the Muse
+benchmark runs and the video come next.
 
 ## Layout
 
@@ -35,7 +50,7 @@ packages/
               live crawl with the free sweep; which experiments a code change affects; the Decider
               (rules → Muse Spark or Jev → agent), selector repair and failure sorting
   mcp/        MCP server (map, validate, run, evidence, branch, prove, decide) with the usage meter
-  cli/        `windtunnel` CLI
+  cli/        `windtunnel` CLI, `install`; build.ts bundles the npm package (windtunnel-cli)
   viewer/     local API (HTTP + event stream) and web viewer (Vite + React in app/), Run hunt
 plugins/
   windtunnel/ plugin for Claude Code and Codex: skills (init, hunt, prove, test), MCP server,
@@ -47,6 +62,9 @@ zoo/
   mock-pay/   mock payment provider: idempotent charges, signed webhooks, harness control
   cases/      one bug patch per case (or decoy patch per control) + expected results + verifier;
               prover and healing checks
+  demo/       the demo app: three bugs at once (demo.patch) and setup.ts
+scripts/
+  muse-env.sh the Muse shell: the Meta key for Muse Code and Wind Tunnel, kept out of other shells
 bench/        the benchmark: trials per case and setup, Muse Code runner, scoring, scoreboard;
               results/ holds committed runs
 docs/
@@ -54,6 +72,8 @@ docs/
   agents.md        skills, MCP tools, app map, live crawl and sweep, evidence packets, trace chain,
                    affected runs, failure sorting and repair, the Decider, usage meter, proof
   viewer.md        the viewer, Run hunt, Open in Claude Code, the local API
+  muse.md          Muse Code setup, day-0 checks, the backup host
+  demo.md          the demo app and script
 ```
 
 ## Development setup
@@ -79,6 +99,10 @@ pnpm zoo:heal                # failure sorting and selector repair on a copy of 
 
 TypeScript runs directly on Node (type stripping), so there is no build step in
 development. Source files use erasable syntax only and `.ts` import extensions.
+
+The npm package is the one exception, since Node doesn't strip types in `node_modules`:
+`pnpm cli:build` bundles the CLI into `packages/cli/pkg/` with the viewer's UI, the plugin and
+the marketplace files; `npm pack` (or `npm publish`) from there.
 
 ## Branches
 
@@ -176,6 +200,20 @@ only), C with Muse Spark answering its small decisions. Each trial is a one-comm
 shop outside this repository. A finding counts when its reproduce command fails with the bug
 and passes on the clean shop; a fix counts when the case's hidden experiment passes on the
 agent's final code. See [`bench/README.md`](bench/README.md).
+
+| Setup (Muse Wonder) | Found | Fixed | False alarms | Tokens per proven fix | Time |
+|---|---|---|---|---|---|
+| A: Playwright MCP | — | — | — | — | — |
+| B: Wind Tunnel, rules only | — | — | — | — | — |
+| C: Wind Tunnel + Muse Spark | — | — | — | — | — |
+
+No published runs yet: they need the Muse setup ([`docs/muse.md`](docs/muse.md)). The
+scoreboard for each batch is in `bench/results/<batch>/scoreboard.md`.
+
+## Demo
+
+`pnpm demo:setup` makes the demo shop (three bugs at once) outside this repository; the script
+and how to record it are in [`docs/demo.md`](docs/demo.md).
 
 ## Viewer
 

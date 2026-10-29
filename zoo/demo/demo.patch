@@ -1,0 +1,153 @@
+diff --git a/zoo/shop/app/api/orders/route.ts b/zoo/shop/app/api/orders/route.ts
+index dfc88f7..5ba5711 100644
+--- a/zoo/shop/app/api/orders/route.ts
++++ b/zoo/shop/app/api/orders/route.ts
+@@ -1,6 +1,6 @@
+ import { getCurrentUser } from "@/lib/auth";
+-import { cartTotal, getCartItems, getCheckoutCart, getUserCart } from "@/lib/cart";
+-import { query, transaction } from "@/lib/db";
++import { type CartItem, cartTotal, getCartItems, getCheckoutCart, getUserCart } from "@/lib/cart";
++import { query, queryOne, transaction } from "@/lib/db";
+ import { createCharge } from "@/lib/payments";
+ 
+ interface Order {
+@@ -9,7 +9,6 @@ interface Order {
+   total_cents: number;
+ }
+ 
+-class OutOfStockError extends Error {}
+ class EmptyCartError extends Error {}
+ 
+ // Checkout: turn the user's cart into an order and charge it.
+@@ -24,33 +23,28 @@ export async function POST(req: Request) {
+     : await getCheckoutCart(user.id);
+   if (!cart) return Response.json({ error: "Your cart is empty" }, { status: 400 });
+ 
+-  let order: Order;
++  // Fail fast if something in the cart sold out since it was added.
++  for (const item of await getCartItems(cart.id)) {
++    const product = await queryOne<{ stock: number }>("SELECT stock FROM products WHERE id = $1", [item.product_id]);
++    if (!product || product.stock < item.quantity) {
++      return Response.json({ error: `${item.name} is out of stock` }, { status: 409 });
++    }
++  }
++
++  let placed: { order: Order; items: CartItem[] };
+   try {
+-    order = await transaction(async (db) => {
++    placed = await transaction(async (db) => {
+       // Lock the cart and read it here, so nothing is added between reading it and ordering it.
+       await db.query("SELECT id FROM carts WHERE id = $1 FOR UPDATE", [cart.id]);
+       const items = await getCartItems(cart.id, db);
+       if (items.length === 0) throw new EmptyCartError();
+-      // One order per cart: a repeated or concurrent checkout gets the existing order back.
+       const created = await db.query<Order>(
+         `INSERT INTO orders (user_id, cart_id, total_cents) VALUES ($1, $2, $3)
+-         ON CONFLICT (cart_id) DO NOTHING
+          RETURNING id, status, total_cents`,
+         [user.id, cart.id, cartTotal(items)],
+       );
+-      const newOrder = created.rows[0];
+-      if (!newOrder) {
+-        const existing = await db.query<Order>("SELECT id, status, total_cents FROM orders WHERE cart_id = $1", [
+-          cart.id,
+-        ]);
+-        return existing.rows[0]!;
+-      }
++      const newOrder = created.rows[0]!;
+       for (const item of items) {
+-        const reserved = await db.query("UPDATE products SET stock = stock - $1 WHERE id = $2 AND stock >= $1", [
+-          item.quantity,
+-          item.product_id,
+-        ]);
+-        if (reserved.rowCount === 0) throw new OutOfStockError(item.name);
+         await db.query(
+           "INSERT INTO order_items (order_id, product_id, quantity, unit_price_cents) VALUES ($1, $2, $3, $4)",
+           [newOrder.id, item.product_id, item.quantity, item.price_cents],
+@@ -58,25 +52,23 @@ export async function POST(req: Request) {
+       }
+       // The cart is this order now: anything added from here on goes into a new cart.
+       await db.query("UPDATE carts SET status = 'ordered' WHERE id = $1 AND status = 'open'", [cart.id]);
+-      return newOrder;
++      return { order: newOrder, items };
+     });
+   } catch (err) {
+     if (err instanceof EmptyCartError) return Response.json({ error: "Your cart is empty" }, { status: 400 });
+-    if (err instanceof OutOfStockError) {
+-      return Response.json({ error: `${err.message} is out of stock` }, { status: 409 });
+-    }
+     throw err;
+   }
+-
+-  if (order.status === "paid" || order.status === "failed") {
+-    return Response.json({ orderId: order.id, status: order.status });
+-  }
++  const { order, items } = placed;
+ 
+   // Keyed by order, so a retried checkout gets the first charge back instead of a second one.
+   const charge = await createCharge(
+     { amountCents: order.total_cents, orderId: order.id },
+     { idempotencyKey: `order-${order.id}` },
+   );
++  // Payment accepted: take the order's items out of stock.
++  for (const item of items) {
++    await query("UPDATE products SET stock = stock - $1 WHERE id = $2", [item.quantity, item.product_id]);
++  }
+   // The payment webhook may already have marked the order paid; only move it forward from pending.
+   await query("UPDATE orders SET status = 'processing', charge_id = $2 WHERE id = $1 AND status = 'pending'", [
+     order.id,
+diff --git a/zoo/shop/app/api/webhooks/payment/route.ts b/zoo/shop/app/api/webhooks/payment/route.ts
+index e3a9df0..3f60783 100644
+--- a/zoo/shop/app/api/webhooks/payment/route.ts
++++ b/zoo/shop/app/api/webhooks/payment/route.ts
+@@ -16,13 +16,6 @@ export async function POST(req: Request) {
+   if (!Number.isInteger(orderId)) return Response.json({ error: "Charge has no order" }, { status: 400 });
+ 
+   await transaction(async (db) => {
+-    // Providers deliver at least once; handle each event id a single time.
+-    const first = await db.query("INSERT INTO webhook_events (id, type) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING", [
+-      event.id,
+-      event.type,
+-    ]);
+-    if (first.rowCount === 0) return;
+-
+     if (event.type === "charge.failed") {
+       await db.query("UPDATE orders SET status = 'failed' WHERE id = $1 AND status <> 'paid'", [orderId]);
+       return;
+diff --git a/zoo/shop/components/PayButton.tsx b/zoo/shop/components/PayButton.tsx
+index 7163d91..6133ac0 100644
+--- a/zoo/shop/components/PayButton.tsx
++++ b/zoo/shop/components/PayButton.tsx
+@@ -37,7 +37,7 @@ export function PayButton({ cartId }: { cartId: number }) {
+ 
+   return (
+     <div className="row">
+-      <button onClick={pay} disabled={paying}>
++      <button onClick={pay}>
+         {paying ? "Paying…" : "Pay now"}
+       </button>
+       {error && (
+diff --git a/zoo/shop/db/schema.sql b/zoo/shop/db/schema.sql
+index 483f3d5..0b21a17 100644
+--- a/zoo/shop/db/schema.sql
++++ b/zoo/shop/db/schema.sql
+@@ -55,7 +55,7 @@ CREATE TABLE cart_items (
+ CREATE TABLE orders (
+   id          serial PRIMARY KEY,
+   user_id     integer NOT NULL REFERENCES users (id),
+-  cart_id     integer NOT NULL UNIQUE REFERENCES carts (id),
++  cart_id     integer NOT NULL REFERENCES carts (id),
+   total_cents integer NOT NULL,
+   status      text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'paid', 'failed')),
+   charge_id   text,
+@@ -78,10 +78,3 @@ CREATE TABLE payments (
+   amount_cents integer NOT NULL,
+   created_at   timestamptz NOT NULL DEFAULT now()
+ );
+-
+--- Payment provider events already handled (webhooks can arrive more than once).
+-CREATE TABLE webhook_events (
+-  id          text PRIMARY KEY,
+-  type        text NOT NULL,
+-  received_at timestamptz NOT NULL DEFAULT now()
+-);

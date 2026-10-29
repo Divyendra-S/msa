@@ -4,6 +4,10 @@ Muse Code finds skills in `.agents/skills/` (and `.claude/skills/`) and reads MC
 from `~/.config/muse/settings.json`. The skills are the same files as the Claude Code and
 Codex plugin in [`../windtunnel`](../windtunnel).
 
+`windtunnel install --hosts muse` does steps 1 and 2 for your user (skills in
+`~/.agents/skills`). Day-0 checks, the Meta key's shell and the backup host:
+[`docs/muse.md`](../../docs/muse.md). By hand:
+
 1. Install the skills into your project, prefixed so they don't clash with other skills:
 
    ```sh

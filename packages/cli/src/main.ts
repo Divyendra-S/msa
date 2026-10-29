@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
-import { cp, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join, resolve } from "node:path";
+import { realpathSync } from "node:fs";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import {
   Branches,
+  chromiumStatus,
   type CodeVersionSpec,
   clean,
   ConfigError,
@@ -41,6 +43,8 @@ import {
 } from "@windtunnel/explorer";
 import { findProjectDir, serveStdio, Workspace } from "@windtunnel/mcp";
 import { buildUi, startViewer, uiStatus } from "@windtunnel/viewer";
+import { type Host, HOSTS, install } from "./install.ts";
+import { writeSkills } from "./skills.ts";
 
 export interface Flags {
   cwd?: string;
@@ -67,6 +71,9 @@ export interface Flags {
   "no-triage"?: boolean;
   port?: string;
   "no-open"?: boolean;
+  yes?: boolean;
+  "dry-run"?: boolean;
+  hosts?: string;
   help?: boolean;
 }
 
@@ -75,6 +82,8 @@ const HELP = `windtunnel — real-world failure experiments for web apps
 Usage: windtunnel <command> [options]
 
 Commands
+  install             Set up the coding agents found here (Claude Code, Codex, Muse Code) and check
+                      Docker, Postgres and Playwright's Chromium; asks once before changing anything
   run [experiment…]   Run experiments (default: all in .windtunnel/experiments)
   affected [exp…]     Which experiments the working tree's changes affect, and why (runs nothing)
   validate [exp…]     Check experiment files and flows, and run the rules on the seed data
@@ -126,6 +135,9 @@ Options
   --port <n>          (view) port on 127.0.0.1 (default 4477, or the next free one)
   --no-open           (view) don't open the browser
   --all               (clean) also drop snapshots and delete worktrees
+  --yes, -y           (install) don't ask before making changes
+  --dry-run           (install) only show what would be done
+  --hosts <a,b>       (install) only these agents: claude, codex, muse (default: every one found)
   --json              Machine-readable output
 `;
 
@@ -159,8 +171,10 @@ export async function main(args: string[], flags: Flags): Promise<number> {
         return await proveCommand(args.slice(1), flags);
       case "skills":
         return await skills(flags);
+      case "install":
+        return await install({ yes: flags.yes, dryRun: flags["dry-run"], hosts: hostsFlag(flags.hosts) });
       case "mcp":
-        await serveStdio(flags.cwd ? resolve(flags.cwd) : process.cwd());
+        await serveStdio(mcpDir(flags));
         return 0;
       case "view":
         return await view(flags);
@@ -182,6 +196,32 @@ export async function main(args: string[], flags: Flags): Promise<number> {
     process.stderr.write(`error: ${message}\n`);
     return 1;
   }
+}
+
+function hostsFlag(value: string | undefined): Host[] | undefined {
+  if (value === undefined) return undefined;
+  const hosts = value.split(",").map((h) => h.trim());
+  const unknown = hosts.filter((h) => !(HOSTS as readonly string[]).includes(h));
+  if (unknown.length) throw new ConfigError(`--hosts: unknown agent ${unknown.join(", ")} (claude, codex, muse)`);
+  return hosts as Host[];
+}
+
+/**
+ * The folder the MCP server looks for the app from. Codex starts a plugin's server in the
+ * plugin's own folder; the session's folder is then still in PWD.
+ */
+function mcpDir(flags: Flags): string {
+  if (flags.cwd) return resolve(flags.cwd);
+  const pluginRoot = process.env.PLUGIN_ROOT;
+  const real = (dir: string) => {
+    try {
+      return realpathSync(dir);
+    } catch {
+      return resolve(dir);
+    }
+  };
+  if (pluginRoot && process.env.PWD && real(process.cwd()) === real(pluginRoot)) return process.env.PWD;
+  return process.cwd();
 }
 
 async function versionSpec(flags: Flags): Promise<CodeVersionSpec> {
@@ -220,6 +260,9 @@ async function doctor(flags: Flags): Promise<number> {
     ok: major > 22 || (major === 22 && minor >= 18),
     detail: `v${process.versions.node} (need 22.18+)`,
   });
+
+  const browser = chromiumStatus();
+  checks.push({ name: "chromium", ok: browser.installed, detail: browser.installed ? browser.path : "not downloaded: windtunnel install (or npx playwright install chromium)" });
 
   let branches: Branches | undefined;
   try {
@@ -534,23 +577,9 @@ function formatBranch(b: { name: string; commit: string; added: string[]; eviden
   ].join("\n");
 }
 
-/** The plugin's skills folder: next to the CLI in a checkout of the repository. */
-const SKILLS_DIR = join(dirname(import.meta.dirname), "..", "..", "plugins", "windtunnel", "skills");
-
 async function skills(flags: Flags): Promise<number> {
   if (!flags.out) throw new ConfigError("usage: windtunnel skills --out <dir> [--prefix windtunnel-]");
-  const prefix = flags.prefix ?? "";
-  const written: string[] = [];
-  for (const name of (await readdir(SKILLS_DIR)).sort()) {
-    const target = join(resolve(flags.out), `${prefix}${name}`);
-    await mkdir(target, { recursive: true });
-    await cp(join(SKILLS_DIR, name), target, { recursive: true });
-    const skill = join(target, "SKILL.md");
-    const text = await readFile(skill, "utf8");
-    // The skill's own name and references to sibling skills get the prefix too.
-    await writeFile(skill, text.replace(/^name: (.+)$/m, `name: ${prefix}$1`).replace(/\b(init|hunt|prove|test) skill\b/g, `${prefix}$1 skill`));
-    written.push(target);
-  }
+  const written = await writeSkills(flags.out, flags.prefix ?? "");
   print(flags, written, written.map((w) => `wrote ${w}`).join("\n"));
   return 0;
 }
