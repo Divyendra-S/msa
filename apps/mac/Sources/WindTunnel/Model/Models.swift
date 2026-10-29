@@ -523,3 +523,110 @@ enum ISO {
     return withFraction.date(from: s) ?? plain.date(from: s)
   }
 }
+
+/// The app as one picture (`/api/map`): its pages, the routes they call, the tables those write
+/// and the services they call, read from the code; and for each experiment, how its newest run
+/// went through them and where it pushed.
+nonisolated struct AppMap: Decodable, Sendable {
+  struct Page: Decodable, Hashable, Sendable {
+    struct Visit: Decodable, Hashable, Sendable {
+      let `as`: String
+      let status: Int
+      let final: String?
+    }
+    let path: String
+    let file: String
+    /// A layout: around every page under its path.
+    let layout: Bool
+    let login: Bool
+    let buttons: [String]
+    let fields: [String]
+    let texts: [String]
+    /// Route keys: `POST /api/orders`.
+    let calls: [String]
+    /// How the live crawl found it, per user.
+    let visits: [Visit]
+  }
+
+  struct Route: Decodable, Hashable, Sendable {
+    struct Effect: Decodable, Hashable, Sendable {
+      /// auth, read, write or call.
+      let kind: String
+      let text: String
+      /// Inside a transaction.
+      let tx: Bool
+    }
+    let key: String
+    let method: String
+    let path: String
+    let file: String
+    let comment: String?
+    let flags: [String]
+    let notes: [String]
+    let reads: [String]
+    let writes: [String]
+    let services: [String]
+    let effects: [Effect]
+    /// Called from outside the app (a payment provider), not by a page.
+    let webhook: Bool
+  }
+
+  struct Call: Decodable, Hashable, Sendable {
+    let route: String
+    let count: Int
+    let tabs: Int
+    /// Two were in the app at the same time.
+    let together: Bool
+    let failed: Int
+  }
+
+  struct Step: Decodable, Hashable, Sendable {
+    let name: String
+    let pages: [String]
+    let calls: [Call]
+  }
+
+  /// Where an experiment pushes (`at once`, `double submit`, `webhook twice`), and the routes that lands on.
+  struct Pressure: Decodable, Hashable, Sendable {
+    let what: String
+    let routes: [String]
+    let step: String?
+  }
+
+  struct Run: Decodable, Hashable, Sendable {
+    let id: String
+    let outcome: String
+    let headline: String
+    let startedAt: String
+    /// The repetition its steps come from.
+    let rep: Int
+    let reps: Int
+    let broken: [String]
+  }
+
+  struct Experiment: Decodable, Hashable, Sendable, Identifiable {
+    let id: String
+    let description: String?
+    let users: [String]
+    let pressure: [Pressure]
+    let run: Run?
+    let pages: [String]
+    let routes: [String]
+    /// Tables its newest run changed.
+    let tables: [String]
+    let steps: [Step]
+  }
+
+  struct Crawl: Decodable, Sendable {
+    let at: String
+    let stale: Bool
+  }
+
+  let framework: String
+  let pages: [Page]
+  let routes: [Route]
+  let tables: [String]
+  let services: [String]
+  let experiments: [Experiment]
+  let crawl: Crawl?
+}

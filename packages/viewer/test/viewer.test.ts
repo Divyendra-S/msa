@@ -1,5 +1,6 @@
 // The viewer's local API on a run store written by hand (no Postgres or browser needed): access
-// checks, runs and their details, the aligned comparison, and a hunt started with a fake `muse`.
+// checks, runs and their details, the aligned comparison, the app map, and a hunt started with a
+// fake `muse`.
 import assert from "node:assert/strict";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { request } from "node:http";
@@ -32,7 +33,13 @@ describe("viewer", () => {
     });
 
   before(async () => {
-    repo = await createFixtureRepo({}, { "windtunnel.config.yaml": `${CONFIG}hunt:\n  command: ["${process.execPath}", "${FAKE_MUSE}"]\n  skill: windtunnel-hunt\n` });
+    repo = await createFixtureRepo({}, {
+      "windtunnel.config.yaml": `${CONFIG}hunt:\n  command: ["${process.execPath}", "${FAKE_MUSE}"]\n  skill: windtunnel-hunt\n`,
+      // The same app as Next.js files, for the map: a page with Send, and the route it posts to.
+      "app/page.tsx": `"use client";\nexport default function Home() {\n  return <button onClick={() => fetch("/api/send", { method: "POST" })}>Send</button>;\n}\n`,
+      "app/api/send/route.ts": `const pool = { query: async (_sql: string, _params: unknown[]) => {} };\n// Records a send.\nexport async function POST() {\n  await pool.query("INSERT INTO hits (who) VALUES ($1)", ["alice"]);\n  return Response.json({ ok: true });\n}\n`,
+      ".windtunnel/experiments/send-twice.yaml": "description: Alice double-clicks Send.\nflow: send\nperturb:\n  - do: double-submit\n    step: send\nrepeat: 2\n",
+    });
     await writeStore(join(repo, ".windtunnel", "runs"));
     viewer = await startViewer({ cwd: repo, port: 0, env, distDir: join(repo, "no-ui") });
   });
@@ -114,6 +121,26 @@ describe("viewer", () => {
     assert.deepEqual(c.rows[1].cells[0].requests[0].sql, { total: 2, writes: 2, errors: 0 });
     assert.equal((await get(`/api/compare?lanes=${RUN}/9`)).status, 404);
     assert.equal((await get("/api/compare?lanes=../x")).status, 400);
+  });
+
+  it("draws the app: pages, the routes they call, what those write, and each experiment's way through", async () => {
+    const map = await json("/api/map");
+    assert.deepEqual(map.pages.map((p: { path: string; calls: string[] }) => [p.path, p.calls]), [["/", ["POST /api/send"]]]);
+    const send = map.routes.find((r: { key: string }) => r.key === "POST /api/send");
+    assert.equal(send.comment, "Records a send.");
+    assert.deepEqual(send.writes, ["hits"]);
+    assert.deepEqual(send.effects, [{ kind: "write", text: "INSERT hits", tx: false }]);
+    assert.deepEqual(map.tables, ["hits"]);
+    const [e] = map.experiments;
+    assert.equal(e.id, "send-twice");
+    // The repetition that broke the rule, step by step.
+    assert.deepEqual(e.run, { id: RUN, outcome: "flaky", headline: "flaky · at-most-one-hit 1/2", startedAt: "2026-10-29T10:00:00.000Z", rep: 1, reps: 2, broken: ["at-most-one-hit"] });
+    assert.deepEqual(e.steps, [
+      { name: "open", pages: ["/"], calls: [] },
+      { name: "send", pages: [], calls: [{ route: "POST /api/send", count: 2, tabs: 1, together: false, failed: 0 }] },
+    ]);
+    assert.deepEqual(e.pressure, [{ what: "double submit", routes: ["POST /api/send"], step: "send" }]);
+    assert.deepEqual([e.pages, e.routes, e.tables], [["/"], ["POST /api/send"], ["hits"]]);
   });
 
   it("gives a run's evidence packet as text", async () => {

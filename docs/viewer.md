@@ -128,6 +128,7 @@ must send JSON, and must come from the viewer's own origin when it has an `Origi
 | `GET /api/runs/<run>/evidence` | `{text}`: the evidence packet the agent gets from `windtunnel_evidence` |
 | `GET /api/compare?lanes=<run>/<n>,…` | up to 8 runs: lanes, rows lined up by tab and step, the reference lane, each lane's first divergence |
 | `GET /api/experiments` | every experiment (id, description, flow, users, repeat, file, perturbations) with its newest run |
+| `GET /api/map` | the app as a picture: pages (what they show, the routes they call, how the live crawl found them), routes (what each does in order, what it reads and writes, calls out, hints), tables, services; and each experiment's newest run through them: the pages and routes it reached, the tables it changed, its steps in order with each route's count and whether two were in the app at once, and where it pushes |
 | `POST /api/experiments/run {experiments?, repeat?}` | runs them with the CLI (`windtunnel run`), one run at a time (409 while one goes) |
 | `GET /api/jobs`, `POST /api/jobs/<id>/stop` | runs started here, with the CLI's output; stops one |
 | `GET /api/usage` | budget and every job's totals |

@@ -38,6 +38,7 @@ struct MainView: View {
         ZStack {
           switch model.section {
           case .overview: OverviewView()
+          case .map: MapPane()
           case .runs: RunsSplit()
           case .experiments: ExperimentsSplit()
           case .hunt: HuntView()

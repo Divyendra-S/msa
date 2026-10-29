@@ -20,6 +20,7 @@ Settings overrides both. It finds Node 22.18+ on that PATH, in nvm's folder or i
 |---|---|
 | **First run** | two screens. Choose the app's folder (or drop it on the window); then its code, read by `windtunnel scan` before anything is set up: the handlers that could leave data wrong when requests overlap, each pattern in a sentence, beside what to do next: open it, or have your agent write `windtunnel.config.yaml` (`/windtunnel:init`) while the folder is watched for it. The Mac is checked meanwhile (`windtunnel install --dry-run --json`) and speaks up only when something's missing, with **Set Up** to run the install steps it lists. A folder with no config opened any other way lands on the second screen |
 | **Overview** | the project at a glance: experiments holding, and how that moved run by run; the failing ones first, with the rule each broke, what the experiment does, its recent runs, and whether it just broke or keeps breaking; the ones holding; which rules break most. A new project shows its next step instead: a hunt, or the first run |
+| **Map** | the app as one picture: its pages, the routes they call, the tables and services those reach, read from the code. Over it, what the experiments went through: a dot where one went, red where a rule broke, dotted where nothing has yet; how many routes are tested and which were never sent. Point at an experiment to see its way through the app (requests move along its lines); click it to follow it step by step, as its newest run went: the pages each step opened, the requests it sent and how many, which were in the app at once, and where it pushed. Click a page, route or table for what's behind it: what a route does in order and what looks risky, what a page shows and how the crawl found it, who writes a table, and the experiments that went through each |
 | **Runs** | every run, grouped by batch, failures first with the rule they broke and held runs folded; filtered by outcome or name. A run opens on the answer: the rule that broke, in words, with its rows, where the run first went another way than one that held, and which tab to look at next. Then its repetitions and orderings, the rules' SQL; a **race** timeline (each tab and the webhooks on one time axis), the runs side by side step by step, the trace chain per table, database changes, requests, the app log |
 | **Experiments** | each experiment, its source and history; **Run** with a repeat count, with the CLI's output live |
 | **Hunt** | send an agent to break the app (below), and follow everything it runs |
@@ -60,8 +61,8 @@ Sources/WindTunnel/
               grain), RequestTrace (requests in lanes, two at once caught in red: start screens and Hunt),
               Dither (ordered-dither pieces: the scan band, loading bars)
   Views/      Shell (window, top bar, sidebar, welcome), SetupView (first run),
-              Overview, Runs, RunDetail, Timeline, Evidence (trace, database, network, log),
-              Experiments, Hunt, Usage
+              Overview, Map (the app as one picture), Runs, RunDetail, Timeline,
+              Evidence (trace, database, network, log), Experiments, Hunt, Usage
 ```
 
 The look is quiet glass, dark or light (Settings → Appearance: System, Light or Dark): the window
@@ -98,6 +99,7 @@ For working on the views:
 ```sh
 T=40 .build/debug/WindTunnel --snapshot glow /tmp/g.png 1200 760  # render a view to PNG (glow, field or runs at time T, parts, icon)
 open "build/Wind Tunnel.app" --args --project <app folder> --pane runs --run <run id> --tab timeline
+open "build/Wind Tunnel.app" --args --project <app folder> --pane map --focus <experiment>  # or --focus "r POST /api/orders"
 open "build/Wind Tunnel.app" --args --welcome --appearance light   # light, dark or system (saved as the setting)
 open "build/Wind Tunnel.app" --args --setup read --folder <app folder>  # a first-run screen: app, read, or mac (the checks)
 ```

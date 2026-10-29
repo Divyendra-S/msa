@@ -4,12 +4,13 @@ import Observation
 import UserNotifications
 
 enum Pane: String, CaseIterable, Identifiable {
-  case overview, runs, experiments, hunt, usage
+  case overview, map, runs, experiments, hunt, usage
   var id: String { rawValue }
 
   var title: String {
     switch self {
     case .overview: "Overview"
+    case .map: "Map"
     case .runs: "Runs"
     case .experiments: "Experiments"
     case .hunt: "Hunt"
@@ -20,6 +21,7 @@ enum Pane: String, CaseIterable, Identifiable {
   var symbol: String {
     switch self {
     case .overview: "square.grid.2x2"
+    case .map: "point.3.connected.trianglepath.dotted"
     case .runs: "list.bullet.rectangle"
     case .experiments: "flask"
     case .hunt: "scope"
@@ -82,6 +84,10 @@ final class AppModel {
   var runs: [RunListEntry] = []
   var experiments: [ExperimentEntry] = []
   var experimentsError: String?
+  var appMap: AppMap?
+  /// What the Map follows: the whole app, an experiment, or one page, route or table.
+  var mapFocus: MapFocus = .app
+  var appMapError: String?
   var usage: Usage?
   var hunts: [HuntInfo] = []
   var jobs: [RunJob] = []
@@ -148,6 +154,11 @@ final class AppModel {
     }
     // After opening, which clears the selection.
     if let i = args.firstIndex(of: "--run"), args.count > i + 1 { selectedRun = args[i + 1] }
+    // `--focus checkout-two-buyers` follows an experiment on the Map; `--focus "r POST /api/orders"` a node.
+    if let i = args.firstIndex(of: "--focus"), args.count > i + 1 {
+      let id = args[i + 1]
+      mapFocus = id.dropFirst().hasPrefix(" ") || id == MapGraph.outside ? .node(id) : .experiment(id)
+    }
   }
 
   /// Back to the start page: the bridge stops (if it's ours).
@@ -238,6 +249,9 @@ final class AppModel {
     status = nil
     runs = []
     experiments = []
+    appMap = nil
+    appMapError = nil
+    mapFocus = .app
     usage = nil
     hunts = []
     jobs = []
@@ -304,6 +318,17 @@ final class AppModel {
     }
   }
 
+  /// The app map: read from the code, so it changes when the code or a run does.
+  func loadMap() async {
+    guard let api else { return }
+    do {
+      appMap = try await api.get("/api/map")
+      appMapError = nil
+    } catch {
+      appMapError = error.localizedDescription
+    }
+  }
+
   func loadHunts() async {
     if let h: [HuntInfo] = try? await api?.get("/api/hunts") { hunts = h }
   }
@@ -353,7 +378,10 @@ final class AppModel {
           note(Activity(at: .now, kind: .finished, text: now.experiment, run: id, outcome: now.outcome))
         }
       }
-      if changed.contains(where: { id in runs.first { $0.id == id }?.outcome != "running" }) { await loadExperiments() }
+      if changed.contains(where: { id in runs.first { $0.id == id }?.outcome != "running" }) {
+        await loadExperiments()
+        if appMap != nil { await loadMap() }
+      }
     case .usage:
       await loadUsage()
     case .hunt(let id, let info):

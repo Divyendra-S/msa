@@ -69,6 +69,14 @@ export class Workspace {
     return (method, path) => routes.find((r) => matchesRequest(r.pattern, method, `http://x${path}`))?.file;
   }
 
+  /** The app map from the code, and the newest live crawl if there is one. */
+  async appMap() {
+    const runner = await this.open();
+    const version = await runner.branches.versions.resolve({});
+    const [map, crawl] = await Promise.all([buildAppMap(runner.project), readCrawl(runner.project, version)]);
+    return { map, crawl };
+  }
+
   /**
    * Evidence by handle: a run (`<run>[/<n>/<part>]`), the live crawl (`crawl`, `crawl:<path>`, `sweep`),
    * `usage` or `decisions`.

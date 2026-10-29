@@ -21,6 +21,7 @@ import {
 import { Workspace } from "@windtunnel/mcp";
 import { HuntError, type HuntEvent, type HuntInfo, HuntManager, type HuntOptions } from "./hunt.ts";
 import { JobError, type RunJob, RunJobs } from "./jobs.ts";
+import { mapView } from "./map.ts";
 import { StoreWatcher } from "./watch.ts";
 
 export const DEFAULT_PORT = 4477;
@@ -121,6 +122,7 @@ export async function startViewer(options: ViewerOptions): Promise<Viewer> {
       handler: async () => ({ budget: project.config.budget, jobs: await listUsage(project.stateDir, 30) }),
     },
     { method: "GET", pattern: /^\/api\/experiments$/, handler: async () => experiments(runner) },
+    { method: "GET", pattern: /^\/api\/map$/, handler: async () => mapView(workspace, runner) },
     {
       method: "POST",
       pattern: /^\/api\/experiments\/run$/,
