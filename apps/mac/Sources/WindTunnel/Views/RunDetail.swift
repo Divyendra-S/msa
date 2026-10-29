@@ -2,6 +2,8 @@ import SwiftUI
 
 enum RunTab: String, CaseIterable {
   case summary, timeline, trace, database, network, log
+
+  var title: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
 }
 
 struct RunDetailView: View {
@@ -13,15 +15,22 @@ struct RunDetailView: View {
   @State private var selectedRep: Int?
   @State private var tab: RunTab = Launch.value("--tab").flatMap(RunTab.init(rawValue:)) ?? .summary
   @State private var error: String?
-  @Namespace private var tabLine
 
   var body: some View {
     let version = model.runVersions[runID] ?? 0
     ScrollView {
-      VStack(alignment: .leading, spacing: 18) {
+      VStack(alignment: .leading, spacing: 20) {
         if let detail {
           RunHeader(detail: detail, rep: rep, selectedRep: $selectedRep)
-          tabs
+          Segmented(items: RunTab.allCases, selection: $tab) { t, _ in
+            HStack(spacing: 5) {
+              Text(t.title)
+              if let badge = badge(t) {
+                Text(badge).font(Theme.sans(10.5, .semibold)).monospacedDigit()
+                  .foregroundStyle(t == .summary ? Theme.fail : Theme.faint)
+              }
+            }
+          }
           Group {
             switch tab {
             case .summary: SummaryTab(detail: detail, rep: rep, comparison: comparison)
@@ -40,44 +49,15 @@ struct RunDetailView: View {
           LoadingBlock()
         }
       }
-      .padding(24)
+      .padding(.horizontal, 26)
+      .padding(.top, 8)
+      .padding(.bottom, 28)
       .frame(maxWidth: 1240, alignment: .leading)
     }
     .scrollIndicators(.automatic)
-    .background(Theme.bg)
     .animation(Theme.spring, value: tab)
     .task(id: "\(runID)#\(version)") { await loadRun() }
     .task(id: "\(runID)#\(version)#\(selectedRep ?? -1)") { await loadRep() }
-  }
-
-  private var tabs: some View {
-    HStack(spacing: 22) {
-      ForEach(RunTab.allCases, id: \.self) { t in
-        Button {
-          withAnimation(Theme.spring) { tab = t }
-        } label: {
-          VStack(spacing: 6) {
-            HStack(spacing: 5) {
-              Text(t.rawValue).font(Theme.mono(11.5, tab == t ? .semibold : .regular))
-              if let badge = badge(t) { Text(badge).font(Theme.mono(9.5)).foregroundStyle(t == .summary ? Theme.fail : Theme.faint) }
-            }
-            .foregroundStyle(tab == t ? Theme.text : Theme.dim)
-            ZStack {
-              if tab == t {
-                Rectangle().fill(Theme.accent).frame(height: 2).matchedGeometryEffect(id: "line", in: tabLine)
-              } else {
-                Rectangle().fill(.clear).frame(height: 2)
-              }
-            }
-          }
-          .fixedSize()
-          .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-      }
-      Spacer()
-    }
-    .overlay(alignment: .bottom) { Rectangle().fill(Theme.line).frame(height: 1) }
   }
 
   private func badge(_ t: RunTab) -> String? {
@@ -126,15 +106,11 @@ struct RunDetailView: View {
   }
 }
 
-private struct LoadingBlock: View {
+struct LoadingBlock: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      HStack(spacing: 8) {
-        BrailleSpinner()
-        Text("reading the run").font(Theme.mono(11)).foregroundStyle(Theme.dim)
-      }
-      ForEach(0..<5, id: \.self) { i in
-        RoundedRectangle(cornerRadius: 4).fill(Theme.surface).frame(width: [420, 300, 520, 260, 380][i], height: 14)
+      ForEach(0..<4, id: \.self) { i in
+        Capsule().fill(Color.white.opacity(0.06)).frame(width: [420, 300, 520, 260][i], height: 12)
           .phaseAnimator([0.4, 1]) { v, o in v.opacity(o) } animation: { _ in .easeInOut(duration: 0.9).delay(Double(i) * 0.08) }
       }
     }
@@ -152,80 +128,99 @@ struct RunHeader: View {
 
   var body: some View {
     let outcome = detail.result?.outcome ?? "running"
-    VStack(alignment: .leading, spacing: 12) {
-      HStack(spacing: 8) {
-        Text("run \(detail.id)").label()
-        if let label = detail.result?.version?.label { Text("· \(label)").label() }
-        if let started = ISO.date(detail.result?.startedAt) { Text("· \(Fmt.day(started)) \(Fmt.clock(started))").label() }
-        Spacer()
-      }
-      HStack(alignment: .firstTextBaseline, spacing: 14) {
-        ScrambleText(text: detail.experiment.id, font: Theme.mono(24, .bold), color: Theme.text)
+    VStack(alignment: .leading, spacing: 16) {
+      HStack(alignment: .center, spacing: 12) {
+        Text(detail.experiment.id)
+          .font(Theme.sans(22, .semibold)).tracking(-0.3)
+          .foregroundStyle(Theme.text)
           .textSelection(.enabled)
+          .lineLimit(1)
+          .minimumScaleFactor(0.8)
+          .layoutPriority(1)
         OutcomeBadge(outcome: outcome, large: true)
-        Spacer()
-      }
-      if let d = detail.experiment.description {
-        Text(d).font(Theme.sans(13.5)).foregroundStyle(Theme.dim).lineSpacing(2).frame(maxWidth: 760, alignment: .leading)
-      }
-      HStack(spacing: 6) {
-        if let ms = detail.result?.durationMs { Chip(text: "⏱ \(Fmt.ms(ms))") }
-        if let flow = detail.experiment.flow { Chip(text: "flow \(flow)") }
-        Chip(text: Fmt.plural(detail.total, "rep"))
-        if let triage = detail.triage {
-          Chip(text: "\(triage.label ?? "sorted") · by \(triage.by)", color: triage.label == "bug" ? Theme.fail : Theme.flaky)
-        }
-        if let ref = detail.reference {
-          Chip(text: "vs \(ref.run == detail.id ? "rep \(ref.rep)" : "passing run …\(ref.run.suffix(4))")", color: Theme.accent.opacity(0.8)).help(ref.label)
-        }
-      }
-      if let triage = detail.triage {
-        Text(triage.reason).font(Theme.mono(11)).foregroundStyle(Theme.faint)
-      }
-      HStack(spacing: 14) {
-        VStack(alignment: .leading, spacing: 5) {
-          Text("repetitions").label()
-          RepStrip(
-            outcomes: detail.reps.map(\.outcome),
-            pending: max(0, detail.total - detail.reps.count),
-            selected: selectedRep
-          ) { n in withAnimation(Theme.spring) { selectedRep = n } }
-        }
-        if let variants = detail.result?.variants, !variants.isEmpty {
-          VStack(alignment: .leading, spacing: 5) {
-            Text("orderings").label()
-            HStack(spacing: 10) {
-              ForEach(variants, id: \.variant) { v in
-                Text("\(v.variant) \(v.ok)/\(v.runs)")
-                  .font(Theme.mono(11))
-                  .foregroundStyle(Tone(v.outcome).color)
-                  .fixedSize()
-                  .help("\(v.variant): \(v.ok) of \(v.runs) held every rule")
-              }
-            }
-            .frame(height: 20)
-          }
-        }
-        Spacer()
+        Spacer(minLength: 12)
         Button {
           model.runExperiments([detail.experiment.id])
         } label: {
-          Label("Run again", systemImage: "arrow.clockwise")
+          Image(systemName: "arrow.clockwise")
         }
-        .buttonStyle(TermButtonStyle())
+        .buttonStyle(GlassButtonStyle())
         .disabled(model.runningJob != nil)
+        .help("Run again")
         if outcome != "pass" {
           Button {
             model.openInClaudeCode(fixPrompt)
           } label: {
-            Label("Fix in Claude Code", systemImage: "terminal")
+            Label("Fix", systemImage: "sparkles")
           }
-          .buttonStyle(TermButtonStyle(prominent: true))
-          .help("Opens Claude Code in this app's folder with the prompt typed, not sent: it runs on your own login when you press Enter")
+          .buttonStyle(GlassButtonStyle(prominent: true))
+          .help("Fix in Claude Code: opens it in this app's folder with the prompt typed, not sent. It runs on your own login when you press Return.")
+        }
+      }
+      VStack(alignment: .leading, spacing: 6) {
+        Text(meta).font(Theme.sans(12)).foregroundStyle(Theme.faint)
+        if let d = detail.experiment.description {
+          Text(d).font(Theme.sans(13)).foregroundStyle(Theme.dim).lineSpacing(2).lineLimit(3).frame(maxWidth: 720, alignment: .leading)
+        }
+      }
+      HStack(alignment: .top, spacing: 30) {
+        VStack(alignment: .leading, spacing: 6) {
+          Text("Repetitions").label()
+          RepDots(
+            outcomes: detail.reps.map(\.outcome),
+            pending: max(0, detail.total - detail.reps.count),
+            selected: selectedRep
+          ) { n in withAnimation(Theme.spring) { selectedRep = n } }
+          .padding(.leading, -4)
+        }
+        if let variants = detail.result?.variants, !variants.isEmpty {
+          VStack(alignment: .leading, spacing: 6) {
+            Text("Orderings").label()
+            HStack(spacing: 12) {
+              ForEach(variants, id: \.variant) { v in
+                HStack(spacing: 5) {
+                  Circle().fill(Tone(v.outcome).color).frame(width: 5, height: 5)
+                  Text("\(v.variant) \(v.ok)/\(v.runs)").font(Theme.mono(11)).foregroundStyle(Theme.dim)
+                }
+                .fixedSize()
+                .help("\(v.variant): \(v.ok) of \(v.runs) held every rule")
+              }
+            }
+            .frame(height: 18)
+          }
+        }
+        if let triage = detail.triage {
+          VStack(alignment: .leading, spacing: 6) {
+            Text("Sorted").label()
+            Text("\(triage.label ?? "sorted") · \(triage.by)")
+              .font(Theme.sans(12, .medium))
+              .foregroundStyle(triage.label == "bug" ? Theme.fail : Theme.flaky)
+              .frame(height: 18)
+              .help(triage.reason)
+          }
+        }
+        if let ref = detail.reference {
+          VStack(alignment: .leading, spacing: 6) {
+            Text("Compared with").label()
+            Text(ref.run == detail.id ? "repetition \(ref.rep)" : "a passing run")
+              .font(Theme.sans(12, .medium)).foregroundStyle(Theme.pass.opacity(0.9))
+              .frame(height: 18)
+              .help(ref.label)
+          }
         }
       }
     }
     .rise()
+  }
+
+  private var meta: String {
+    var parts: [String] = []
+    if let started = ISO.date(detail.result?.startedAt) { parts.append("\(Fmt.day(started).capitalized) at \(Fmt.clock(started))") }
+    if let ms = detail.result?.durationMs { parts.append(Fmt.ms(ms)) }
+    parts.append(Fmt.plural(detail.total, "repetition"))
+    if let flow = detail.experiment.flow { parts.append(flow) }
+    if let label = detail.result?.version?.label { parts.append(label) }
+    return parts.joined(separator: "  ·  ")
   }
 
   private var fixPrompt: String {
@@ -241,52 +236,54 @@ struct SummaryTab: View {
   let comparison: Comparison?
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 18) {
+    VStack(alignment: .leading, spacing: 16) {
       if let comparison, let i = comparison.divergence.firstIndex(where: { $0 != nil }), let d = comparison.divergence[i] {
         DivergenceCallout(divergence: d, lane: comparison.lanes[i], reference: comparison.reference >= 0 ? comparison.lanes[comparison.reference] : nil)
       }
       if let rep {
         RulesPanel(rules: rep.rules)
         if let diff = rep.diff, !diff.tables.isEmpty {
-          Panel("database changes", accessory: { Text(rep.diffSummary ?? "").font(Theme.mono(9.5)).foregroundStyle(Theme.faint).lineLimit(1) }) {
+          Panel("Database changes") {
             FlowLayout(spacing: 6) {
               ForEach(diff.tables.keys.sorted(), id: \.self) { name in
                 let t = diff.tables[name]!
-                HStack(spacing: 5) {
+                let focus = rep.rules.contains { !$0.ok } && rep.trace?.focus.contains(name) == true
+                HStack(spacing: 6) {
                   Text(name).foregroundStyle(Theme.text)
                   if !t.added.isEmpty { Text("+\(t.added.count)").foregroundStyle(Theme.pass) }
                   if !t.removed.isEmpty { Text("−\(t.removed.count)").foregroundStyle(Theme.fail) }
                   if !t.changed.isEmpty { Text("~\(t.changed.count)").foregroundStyle(Theme.flaky) }
                 }
                 .font(Theme.mono(11))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 5).fill(Theme.raised))
-                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(rep.trace?.focus.contains(name) == true ? Theme.fail.opacity(0.5) : Theme.line))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Capsule().fill(focus ? Theme.fail.opacity(0.1) : Color.white.opacity(0.05)))
+                .overlay(Capsule().strokeBorder(focus ? Theme.fail.opacity(0.35) : .clear, lineWidth: 1))
+                .help(focus ? "A broken rule reads this table" : name)
               }
             }
           }
         }
         if let warnings = rep.warnings, !warnings.isEmpty {
-          Panel("warnings", tint: Theme.flaky.opacity(0.4), titleColor: Theme.flaky) {
-            VStack(alignment: .leading, spacing: 4) {
-              ForEach(warnings, id: \.self) { w in Text("▲ \(w)").font(Theme.mono(11)).foregroundStyle(Theme.dim) }
+          Panel("Warnings", tint: Theme.flaky) {
+            VStack(alignment: .leading, spacing: 6) {
+              ForEach(warnings, id: \.self) { w in Text(w).font(Theme.sans(12.5)).foregroundStyle(Theme.dim) }
             }
           }
         }
         if let error = rep.error {
-          Panel("error", tint: Theme.error.opacity(0.5), titleColor: Theme.error) {
+          Panel("Error", tint: Theme.error) {
             Text(error).font(Theme.mono(11.5)).foregroundStyle(Theme.text).textSelection(.enabled)
           }
         }
         if let webhooks = rep.webhooks, !webhooks.isEmpty {
-          Panel("payment webhooks") {
-            VStack(alignment: .leading, spacing: 5) {
+          Panel("Payment webhooks") {
+            VStack(alignment: .leading, spacing: 7) {
               ForEach(webhooks, id: \.event) { w in
                 HStack(spacing: 10) {
-                  Text(w.event).foregroundStyle(Theme.faint)
                   Text(w.type).foregroundStyle(Theme.text)
                   if let c = w.charge { Text(c).foregroundStyle(Theme.accent) }
+                  Text(w.event).foregroundStyle(Theme.ghost)
                   Spacer()
                   Text(w.deliveries.map { d in d.status.map(String.init) ?? (d.error ?? "–") }.joined(separator: " · "))
                     .foregroundStyle(w.deliveries.count > 1 ? Theme.flaky : Theme.dim)
@@ -310,33 +307,31 @@ struct DivergenceCallout: View {
   let reference: LaneView?
 
   var body: some View {
-    HStack(alignment: .top, spacing: 16) {
-      VStack(alignment: .leading, spacing: 4) {
-        Text("◆").font(Theme.mono(18, .bold)).foregroundStyle(Theme.fail)
-          .phaseAnimator([0.5, 1]) { v, o in v.opacity(o) } animation: { _ in .easeInOut(duration: 0.9) }
-      }
-      VStack(alignment: .leading, spacing: 8) {
-        HStack(spacing: 8) {
-          Text("first divergence").label(Theme.fail)
-          Text("at \(Fmt.ms(divergence.at)) · \(divergence.tab)").font(Theme.mono(10.5)).foregroundStyle(Theme.dim)
+    HStack(alignment: .top, spacing: 14) {
+      Circle().fill(Theme.fail).frame(width: 8, height: 8).padding(.top, 5)
+        .background(Circle().fill(Theme.fail.opacity(0.3)).frame(width: 18, height: 18).padding(.top, 5)
+          .phaseAnimator([0.4, 1]) { v, o in v.opacity(o) } animation: { _ in .easeInOut(duration: 1.1) })
+      VStack(alignment: .leading, spacing: 12) {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+          Text("First divergence").font(Theme.sans(13.5, .semibold)).foregroundStyle(Theme.fail)
+          Text("\(Fmt.ms(divergence.at)) · \(divergence.tab)").font(Theme.sans(12)).foregroundStyle(Theme.faint)
         }
-        Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 6) {
+        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 7) {
           GridRow {
-            Text("this run").font(Theme.mono(10.5)).foregroundStyle(Theme.fail)
+            Text("This run").font(Theme.sans(11.5, .medium)).foregroundStyle(Theme.fail.opacity(0.85))
             Text(divergence.ours).font(Theme.mono(12)).foregroundStyle(Theme.text).textSelection(.enabled)
           }
           GridRow {
-            Text(reference.map { $0.run == lane.run ? "rep \($0.rep)" : "passing" } ?? "reference").font(Theme.mono(10.5)).foregroundStyle(Theme.pass)
+            Text(reference.map { $0.run == lane.run ? "Rep \($0.rep)" : "Passing" } ?? "Reference").font(Theme.sans(11.5, .medium)).foregroundStyle(Theme.pass.opacity(0.85))
             Text(divergence.theirs).font(Theme.mono(12)).foregroundStyle(Theme.dim).textSelection(.enabled)
           }
         }
-        Text("The two runs did the same until here: the bug is in what happens at this step.").font(Theme.sans(12)).foregroundStyle(Theme.faint)
       }
       Spacer()
     }
-    .padding(16)
-    .background(RoundedRectangle(cornerRadius: 8).fill(Theme.fail.opacity(0.06)))
-    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Theme.fail.opacity(0.35)))
+    .padding(18)
+    .card(tint: Theme.fail)
+    .help("Both runs did the same up to this step: the bug is in what happens here.")
     .rise(0.05)
   }
 }
@@ -348,48 +343,51 @@ struct RulesPanel: View {
   var body: some View {
     let broken = rules.filter { !$0.ok }
     let held = rules.filter(\.ok)
-    Panel(broken.isEmpty ? "rules" : "rules broken", tint: broken.isEmpty ? Theme.lineStrong : Theme.fail.opacity(0.45), titleColor: broken.isEmpty ? Theme.dim : Theme.fail, accessory: {
-      Text("\(held.count)/\(rules.count) held").font(Theme.mono(10)).foregroundStyle(Theme.faint)
-    }) {
-      VStack(alignment: .leading, spacing: 16) {
+    Panel("Rules", accessory: { Text("\(held.count) of \(rules.count) held") }) {
+      VStack(alignment: .leading, spacing: 18) {
         ForEach(broken) { rule in
-          VStack(alignment: .leading, spacing: 8) {
+          VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 8) {
-              Text("✗").font(Theme.mono(13, .bold)).foregroundStyle(Theme.fail)
-              Text(rule.id).font(Theme.mono(13, .semibold)).foregroundStyle(Theme.text)
-              if let n = rule.rows?.count { Text("\(n) row\(n == 1 ? "" : "s")").font(Theme.mono(10.5)).foregroundStyle(Theme.faint) }
+              Image(systemName: "xmark.circle.fill").font(.system(size: 13)).foregroundStyle(Theme.fail)
+              Text(rule.id).font(Theme.mono(12.5, .medium)).foregroundStyle(Theme.text)
+              if let n = rule.rows?.count { Text(Fmt.plural(n, "row")).font(Theme.sans(11.5)).foregroundStyle(Theme.faint) }
             }
             if let d = rule.description { Text(d).font(Theme.sans(12.5)).foregroundStyle(Theme.dim) }
             if let sql = rule.sql {
               Text(SQL.highlight(sql)).font(Theme.mono(11)).textSelection(.enabled)
-                .padding(10)
+                .padding(12)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(RoundedRectangle(cornerRadius: 5).fill(Theme.bg))
-                .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Theme.line))
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.well))
             }
             if let rows = rule.rows, !rows.isEmpty { RowsTable(rows: Array(rows.prefix(8)), tint: Theme.fail) }
             if let e = rule.error { Text(e).font(Theme.mono(11)).foregroundStyle(Theme.error) }
           }
         }
         if !held.isEmpty {
-          VStack(alignment: .leading, spacing: 8) {
-            Button {
-              withAnimation(Theme.spring) { showHeld.toggle() }
-            } label: {
-              HStack(spacing: 6) {
-                Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold)).rotationEffect(.degrees(showHeld ? 90 : 0))
-                Text("\(held.count) rule\(held.count == 1 ? "" : "s") held")
+          VStack(alignment: .leading, spacing: 10) {
+            if !broken.isEmpty {
+              Button {
+                withAnimation(Theme.spring) { showHeld.toggle() }
+              } label: {
+                HStack(spacing: 6) {
+                  Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold)).rotationEffect(.degrees(showHeld ? 90 : 0))
+                  Text("\(held.count) held")
+                }
+                .font(Theme.sans(12, .medium)).foregroundStyle(Theme.dim)
               }
-              .font(Theme.mono(11)).foregroundStyle(Theme.dim)
+              .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
             if showHeld || broken.isEmpty {
               FlowLayout(spacing: 6) {
                 ForEach(held) { rule in
-                  Text("✓ \(rule.id)").font(Theme.mono(10.5)).foregroundStyle(Theme.pass.opacity(0.85))
-                    .padding(.horizontal, 7).padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(Theme.pass.opacity(0.06)))
-                    .help(rule.description ?? rule.id)
+                  HStack(spacing: 5) {
+                    Image(systemName: "checkmark").font(.system(size: 8.5, weight: .bold))
+                    Text(rule.id).font(Theme.mono(10.5))
+                  }
+                  .foregroundStyle(Theme.pass.opacity(0.85))
+                  .padding(.horizontal, 9).padding(.vertical, 4)
+                  .background(Capsule().fill(Theme.pass.opacity(0.08)))
+                  .help(rule.description ?? rule.id)
                 }
               }
               .transition(.opacity)
@@ -408,7 +406,7 @@ struct RowsTable: View {
 
   var body: some View {
     let columns = rows.first?.fields.map(\.0) ?? []
-    Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 4) {
+    Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 5) {
       GridRow {
         ForEach(columns, id: \.self) { c in Text(c).font(Theme.mono(10)).foregroundStyle(Theme.faint) }
       }
@@ -420,8 +418,9 @@ struct RowsTable: View {
         }
       }
     }
-    .padding(10)
-    .background(RoundedRectangle(cornerRadius: 5).fill(tint.opacity(0.05)))
+    .padding(12)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.well))
   }
 }
 

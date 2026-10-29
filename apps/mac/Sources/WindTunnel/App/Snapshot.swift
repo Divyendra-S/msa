@@ -11,7 +11,7 @@ enum Snapshot {
     let out = URL(fileURLWithPath: args[i + 2])
     let width = args.count > i + 3 ? Double(args[i + 3]) ?? 1100 : 1100
     let height = args.count > i + 4 ? Double(args[i + 4]) ?? 700 : 700
-    let view = AnyView(content(name).frame(width: width, height: height).background(name == "icon" ? Color.clear : Theme.bg).environment(\.colorScheme, .dark))
+    let view = AnyView(content(name).frame(width: width, height: height).background(name == "icon" ? Color.clear : Theme.ink).environment(\.colorScheme, .dark))
     let renderer = ImageRenderer(content: view)
     renderer.scale = name == "icon" ? 1 : 2
     guard let image = renderer.nsImage, let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
@@ -27,21 +27,23 @@ enum Snapshot {
   @ViewBuilder
   static func content(_ name: String) -> some View {
     switch name {
-    case "airflow":
-      AirflowField(time: 12.3)
+    case "orb":
+      AsciiArt(scene: .orb(radius: 0.3), fontSize: 8, time: 12.3)
+    case "scan":
+      AsciiArt(scene: .scan(radius: 0.44), fontSize: 7, time: 12.3)
     case "icon":
       AppIcon()
-    case "logo":
+    case "parts":
       VStack(alignment: .leading, spacing: 24) {
-        AsciiLogo(fontSize: 10, animated: false)
         HStack(spacing: 16) {
-          AsciiBar(value: 0.63)
-          RepStrip(outcomes: ["broken", "ok", "ok", "error", "broken"], pending: 2, selected: 1)
+          LogoMark(size: 40)
+          RepDots(outcomes: ["broken", "ok", "ok", "error", "broken"], pending: 2, selected: 1)
           OutcomeBadge(outcome: "fail", large: true)
           OutcomeBadge(outcome: "pass")
           OutcomeBadge(outcome: "flaky")
         }
-        Panel("Rules broken") {
+        SplitBar(parts: [(9, Theme.pass), (7, Theme.fail), (1, Theme.flaky)]).frame(width: 300)
+        Panel("Rules broken", accessory: { Text("3") }) {
           Text("one-order-per-cart").font(Theme.mono(12)).foregroundStyle(Theme.text)
         }
         .frame(width: 400)
@@ -53,17 +55,20 @@ enum Snapshot {
   }
 }
 
-/// The app icon: the airflow in a dark tile. Rendered to AppIcon.icns by build.sh.
+/// The app icon: the orb in its stream of air, drawn in characters on a dark glass tile.
+/// Rendered to AppIcon.icns by build.sh.
 struct AppIcon: View {
   var body: some View {
     ZStack {
       RoundedRectangle(cornerRadius: 185, style: .continuous)
-        .fill(LinearGradient(colors: [Color(hex: 0x15161B), Color(hex: 0x070709)], startPoint: .top, endPoint: .bottom))
-      AirflowField(fontSize: 30, color: Theme.accent, center: CGPoint(x: 0.36, y: 0.5), radius: 0.17, lines: 9, time: 7.4)
-        .padding(70)
+        .fill(LinearGradient(colors: [Color(hex: 0x1A1B24), Color(hex: 0x08090D)], startPoint: .top, endPoint: .bottom))
+      RadialGradient(colors: [Theme.lavender.opacity(0.18), .clear], center: UnitPoint(x: 0.3, y: 0.2), startRadius: 0, endRadius: 520)
+        .clipShape(RoundedRectangle(cornerRadius: 185, style: .continuous))
+      AsciiArt(scene: .orb(center: UnitPoint(x: 0.5, y: 0.5), radius: 0.31), fontSize: 17, lineHeight: 1.0, time: 7.4)
+        .padding(40)
         .mask(RoundedRectangle(cornerRadius: 160, style: .continuous).padding(40))
       RoundedRectangle(cornerRadius: 185, style: .continuous)
-        .strokeBorder(LinearGradient(colors: [.white.opacity(0.22), .white.opacity(0.04)], startPoint: .top, endPoint: .bottom), lineWidth: 6)
+        .strokeBorder(LinearGradient(colors: [.white.opacity(0.24), .white.opacity(0.04)], startPoint: .top, endPoint: .bottom), lineWidth: 5)
     }
     .padding(100)
     .frame(width: 1024, height: 1024)

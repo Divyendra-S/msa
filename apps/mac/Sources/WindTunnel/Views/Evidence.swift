@@ -10,29 +10,27 @@ struct TraceTab: View {
   var body: some View {
     if let trace = rep?.trace {
       VStack(alignment: .leading, spacing: 16) {
-        Text("Tables the broken rules read come first. Each statement shows its connection (c1, c2…) and whether it ran in a transaction.")
-          .font(Theme.sans(12)).foregroundStyle(Theme.faint)
         ForEach(trace.tables, id: \.table) { table in
-          let focus = trace.focus.contains(table.table)
-          Panel(table.table, tint: focus ? Theme.fail.opacity(0.45) : Theme.lineStrong, titleColor: focus ? Theme.fail : Theme.dim, accessory: {
-            Text(table.change ?? "").font(Theme.mono(10, .semibold)).foregroundStyle(focus ? Theme.fail : Theme.faint)
+          let focus = rep?.rules.contains { !$0.ok } == true && trace.focus.contains(table.table)
+          Panel(table.table, tint: focus ? Theme.fail : nil, mono: true, accessory: {
+            Text(table.change ?? "").foregroundStyle(focus ? Theme.fail : Theme.faint)
           }) {
             VStack(alignment: .leading, spacing: 10) {
               ForEach(Array(table.events.enumerated()), id: \.offset) { i, e in
                 ChainEventRow(event: e, last: i == table.events.count - 1)
               }
               if let more = table.more, more > 0 {
-                Text("… \(more) more").font(Theme.mono(10.5)).foregroundStyle(Theme.faint)
+                Text("\(more) more").font(Theme.sans(11.5)).foregroundStyle(Theme.faint)
               }
             }
           }
         }
         if let more = trace.more, !more.isEmpty {
-          Text("Also changed: " + more.joined(separator: ", ")).font(Theme.mono(10.5)).foregroundStyle(Theme.faint)
+          Text("Also changed: " + more.joined(separator: ", ")).font(Theme.sans(12)).foregroundStyle(Theme.faint)
         }
       }
     } else {
-      EmptyBlock(text: rep == nil ? "Loading…" : "No SQL log for this run: the trace chain needs the database's statement log.")
+      EmptyBlock(text: rep == nil ? "Loading…" : "No SQL log for this run.")
     }
   }
 }
@@ -53,9 +51,10 @@ private struct ChainEventRow: View {
         if event.kind == "sql", let sql = event.sql {
           HStack(spacing: 6) {
             if let conn = event.conn {
-              Text("c\(conn)").font(Theme.mono(9.5, .bold)).foregroundStyle(Theme.bg)
-                .padding(.horizontal, 5).padding(.vertical, 1)
-                .background(RoundedRectangle(cornerRadius: 3).fill(Theme.actor(conn - 1)))
+              Text("c\(conn)").font(Theme.mono(9.5, .bold)).foregroundStyle(Theme.ink)
+                .padding(.horizontal, 6).padding(.vertical, 1)
+                .background(Capsule().fill(Theme.actor(conn - 1)))
+                .help("Connection \(conn)")
             }
             if event.tx == true { Text("tx").font(Theme.mono(9.5)).foregroundStyle(Theme.faint) }
             Text(event.result ?? "").font(Theme.mono(10)).foregroundStyle(event.error != nil ? Theme.fail : Theme.pass.opacity(0.8))
@@ -102,7 +101,7 @@ struct DatabaseTab: View {
       VStack(alignment: .leading, spacing: 16) {
         ForEach(diff.tables.keys.sorted(), id: \.self) { name in
           let t = diff.tables[name]!
-          Panel(name, accessory: {
+          Panel(name, mono: true, accessory: {
             HStack(spacing: 6) {
               if !t.added.isEmpty { Text("+\(t.added.count)").foregroundStyle(Theme.pass) }
               if !t.removed.isEmpty { Text("−\(t.removed.count)").foregroundStyle(Theme.fail) }
@@ -138,7 +137,7 @@ struct DatabaseTab: View {
         }
       }
     } else {
-      EmptyBlock(text: rep == nil ? "Loading…" : "The database didn't change in this run.")
+      EmptyBlock(text: rep == nil ? "Loading…" : "The database didn't change.")
     }
   }
 
@@ -166,9 +165,9 @@ struct NetworkTab: View {
   var body: some View {
     if let rep {
       let requests = rep.requests.filter { all || $0.notable }
-      Panel("requests", accessory: {
+      Panel("Requests", accessory: {
         Toggle(isOn: $all.animation(Theme.spring)) {
-          Text("page loads too").font(Theme.mono(10)).foregroundStyle(Theme.faint)
+          Text("Page loads").font(Theme.sans(11.5)).foregroundStyle(Theme.faint)
         }
         .toggleStyle(.checkbox)
         .controlSize(.mini)
@@ -212,19 +211,18 @@ struct LogTab: View {
     if let rep {
       VStack(alignment: .leading, spacing: 16) {
         if let console = rep.console, !console.isEmpty {
-          TerminalPanel(title: "browser console", lines: console.map { Short.value($0, max: 400) }, tint: Theme.flaky)
+          TerminalPanel(title: "Browser console", lines: console.map { Short.value($0, max: 400) }, tint: Theme.flaky)
         }
         if let errors = rep.errors, !errors.isEmpty {
-          TerminalPanel(title: "errors", lines: errors.map { Short.value($0, max: 400) }, tint: Theme.fail)
+          TerminalPanel(title: "Errors", lines: errors.map { Short.value($0, max: 400) }, tint: Theme.fail)
         }
-        TerminalPanel(title: "app log · last \(rep.log.count) lines", lines: rep.log)
+        TerminalPanel(title: "App log", lines: rep.log)
         if let traces = rep.traces, !traces.isEmpty {
-          Panel("playwright traces") {
+          Panel("Playwright traces", accessory: { Text("npx playwright show-trace <file>").font(Theme.mono(10.5)) }) {
             VStack(alignment: .leading, spacing: 4) {
               ForEach(traces, id: \.self) { t in
                 Text(Fmt.tilde(t)).font(Theme.mono(10.5)).foregroundStyle(Theme.accent).textSelection(.enabled)
               }
-              Text("Open one with: npx playwright show-trace <file>").font(Theme.mono(10)).foregroundStyle(Theme.faint)
             }
           }
         }
@@ -239,11 +237,11 @@ struct LogTab: View {
 struct TerminalPanel: View {
   let title: String
   let lines: [String]
-  var tint: Color = Theme.lineStrong
+  var tint: Color? = nil
   var follow = false
 
   var body: some View {
-    Panel(title, tint: tint == Theme.lineStrong ? tint : tint.opacity(0.45), titleColor: tint == Theme.lineStrong ? Theme.dim : tint, padding: 0) {
+    Panel(title, tint: tint, accessory: { Text(Fmt.plural(lines.count, "line")) }) {
       ScrollViewReader { proxy in
         ScrollView {
           LazyVStack(alignment: .leading, spacing: 1) {
@@ -259,6 +257,7 @@ struct TerminalPanel: View {
           .padding(12)
         }
         .frame(maxHeight: 380)
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.well))
         .onChange(of: lines.count) {
           if follow { withAnimation { proxy.scrollTo(lines.count - 1, anchor: .bottom) } }
         }
@@ -283,12 +282,10 @@ struct EmptyBlock: View {
   let text: String
 
   var body: some View {
-    HStack(spacing: 10) {
-      Text("·").foregroundStyle(Theme.faint)
-      Text(text).foregroundStyle(Theme.dim)
-    }
-    .font(Theme.mono(11.5))
-    .padding(.vertical, 20)
+    Text(text)
+      .font(Theme.sans(12.5))
+      .foregroundStyle(Theme.faint)
+      .padding(.vertical, 20)
   }
 }
 

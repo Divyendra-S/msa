@@ -33,12 +33,12 @@ the app is in the background.
 
 No Meta key is needed. Two ways, both with the same hunt skill:
 
-- **Hunt in Claude Code** (your own login): opens your Claude Code in a new terminal in the
-  app's folder with `/windtunnel:hunt <area>` typed, not sent. It runs on your plan when you
-  press Enter. The app follows along: each experiment the agent runs appears under
-  *Following this project* and in Runs as it starts and finishes. This needs the plugin in Claude
-  Code (`windtunnel install --hosts claude`).
-- **Claude 5 headless** (an Anthropic API key): add a key in the Hunt page or Settings; it is kept
+- **Claude Code** (your own login): *Open in Claude Code* opens your Claude Code in a new
+  terminal in the app's folder with `/windtunnel:hunt <area>` typed, not sent. It runs on your
+  plan when you press Enter. The app follows along: each experiment the agent runs appears
+  under *Activity* and in Runs as it starts and finishes. This needs the plugin in Claude Code
+  (`windtunnel install --hosts claude`).
+- **Claude API** (an Anthropic API key): add a key in the Hunt page or Settings; it is kept
   in the keychain and given only to the bridge's environment. The hunt then runs in the app,
   streaming each step: `claude -p --bare` with your choice of Opus 5.5, Sonnet 5.5 or
   Haiku 5.5 and a spending cap. `--bare` means Claude Code reads only that key, never your
@@ -53,21 +53,28 @@ Sources/WindTunnel/
   App/        the app, its state (AppModel: bridge, event stream, actions), snapshot mode
   Bridge/     Toolchain (login-shell PATH, Node, the CLI), Bridge (child process, API, events), Keychain
   Model/      the API's shapes, formatting
-  Design/     Theme (colours, type, terminal-style panels, buttons), Ascii (spinner, bars,
-              scramble text, the logo), Airflow (the animated flow field)
+  Design/     Theme (the glass backdrop, cards, capsule buttons, segmented control, meters),
+              Ascii (spinner, scramble text, live dot, the mark), AsciiArt (characters drawn
+              like a shader: the orb in its stream of air, the radar)
   Views/      Shell (window, header, sidebar, status line, welcome), Overview, Runs, RunDetail,
               Timeline, Evidence (trace, database, network, log), Experiments, Hunt, Usage
 ```
 
-The look is a dark instrument panel: monospaced type, hairline boxes with their titles set into
-the border, one cold accent for air and live things. The airflow is drawn in characters: smoke
-streaks along the streamlines of flow round a cylinder, a vortex street behind it, puffs moving
-faster where the air speeds up.
+The look is dark glass: the window shows the desktop through it, blurred and tinted ink, with a
+faint wash of lavender and aqua; content sits on it in translucent cards with lit hairline edges.
+SF Pro for the interface, SF Mono only for data (rules, SQL, logs). On macOS 26 the sidebar and
+the floating controls are Liquid Glass.
+
+The ASCII is drawn like a shader: every cell of a monospaced grid samples a scene for a glyph
+and a brightness, a gradient colours the field, and the brightest cells are lit white. The orb is
+a sphere shaded with ordered dithering, turning slowly, with smoke lines of potential flow bending
+round it and rolling up into a vortex street behind; the hunt page has a radar whose afterglow is
+dithered dots. It steps at about 20 frames a second and holds still with Reduce Motion.
 
 For working on the views:
 
 ```sh
-.build/debug/WindTunnel --snapshot airflow /tmp/airflow.png 1100 420   # render a view to PNG
+.build/debug/WindTunnel --snapshot orb /tmp/orb.png 1000 640   # render a view to PNG (orb, scan, parts, icon)
 open "build/Wind Tunnel.app" --args --project <app folder> --pane runs --run <run id> --tab timeline
 open "build/Wind Tunnel.app" --args --welcome
 ```

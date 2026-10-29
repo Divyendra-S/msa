@@ -7,8 +7,8 @@ struct TimelineTab: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 18) {
       if let rep {
-        Panel("race · repetition \(rep.rep)", accessory: {
-          Text("\(Fmt.ms(rep.durationMs)) · \(rep.variant)").font(Theme.mono(10)).foregroundStyle(Theme.faint)
+        Panel("Race", accessory: {
+          Text("Repetition \(rep.rep) · \(Fmt.ms(rep.durationMs)) · \(rep.variant)")
         }) {
           RaceView(rep: rep, divergent: divergentIDs)
         }
@@ -16,9 +16,7 @@ struct TimelineTab: View {
         LoadingBlock2()
       }
       if let comparison {
-        Panel("side by side", accessory: {
-          Text("steps lined up · first divergence marked").font(Theme.mono(10)).foregroundStyle(Theme.faint)
-        }) {
+        Panel("Side by side") {
           AlignedView(comparison: comparison)
         }
       }
@@ -40,7 +38,7 @@ private struct LoadingBlock2: View {
   var body: some View {
     HStack(spacing: 8) {
       BrailleSpinner()
-      Text("lining up the steps").font(Theme.mono(11)).foregroundStyle(Theme.dim)
+      Text("Lining up the steps").font(Theme.sans(12)).foregroundStyle(Theme.dim)
     }
   }
 }
@@ -135,7 +133,7 @@ struct RaceView: View {
   private func laneLabel(_ name: String, color: Color) -> some View {
     HStack(spacing: 7) {
       Circle().fill(color).frame(width: 7, height: 7)
-      Text(name).font(Theme.mono(11.5, .medium)).foregroundStyle(Theme.text).lineLimit(1)
+      Text(name).font(Theme.sans(12, .medium)).foregroundStyle(Theme.text).lineLimit(1)
     }
     .frame(height: 56, alignment: .center)
   }
@@ -166,10 +164,10 @@ struct RaceView: View {
     let w = max(3, x(step.end - step.start, width))
     let isHover = hover == .step(step)
     let harness = !(step.harness ?? []).isEmpty
-    return RoundedRectangle(cornerRadius: 4, style: .continuous)
+    return RoundedRectangle(cornerRadius: 6, style: .continuous)
       .fill(color.opacity(isHover ? 0.34 : (step.error != nil ? 0.1 : 0.18)))
       .overlay(
-        RoundedRectangle(cornerRadius: 4, style: .continuous)
+        RoundedRectangle(cornerRadius: 6, style: .continuous)
           .strokeBorder(step.error != nil ? Theme.fail : color.opacity(isHover ? 0.9 : 0.55), style: StrokeStyle(lineWidth: 1, dash: harness ? [3, 2] : []))
       )
       .overlay(alignment: .leading) {
@@ -213,15 +211,13 @@ struct RaceView: View {
       Color.clear.frame(width: 96)
       GeometryReader { geo in
         ZStack(alignment: .topLeading) {
-          Text(String(repeating: "─", count: max(0, Int(geo.size.width / 6.62))))
-            .font(Theme.mono(11)).foregroundStyle(Theme.ghost).lineLimit(1).fixedSize()
-            .frame(width: geo.size.width, alignment: .leading).clipped()
+          Rectangle().fill(Theme.lineStrong).frame(width: geo.size.width, height: 1)
           ForEach(Array(stride(from: 0.0, through: span, by: step).enumerated()), id: \.offset) { _, t in
-            VStack(alignment: .leading, spacing: 1) {
-              Text("┼").font(Theme.mono(11)).foregroundStyle(Theme.faint)
-              Text(Fmt.ms(t)).font(Theme.mono(9)).foregroundStyle(Theme.faint).fixedSize()
+            VStack(alignment: .leading, spacing: 4) {
+              Rectangle().fill(Theme.faint).frame(width: 1, height: 5)
+              Text(Fmt.ms(t)).font(Theme.sans(10)).monospacedDigit().foregroundStyle(Theme.faint).fixedSize()
             }
-            .offset(x: CGFloat(t / span) * geo.size.width - 3)
+            .offset(x: CGFloat(t / span) * geo.size.width)
           }
         }
       }
@@ -268,8 +264,9 @@ struct RaceView: View {
         Text("at \(Fmt.ms(at)) → \(status.map(String.init) ?? "no answer")").font(Theme.mono(10.5)).foregroundStyle(Theme.dim)
       }
     case nil:
-      Text("Hover a step or a request. Dashed bars are steps the harness repeated or perturbed; ◆ marks webhook deliveries.")
-        .font(Theme.mono(10.5)).foregroundStyle(Theme.faint)
+      Text("Hover a step or a request.")
+        .font(Theme.sans(12)).foregroundStyle(Theme.faint)
+        .help("Dashed bars are steps the harness repeated or perturbed; ◆ marks webhook deliveries.")
     }
   }
 }
@@ -322,8 +319,8 @@ struct AlignedView: View {
         }
         .padding(.vertical, 9)
         .padding(.horizontal, 8)
-        .background(RoundedRectangle(cornerRadius: 6).fill(isFirst ? Theme.fail.opacity(0.07) : (index % 2 == 0 ? Theme.surface.opacity(0.5) : .clear)))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(isFirst ? Theme.fail.opacity(0.4) : .clear))
+        .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(isFirst ? Theme.fail.opacity(0.08) : (index % 2 == 0 ? Color.white.opacity(0.025) : .clear)))
+        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(isFirst ? Theme.fail.opacity(0.35) : .clear))
         .rise(Double(min(index, 12)) * 0.025)
       }
     }

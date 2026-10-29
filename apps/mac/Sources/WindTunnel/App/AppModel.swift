@@ -94,7 +94,6 @@ final class AppModel {
   func start() {
     let args = CommandLine.arguments
     if let i = args.firstIndex(of: "--pane"), args.count > i + 1, let pane = Pane(rawValue: args[i + 1]) { section = pane }
-    if let i = args.firstIndex(of: "--run"), args.count > i + 1 { selectedRun = args[i + 1] }
     if args.contains("--welcome") { return }
     // A project named on the command line opens at once; otherwise the start page, with the recent ones.
     if let i = args.firstIndex(of: "--project"), args.count > i + 1 {
@@ -102,6 +101,8 @@ final class AppModel {
     } else if let env = ProcessInfo.processInfo.environment["WINDTUNNEL_PROJECT"] {
       open(project: env)
     }
+    // After opening, which clears the selection.
+    if let i = args.firstIndex(of: "--run"), args.count > i + 1 { selectedRun = args[i + 1] }
   }
 
   /// Back to the start page: the bridge stops (if it's ours).
