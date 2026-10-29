@@ -1,0 +1,159 @@
+# Activity log
+
+A handoff for whoever picks up this repo next, human or coding agent. Newest first. Read
+[`README.md`](README.md) for what the project is, [`plan.md`](plan.md) for the product plan and
+[`execution-plan.md`](execution-plan.md) for the phases and what's still open. This file says what
+happened recently, why, and what to know before changing things.
+
+## Where things stand (2026-10-29)
+
+- `main` is at `7fde8f2`, pushed. Phases 1–7 are done; Phase 8 (submission) is partly done.
+- The latest work was on the **Mac app** (`apps/mac`, SwiftUI) and two small CLI additions it
+  uses. Everything below is committed. Nothing is in progress.
+- Waiting on the project owner, not on code: the Muse Code install and `pnpm bench check --paid`,
+  the npm publish of `windtunnel-cli`, the demo video.
+- Open after that: verify a headless Claude hunt with a real API key; an "Explain with Claude"
+  panel; a test-database leak to fix; stretch items S1, S3, S5–S7 in `execution-plan.md`.
+
+## Recent work, newest first
+
+### `7fde8f2` Mac app: first run that reads your code, light mode, an overview with a chart
+
+**First run (onboarding), two screens** (`Views/SetupView.swift`, state in `App/Setup.swift`):
+
+1. *Pick the app*: "Which app should we try to break?", Choose Folder…, drop a folder anywhere on
+   the window, recent apps. The Mac is checked in the background and shows as one line at the
+   bottom ("2 things to set up on this Mac · Review"); Review opens a sheet with every check and
+   **Set Up**, which runs `windtunnel install --yes` and streams its output.
+2. *Read the app*: the folder's code as `windtunnel scan` reads it, before anything is set up: the
+   handlers that could leave data wrong when requests overlap, each pattern in a plain sentence
+   (names from the code in mono), guards it saw, and the rest listed as "Also read". On the right:
+   **Open** if it has `windtunnel.config.yaml`; otherwise the coding agents with
+   `/windtunnel:init` (Claude Code opens with it typed, not sent; Codex and Muse Code open in
+   Terminal with it on the clipboard), and the folder is polled every 1.5 s until the config
+   appears, which enables **Open**.
+
+- First launch (no recents, `setupDone` unset) starts there. Opening a folder with no config from
+  anywhere (Open Folder, recents) lands on screen 2 instead of an error. A missing Node or CLI
+  opens screen 1 with the Mac sheet open.
+- Launch at a screen: `open "apps/mac/build/Wind Tunnel.app" --args --setup app|read|mac [--folder <dir>]`.
+
+**CLI** (`packages/cli`):
+
+- `windtunnel scan [--json] [--cwd <dir>]` (`src/scan.ts`): the static half of the app map for
+  any Next.js folder, with no config, build, database or model; finds the Next.js app up to two
+  levels below the folder. Each flag from the explorer's `routeFlags` gets a plain sentence via
+  `plain()`; an unknown flag passes through as is. Tests: `test/scan.test.ts`.
+- `windtunnel install --dry-run --json` prints `{ checks, agents, steps, notes, blocked }`;
+  install now detects agents that already have the plugin (Claude Code: `claude plugin list
+  --json`; Codex: `codex plugin marketplace list`, which is local; Muse Code: its settings file
+  and skills folder) and leaves them alone. Tests: `test/install.test.ts`.
+
+**Overview** (`Views/OverviewView.swift`): a chart of how many experiments held and failed after
+each run (replays the run list); **Failing** first, each with its broken rule, what the
+experiment does (its description), its recent runs as a strip and "new" / "N in a row";
+**Holding** as a two-column list; **Rules broken**. A project with no experiments shows "Start a
+Hunt"; one with experiments but no runs shows **Run All**.
+
+**Light mode**: every `Theme` colour is `Color.adaptive(dark:light:)` (an `NSColor` with a
+dynamic provider); `Theme.overlay(_:)` replaces hard-coded `Color.white.opacity(…)`. Settings →
+Appearance (System / Light / Dark) sets `NSApp.appearance`, so sheets, Settings and the menu bar
+follow. `--appearance light|dark|system` on launch is saved as the setting.
+
+**Removed**: all ASCII art scenes (the wind tunnel, a shape-aware ASCII renderer with a lit double
+helix, and an illustrated animated explainer). The only ornament left is `Design/Glow.swift`: a
+`MeshGradient` in the hue drifting very slowly in one corner under a film-grain tile, on the
+start, first-run and "opening" screens only.
+
+### `e8e90da` Mac app: a fuller overview and runs that show where to look
+
+- Runs list: each batch shows failures first with the rule they broke; held runs fold away.
+- A run opens on the answer: the rule that broke in words with its rows, where the run first went
+  another way than one that held, and "Look next" links to the right tab.
+
+### `79ec807`, `38e8cf7`, `d20fe8c`: the Mac app's first versions
+
+The native client over the local bridge (`windtunnel view --json`), then two rounds of visual
+redesign that the owner rejected in parts (see the next section).
+
+## The owner's taste for the Mac app (read before changing its look)
+
+This was learned over several rejected rounds; following it saves a lot of rework.
+
+- **Rejected**: too many cards ("ai slop"), too much colour, many rounded borders, an ASCII orb,
+  the ASCII wind tunnel, an ASCII double helix ("dna type thing"), ASCII-heavy onboarding
+  ("monotonous"), animated mock-UI explainers ("known for ai slop"), crowded or text-heavy screens,
+  an Overview that felt empty, a Runs list where it wasn't clear where to look.
+- **Wanted**: premium and quiet, like a well-made native tool. Flat sections split by hairlines;
+  one hue (a cool blue) with red and amber only for failed and flaky; passing runs stay grey;
+  small corners; short labels with details in tooltips; SF Pro for the interface, SF Mono only
+  for data. Every screen should make it obvious what to look at first.
+- **Show real content** (the user's code, runs, rules, data) instead of illustrations, fake UI,
+  typed-out terminals or decorative animation. Avoid stock onboarding patterns (step trails,
+  "Get Started" heroes, checklists in cards).
+- **Ornament**: only subtle, high-quality gradients (mesh gradient plus grain); ASCII rarely and
+  only if genuinely good.
+- **The product name may change**, so don't build visuals around "wind tunnel".
+- Check every changed screen in a screenshot, in dark and light, before calling it done.
+
+## Working on the Mac app
+
+```sh
+cd apps/mac
+swift build                                  # quick compile check (debug)
+./build.sh                                   # release .app → build/Wind Tunnel.app (repo root: pnpm mac:build)
+open "build/Wind Tunnel.app" --args --project ../../zoo/shop --pane overview|runs|experiments|hunt|usage \
+  [--run <run id>] [--tab summary|timeline|trace|database|network|log] [--appearance light]
+open "build/Wind Tunnel.app" --args --welcome            # the start screen
+open "build/Wind Tunnel.app" --args --setup read --folder <app folder>
+[LIGHT=1] [T=40] .build/debug/WindTunnel --snapshot glow|parts|icon out.png 1200 760   # render a view to PNG
+```
+
+- Screenshots without Accessibility: find the window id with `CGWindowListCopyWindowInfo` (owner
+  "Wind Tunnel", layer 0), then `screencapture -x -o -l <id> out.png`. `ImageRenderer` snapshots
+  can't draw native controls or the window blur, so check Settings and sheets in the real app
+  (a System Events keystroke ⌘, opens Settings).
+- SourceKit's "cannot find X in scope" diagnostics on these files are noise; trust `swift build`.
+  The Swift type checker times out on big closures with nested ternaries: move them into
+  functions.
+- There's no Metal toolchain on the dev Mac (Xcode 26 needs `xcodebuild -downloadComponent
+  MetalToolchain`) and users won't have one, so no `.metal` shaders: use SwiftUI `MeshGradient`.
+- `--run <id>` is applied after `open(project:)`, which clears the selection.
+- Test launches change saved state: opened folders go into Recent (reset with `defaults write
+  dev.windtunnel.mac recentProjects -array <paths>`), and `--appearance` is saved (reset with
+  `defaults delete dev.windtunnel.mac appearance`).
+- Live data: `zoo/shop` has about 100 real runs. Trigger a run with `POST /api/experiments/run`
+  using the token in `zoo/shop/.windtunnel/cache/viewer.json` (Postgres in Docker, no model).
+
+## Working on the rest
+
+- Node 22.18+ (the default shell may have Node 20: use nvm's v24), pnpm 10, Docker. Postgres for
+  runs is the `windtunnel-pg` container on 127.0.0.1:55432 (`pnpm db:up`).
+- TypeScript runs directly on Node (type stripping): no build step in development, `.ts` import
+  extensions, erasable syntax only. `pnpm cli:build` bundles the npm package.
+- Checks: `pnpm typecheck`, `pnpm test`, and `node --test packages/cli/test/*.test.ts` for the CLI
+  alone. `pnpm zoo:verify`, `pnpm zoo:prove` and `pnpm zoo:heal` exercise the Bug Zoo.
+- Commits go straight to `main`, and only when the owner says so ("push"). End commit messages
+  with the co-author line the harness gives.
+
+## Rules that must hold (security and credentials)
+
+- Never read, store or forward Claude or ChatGPT credentials or tokens; never read
+  `~/.codex/auth.json`. Never call the Anthropic or OpenAI API with the user's login: the user's
+  own unmodified CLI does all model work.
+- Headless Claude runs use API keys only (`--bare`, only `ANTHROPIC_API_KEY`, an isolated
+  `CLAUDE_CONFIG_DIR`), never a subscription; our code must not run `claude -p` on the user's
+  subscription. The Anthropic key lives in the Keychain and only reaches the bridge's environment.
+- Never click "Hunt in Claude Code" / "Open in Claude Code" or start a claude-host hunt yourself,
+  and don't click **Set Up** in the Mac app's first run on the owner's machine: it changes their
+  real Claude Code and Codex plugin config. Test installs only against throwaway config dirs
+  (see `packages/cli/test/install.test.ts`).
+- Don't run `codex plugin list`: it contacts the remote catalog with the user's login. The local
+  `codex plugin marketplace list` is fine.
+- Don't use `claude plugin eval`. The benchmark refuses to start `claude` or `codex` itself.
+- Don't put "Claude Code" or "Anthropic" in the product name or logo.
+- Keep the Muse environment variables in their own shell (`scripts/muse-env.sh`); don't use Meta
+  "contributor" models with user code.
+- Keep this repo self-contained: don't pull in context from the owner's other projects.
+- The viewer token stays out of links given to models. Benchmark trials stay outside the repo
+  with no answer leaks; scoring spends no model credits.
