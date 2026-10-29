@@ -6,6 +6,5 @@
     "zoo/mock-pay/src",
     "zoo/mock-pay/test",
     "zoo/cases/*.ts"
-  ],
-  "exclude": ["packages/viewer"]
+  ]
 }

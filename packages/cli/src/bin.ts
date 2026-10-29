@@ -27,6 +27,8 @@ const { values, positionals } = parseArgs({
     crawl: { type: "boolean", default: false },
     users: { type: "string" },
     "no-triage": { type: "boolean", default: false },
+    port: { type: "string" },
+    "no-open": { type: "boolean", default: false },
     help: { type: "boolean", short: "h", default: false },
   },
 });

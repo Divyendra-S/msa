@@ -9,7 +9,7 @@ and database, traces what broke, and proves a fix by re-running the experiment.
 - Product plan: [`plan.md`](plan.md)
 - Build plan by phase: [`execution-plan.md`](execution-plan.md)
 
-**Status:** Phases 1–5 are done: isolated branches; the experiment engine (flows,
+**Status:** Phases 1–6 are done: isolated branches; the experiment engine (flows,
 perturbations, ordered races, webhook control, rules, database diff, repeat runs, run
 store); the agent connection (an MCP server, skills and a plugin for Claude Code, Codex
 and Muse Code, the static app map, evidence packets, Bug Zoo cases 1–7); fix proof (the
@@ -18,7 +18,9 @@ the SQL trace chain, and re-running only the experiments a change affects); and 
 efficiency layer (a live crawl with a free sweep for console errors, failed requests, broken
 links, accessibility and slow pages; failure sorting; selector repair written back to the
 flow; a Decider that answers small decisions with rules, then Muse Spark or Jev, then the
-agent; and a usage meter with per-job budgets).
+agent; and a usage meter with per-job budgets); and the local viewer (runs as they happen,
+aligned timelines, first divergence, trace chain, database changes, rules, usage, a Run hunt
+button for Muse Code and an Open in Claude Code link).
 
 ## Layout
 
@@ -32,7 +34,7 @@ packages/
               (rules → Muse Spark or Jev → agent), selector repair and failure sorting
   mcp/        MCP server (map, validate, run, evidence, branch, prove, decide) with the usage meter
   cli/        `windtunnel` CLI
-  viewer/     (later phase) web viewer
+  viewer/     local API (HTTP + event stream) and web viewer (Vite + React in app/), Run hunt
 plugins/
   windtunnel/ plugin for Claude Code and Codex: skills (init, hunt, prove, test), MCP server,
               helper subagent
@@ -46,6 +48,7 @@ docs/
   experiments.md   flow, experiment and rules reference
   agents.md        skills, MCP tools, app map, live crawl and sweep, evidence packets, trace chain,
                    affected runs, failure sorting and repair, the Decider, usage meter, proof
+  viewer.md        the viewer, Run hunt, Open in Claude Code, the local API
 ```
 
 ## Development setup
@@ -154,3 +157,16 @@ pnpm wt --cwd zoo/shop evidence <run>               # evidence packet; <run>/1/t
 pnpm wt --cwd zoo/shop prove checkout-two-buyers --base-patch zoo/cases/05-oversell/bug.patch
 pnpm wt --cwd zoo/shop prove checkout-two-buyers --branch windtunnel/fix-oversell   # bug in HEAD, fix in the working tree
 ```
+
+## Viewer
+
+```sh
+pnpm wt --cwd zoo/shop view
+```
+
+Opens a local page with every run as it happens. Runs started together are lined up side by
+side, step by step. The page marks where a failing run first differs from one that held every
+rule, and shows the trace chain from request to handler line to SQL, the database changes,
+rules and screenshots. **Run hunt** starts Muse Code without a terminal, billed to the Meta
+key in the viewer's shell, and streams its progress. **Open in Claude Code** opens a terminal
+with the prompt typed for you to send. See [`docs/viewer.md`](docs/viewer.md).

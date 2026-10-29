@@ -48,7 +48,8 @@ export {
   type SnapshotElement,
   snapshotPage,
 } from "./runner/snapshot.ts";
-export { type DecidedBy, estimateTokens, formatUsage, listUsage, totalsOf, type UsageEvent, UsageMeter, type UsageTotals } from "./usage.ts";
+export { type DecidedBy, estimateTokens, formatUsage, listUsage, totalsOf, USAGE_DIR, type UsageEvent, UsageMeter, type UsageTotals } from "./usage.ts";
+export { runningViewer, VIEWER_FILE, viewerLink, type ViewerState } from "./viewer-state.ts";
 export {
   type ExperimentResult,
   headline,
@@ -61,3 +62,23 @@ export {
   type VariantResult,
 } from "./runner/runner.ts";
 export { type RunIndexEntry, RunStore } from "./runner/store.ts";
+export {
+  type AlignedRow,
+  type ChainEventView,
+  type Comparison,
+  compareLanes,
+  type Divergence,
+  type LaneRef,
+  type LaneRequest,
+  type LaneStep,
+  type LaneView,
+  listRuns,
+  type RepView,
+  type RequestView,
+  type RunDetail,
+  runDetail,
+  type RunListEntry,
+  repView,
+  type TableTraceView,
+  type TriageNote,
+} from "./runner/view.ts";

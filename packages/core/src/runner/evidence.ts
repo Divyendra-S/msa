@@ -1,7 +1,8 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { git } from "../git.ts";
 import type { Rule, RuleResult } from "../rules.ts";
+import { viewerLink } from "../viewer-state.ts";
 import type { DbDiff, Row } from "./db-diff.ts";
 import type { Experiment } from "./experiment.ts";
 import type { RaceRecord, RequestRecord } from "./network.ts";
@@ -37,7 +38,8 @@ export interface EvidenceOptions {
   maxChars?: number;
 }
 
-interface RepDetail extends RepSummary {
+/** A run's result.json: its summary plus what happened in it. */
+export interface RepDetail extends RepSummary {
   startedAt?: string;
   rules: RuleResult[];
   errors: FlowError[];
@@ -50,7 +52,7 @@ interface RepDetail extends RepSummary {
   traces: string[];
 }
 
-interface LoadedRep {
+export interface LoadedRep {
   detail: RepDetail;
   requests: RequestRecord[];
   diff?: DbDiff;
@@ -177,9 +179,12 @@ export async function evidencePacket(store: RunStore, runId: string, options: Ev
   }
 
   const h = `${runId}/${focus.rep}`;
+  // A running viewer shows this run with its timelines lined up; the link is for the person.
+  const link = await viewerLink(dirname(store.dir), `/run/${runId}/${focus.rep}`);
   add(0, [
     `Drill down: windtunnel_evidence handle "${h}/<part>", part = steps · requests · sql · sql:<table> · trace · diff · diff:<table> · rule:<id> · page · log · console · webhooks (other runs: ${runId}/1…${run.reps.length})`,
     rep.detail.traces.length > 0 && `Playwright trace: ${rep.detail.traces.map((t) => `npx playwright show-trace ${t}`).join(" · ")}`,
+    link && `Viewer: ${link}`,
   ]);
 
   return fit(sections, options.maxChars ?? PACKET_CHARS);
@@ -278,11 +283,12 @@ export async function drillDown(store: RunStore, handle: string, options: Eviden
 }
 
 /** The run to show: the first that broke a rule, else the first error, else the first. */
-function pickRep(run: ExperimentResult): RepSummary {
+export function pickRep(run: ExperimentResult): RepSummary {
   return run.reps.find((r) => r.outcome === "broken") ?? run.reps.find((r) => r.outcome === "error") ?? run.reps[0]!;
 }
 
-async function loadRep(store: RunStore, runId: string, rep: number): Promise<LoadedRep> {
+/** One run's files, with its SQL linked to the requests that ran it. */
+export async function loadRep(store: RunStore, runId: string, rep: number): Promise<LoadedRep> {
   const dir = store.repDir(join(store.dir, runId), rep);
   const read = async <T>(name: string): Promise<T | undefined> =>
     JSON.parse(await readFile(join(dir, name), "utf8").catch(() => "null")) ?? undefined;
@@ -314,15 +320,15 @@ function resultLine(run: ExperimentResult): string {
     .join(", ");
 }
 
-/** Request noise: page loads and React Server Component fetches that went fine. */
-function interesting(r: RequestRecord): boolean {
+/** False for request noise: page loads and React Server Component fetches that went fine. */
+export function interesting(r: RequestRecord): boolean {
   if (r.harness?.length) return true;
   if (r.failure && !(r.failure === "net::ERR_ABORTED" && /[?&]_rsc=/.test(r.url))) return true;
   if ((r.status ?? 0) >= 400) return true;
   return r.method !== "GET" || (r.type !== "document" && !/[?&]_rsc=/.test(r.url));
 }
 
-function requestLine(
+export function requestLine(
   r: RequestRecord,
   options: EvidenceOptions,
   all = false,
@@ -372,14 +378,14 @@ function handlerLines(requests: RequestRecord[], options: EvidenceOptions): stri
 }
 
 /** Tables the run's rules read that the run changed or wrote to. */
-function ruleTables(rep: LoadedRep, options: EvidenceOptions): string[] {
+export function ruleTables(rep: LoadedRep, options: EvidenceOptions): string[] {
   const read = tablesOf(rep.detail.rules.map((r) => options.rules?.find((x) => x.id === r.id)?.sql ?? ""));
   const touched = new Set([...Object.keys(rep.diff?.tables ?? {}), ...(rep.sql ?? []).flatMap((s) => writeTarget(s.sql)?.table ?? [])]);
   return read.filter((t) => touched.has(t) || touched.has(`public.${t}`));
 }
 
 /** Handler lookup, each statement's line in the run's own code, and the payment calls between statements. */
-async function traceContext(run: ExperimentResult, rep: LoadedRep, options: EvidenceOptions): Promise<TraceContext> {
+export async function traceContext(run: ExperimentResult, rep: LoadedRep, options: EvidenceOptions): Promise<TraceContext> {
   const orderOf = new Map(rep.detail.charges.map((c) => [c.id, c.metadata.order_id]));
   const externals = (rep.detail.chargeCalls ?? []).map((c) => ({
     at: c.at,
@@ -416,7 +422,7 @@ async function sqlLocator(
 }
 
 /** Tables a rule's SQL reads, without the seed copies it may compare with. */
-function tablesOf(sql: string[]): string[] {
+export function tablesOf(sql: string[]): string[] {
   const tables = sql.flatMap((s) => [...s.matchAll(/\b(?:FROM|JOIN)\s+([\w."]+)/gi)].map((m) => m[1]!.replace(/"/g, "")));
   return [...new Set(tables.filter((t) => !t.startsWith("windtunnel_seed.")))];
 }
@@ -441,28 +447,33 @@ function diffLines(diff: DbDiff, first: string[], maxRows: number): string[] {
   return lines;
 }
 
-/** Where this run first differs from a run that held every rule: in this run, or the latest passing run of the experiment. */
-async function divergence(store: RunStore, run: ExperimentResult, focus: RepSummary, rep: LoadedRep): Promise<string[]> {
-  if (focus.outcome === "ok") return [];
-  let other: { runId: string; rep: RepSummary; label: string } | undefined;
-  const ok = run.reps.find((r) => r.outcome === "ok");
-  if (ok) other = { runId: run.runId, rep: ok, label: `run #${ok.rep}${ok.variant !== "default" ? ` [${ok.variant}]` : ""} of this experiment` };
-  else {
-    const passing = (await store.list(200)).find((e) => e.experiment === run.experiment && e.outcome === "pass" && e.id !== run.runId);
-    if (passing) {
-      const result = (await store.read(passing.id).catch(() => undefined)) as ExperimentResult | undefined;
-      const r = result?.reps.find((x) => x.variant === focus.variant) ?? result?.reps[0];
-      if (r) other = { runId: passing.id, rep: r, label: `passing run ${passing.id} on version ${passing.version}` };
-    }
-  }
-  if (!other) return [];
-  const theirs = await loadRep(store, other.runId, other.rep.rep);
+/** A run to compare a failing one with: a run of the same experiment that held every rule. */
+export interface Reference {
+  runId: string;
+  rep: RepSummary;
+  /** `run #2 of this experiment`, `passing run <id> on version <v>`. */
+  label: string;
+}
+
+/** A run of this experiment that held every rule (the same variant if one did): in this run, else in its latest passing run. */
+export async function referenceFor(store: RunStore, run: ExperimentResult, focus: RepSummary): Promise<Reference | undefined> {
+  const ok = run.reps.find((r) => r.outcome === "ok" && r.variant === focus.variant) ?? run.reps.find((r) => r.outcome === "ok");
+  if (ok) return { runId: run.runId, rep: ok, label: `run #${ok.rep}${ok.variant !== "default" ? ` [${ok.variant}]` : ""} of this experiment` };
+  const passing = (await store.list(200)).find((e) => e.experiment === run.experiment && e.outcome === "pass" && e.id !== run.runId);
+  if (!passing) return undefined;
+  const result = (await store.read(passing.id).catch(() => undefined)) as ExperimentResult | undefined;
+  const r = result?.reps.find((x) => x.variant === focus.variant) ?? result?.reps[0];
+  return r ? { runId: passing.id, rep: r, label: `passing run ${passing.id} on version ${passing.version}` } : undefined;
+}
+
+/** Where two runs' requests first differ: each tab's own requests compared in order, the earliest difference. */
+export function firstDifference(ours: LoadedRep, theirs: LoadedRep): { tab: string; at: number; ours?: RequestRecord; theirs?: RequestRecord } | undefined {
   const key = (r: RequestRecord) => `${r.step ?? ""} ${r.method} ${r.url.split("?")[0]} ${r.failure ? "✗" : (r.status ?? "?")}${r.harness?.length ? " [harness]" : ""}`;
   // Tabs run at the same time, so compare each tab's own requests; report the earliest difference.
   let first: { at: number; ours?: RequestRecord; theirs?: RequestRecord; tab: string } | undefined;
-  const tabs = new Set([...rep.requests, ...theirs.requests].map((r) => r.tab));
+  const tabs = new Set([...ours.requests, ...theirs.requests].map((r) => r.tab));
   for (const tab of tabs) {
-    const a = rep.requests.filter((r) => r.tab === tab && interesting(r));
+    const a = ours.requests.filter((r) => r.tab === tab && interesting(r));
     const b = theirs.requests.filter((r) => r.tab === tab && interesting(r));
     let i = 0;
     while (i < a.length && i < b.length && key(a[i]!) === key(b[i]!)) i++;
@@ -470,6 +481,16 @@ async function divergence(store: RunStore, run: ExperimentResult, focus: RepSumm
     const at = a[i]?.start ?? b[i]?.start ?? Number.POSITIVE_INFINITY;
     if (!first || at < first.at) first = { at, ours: a[i], theirs: b[i], tab };
   }
+  return first;
+}
+
+/** Where this run first differs from a run that held every rule: in this run, or the latest passing run of the experiment. */
+async function divergence(store: RunStore, run: ExperimentResult, focus: RepSummary, rep: LoadedRep): Promise<string[]> {
+  if (focus.outcome === "ok") return [];
+  const other = await referenceFor(store, run, focus);
+  if (!other) return [];
+  const theirs = await loadRep(store, other.runId, other.rep.rep);
+  const first = firstDifference(rep, theirs);
   const lines = [`Compared with ${other.label}:`];
   const changed = await experimentChanged(store, run.runId, other.runId);
   if (changed) lines.push("  (that run used a different version of the experiment file)");
@@ -481,7 +502,7 @@ async function divergence(store: RunStore, run: ExperimentResult, focus: RepSumm
   return lines;
 }
 
-async function experimentChanged(store: RunStore, a: string, b: string): Promise<boolean> {
+export async function experimentChanged(store: RunStore, a: string, b: string): Promise<boolean> {
   const read = (id: string) => readFile(join(store.dir, id, "experiment.json"), "utf8").catch(() => "");
   const [x, y] = await Promise.all([read(a), read(b)]);
   return x !== "" && y !== "" && x !== y;

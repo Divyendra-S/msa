@@ -140,8 +140,8 @@ with `sweep` lists them all.
   them, with its parameters and result, the request that ran it and that request's handler
   (see below);
 - database changes, rows first for the tables the broken rules read;
-- the **first difference from a passing run**, compared tab by tab: another ordering in the
-  same run, else the latest passing run of the same experiment (for example on the fixed
+- the **first difference from a passing run**, compared tab by tab: another repetition in the
+  same run (the same ordering first), else the latest passing run of the same experiment (for example on the fixed
   code), with its database changes and a note when that run used another version of the
   experiment file;
 - what the page showed when a flow failed (path, `role="alert"` texts, the start of the
@@ -150,7 +150,8 @@ with `sweep` lists them all.
   them all with ready-made locators);
 - how the failure was sorted (bug, flaky, outdated test, environment) and by whom;
 - error lines from the app log and the browser console;
-- handles to drill down, and the Playwright trace command.
+- handles to drill down, and the Playwright trace command;
+- while `windtunnel view` runs, a link to the run in the viewer (see [viewer.md](viewer.md)).
 
 ## Trace chain
 

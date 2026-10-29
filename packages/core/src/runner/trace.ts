@@ -150,23 +150,33 @@ export interface TraceContext {
   externals?: { at: number; text: string }[];
 }
 
+/** One table's part of the trace chain: the statements that wrote it, the writers' reads, and outside calls between them. */
+export interface TableChain {
+  table: string;
+  /** `+2 ~1`, `no rows changed`. */
+  change: string;
+  /** In time order; empty when no statement wrote to the table. */
+  events: ({ at: number } & ({ statement: TracedStatement } | { external: string }))[];
+  /** Statements left out over the limit. */
+  more: number;
+}
+
 /**
  * The trace chain per table: which request's statement wrote to it, through which handler.
  * `tables` come first (e.g. those a broken rule reads), then every table the diff changed
  * unless `only` is set.
  */
-export function traceLines(
+export function traceChain(
   statements: TracedStatement[],
   diff: DbDiff | undefined,
   tables: string[],
   ctx: TraceContext,
   limits: { perTable: number; tables: number; only?: boolean },
-): string[] {
+): { tables: TableChain[]; more: string[] } {
   const changed = limits.only ? [] : Object.keys(diff?.tables ?? {});
   const all = [...new Set([...tables, ...changed])];
   const names = all.slice(0, limits.tables);
-  const lines: string[] = [];
-  for (const table of names) {
+  const chains = names.map((table): TableChain => {
     const writes = statements.filter((s) => {
       const target = writeTarget(s.sql);
       return target ? sameTable(target.table, table) : !!s.error && mentions(s.sql, table);
@@ -180,26 +190,74 @@ export function traceLines(
     const keepReads = Math.max(0, limits.perTable - writes.length);
     const kept = new Set([...writes, ...reads.slice(0, keepReads)]);
     const shown = statements.filter((s) => kept.has(s)).slice(0, limits.perTable);
-    const more = writes.length + reads.length - shown.length;
     const d = diff?.tables[table];
     const change = d ? (d.countOnly ? `${d.countOnly.before}→${d.countOnly.after} rows` : [d.added.length && `+${d.added.length}`, d.changed.length && `~${d.changed.length}`, d.removed.length && `-${d.removed.length}`].filter(Boolean).join(" ")) : "no rows changed";
-    if (writes.length === 0) {
-      lines.push(`  ${table} (${change}): no statement wrote to it`);
-      continue;
-    }
-    lines.push(`  ${table} (${change}):`);
+    if (writes.length === 0) return { table, change, events: [], more: 0 };
     // Calls to other services made in the middle of a request shown here: "read, then the payment, then the write".
     const same = (x: Source, y: Source) => (x.request !== undefined ? x.request === y.request : x.label === y.label);
     const during = (at: number) => shown.some((a) => a.at < at && a.sources.some((src) => shown.some((b) => b.at > at && b.sources.some((x) => same(x, src)))));
     const events = [
-      ...shown.map((s) => ({ at: s.at, text: statementLine(s, ctx) })),
-      ...(ctx.externals ?? []).filter((e) => during(e.at)).map((e) => ({ at: e.at, text: `${e.at} ${e.text}` })),
+      ...shown.map((s) => ({ at: s.at, statement: s })),
+      ...(ctx.externals ?? []).filter((e) => during(e.at)).map((e) => ({ at: e.at, external: e.text })),
     ].sort((a, b) => a.at - b.at);
-    for (const e of events) lines.push(`    ${e.text}`);
-    if (more > 0) lines.push(`    … ${more} more (drill down: sql:${table})`);
+    return { table, change, events, more: writes.length + reads.length - shown.length };
+  });
+  return { tables: chains, more: all.slice(names.length) };
+}
+
+/** The trace chain as text, one table after another. */
+export function traceLines(
+  statements: TracedStatement[],
+  diff: DbDiff | undefined,
+  tables: string[],
+  ctx: TraceContext,
+  limits: { perTable: number; tables: number; only?: boolean },
+): string[] {
+  const chain = traceChain(statements, diff, tables, ctx, limits);
+  const lines: string[] = [];
+  for (const t of chain.tables) {
+    if (t.events.length === 0) {
+      lines.push(`  ${t.table} (${t.change}): no statement wrote to it`);
+      continue;
+    }
+    lines.push(`  ${t.table} (${t.change}):`);
+    for (const e of t.events) lines.push(`    ${"statement" in e ? statementLine(e.statement, ctx) : `${e.at} ${e.external}`}`);
+    if (t.more > 0) lines.push(`    … ${t.more} more (drill down: sql:${t.table})`);
   }
-  if (all.length > names.length) lines.push(`  … ${all.length - names.length} more table(s): ${all.slice(names.length).join(", ")} (drill down: trace)`);
+  if (chain.more.length) lines.push(`  … ${chain.more.length} more table(s): ${chain.more.join(", ")} (drill down: trace)`);
   return lines;
+}
+
+/** A statement's request(s), handler and place in the code, taken apart for display. */
+export interface StatementParts {
+  /** One per request path: who sent it, the request, its handler and the handler's lines holding the SQL. */
+  sources: { who: string[]; what: string; handler?: string; lines: string[] }[];
+  /** Where the SQL is when no handler holds it (a helper). */
+  elsewhere?: string;
+  write?: { op: string; table: string };
+}
+
+export function statementParts(s: TracedStatement, ctx: TraceContext = {}): StatementParts {
+  const found = ctx.locate?.(s.sql) ?? [];
+  const groups = new Map<string, { who: string[]; source: Source }>();
+  for (const x of s.sources) {
+    const what = x.label.startsWith("webhook ") ? x.label : `${x.method} ${x.label.split(" ").slice(2).join(" ")}`;
+    const who = x.label.startsWith("webhook ") ? "" : x.label.split(" ")[0]!;
+    const g = groups.get(what) ?? { who: [], source: x };
+    if (who && !g.who.includes(who)) g.who.push(who);
+    groups.set(what, g);
+  }
+  const sources = [...groups].map(([what, g]) => {
+    const handler = ctx.handlerFor?.(g.source.method, g.source.path);
+    // The same SQL on several lines of the file: name them all (route.ts:28,85).
+    const lines = handler ? found.filter((l) => l.startsWith(`${handler}:`)).map((l) => l.slice(handler.length + 1)) : [];
+    return { who: g.who, what, ...(handler ? { handler } : {}), lines };
+  });
+  const handlers = new Set(sources.flatMap((x) => x.handler ?? []));
+  // SQL that lives in a helper rather than the handler: say where.
+  const elsewhere = found.length && !found.some((l) => handlers.has(l.slice(0, l.lastIndexOf(":")))) ? found[0] : undefined;
+  const write = writeTarget(s.sql);
+  return { sources, ...(elsewhere ? { elsewhere } : {}), ...(write ? { write } : {}) };
 }
 
 /**
@@ -207,34 +265,14 @@ export function traceLines(
  * `full` adds the duration and keeps more of the SQL.
  */
 export function statementLine(s: TracedStatement, ctx: TraceContext = {}, full = false): string {
-  const found = ctx.locate?.(s.sql) ?? [];
-  const handlers = new Set<string>();
-  const source = sourceText(s.sources, ctx.handlerFor, (file) => {
-    handlers.add(file);
-    // The same SQL on several lines of the file: name them all (route.ts:28,85).
-    const lines = found.filter((l) => l.startsWith(`${file}:`)).map((l) => l.slice(file.length + 1));
-    return lines.length ? `${file}:${lines.join(",")}` : file;
-  });
-  // SQL that lives in a helper rather than the handler: say where.
-  const elsewhere = found.length && !found.some((l) => handlers.has(l.slice(0, l.lastIndexOf(":")))) ? ` (SQL at ${found[0]})` : "";
-  return `${s.at} ${source}: ${statementText(s, full)}${elsewhere}`;
-}
-
-/** `alice|bob POST /api/orders → app/api/orders/route.ts` (one entry per request path). */
-function sourceText(sources: Source[], handlerFor: TraceContext["handlerFor"], show: (file: string) => string): string {
-  if (sources.length === 0) return "(no request running)";
-  const groups = new Map<string, { who: string[]; source: Source }>();
-  for (const x of sources) {
-    const what = x.label.startsWith("webhook ") ? x.label : `${x.method} ${x.label.split(" ").slice(2).join(" ")}`;
-    const who = x.label.startsWith("webhook ") ? "" : x.label.split(" ")[0]!;
-    const g = groups.get(what) ?? { who: [], source: x };
-    if (who && !g.who.includes(who)) g.who.push(who);
-    groups.set(what, g);
-  }
-  return [...groups].map(([what, g]) => {
-    const handler = handlerFor?.(g.source.method, g.source.path);
-    return `${g.who.length ? `${g.who.join("|")} ` : ""}${what}${handler ? ` → ${show(handler)}` : ""}`;
-  }).join(" or ");
+  const parts = statementParts(s, ctx);
+  const source =
+    parts.sources.length === 0
+      ? "(no request running)"
+      : parts.sources
+          .map((g) => `${g.who.length ? `${g.who.join("|")} ` : ""}${g.what}${g.handler ? ` → ${g.lines.length ? `${g.handler}:${g.lines.join(",")}` : g.handler}` : ""}`)
+          .join(" or ");
+  return `${s.at} ${source}: ${statementText(s, full)}${parts.elsewhere ? ` (SQL at ${parts.elsewhere})` : ""}`;
 }
 
 /** The SQL, its parameters and result, then the connection and whether it ran in a transaction (writes say when not). */

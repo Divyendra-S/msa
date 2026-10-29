@@ -69,6 +69,17 @@ const BudgetSchema = z.object({
   usd: z.number().nonnegative().default(0.5),
 });
 
+/**
+ * The viewer's Run hunt button: a headless Muse Code run, billed to the Meta key (MODEL_API_KEY)
+ * in the shell that started the viewer. Never a Claude or Codex login.
+ */
+const HuntSchema = z.object({
+  /** The command; the prompt is added as its last argument. */
+  command: z.array(z.string()).min(1).default(["muse", "exec", "--json", "--disable-approval", "--max-model-steps", "80"]),
+  /** The hunt skill as the host names it (Muse Code: installed with the windtunnel- prefix). */
+  skill: z.string().default("windtunnel-hunt"),
+});
+
 export const ConfigSchema = z.object({
   app: AppSchema,
   db: DbSchema,
@@ -78,6 +89,7 @@ export const ConfigSchema = z.object({
   crawl: CrawlSchema.prefault({}),
   decider: DeciderSchema.prefault({}),
   budget: BudgetSchema.prefault({}),
+  hunt: HuntSchema.prefault({}),
 });
 
 export type WindtunnelConfig = z.infer<typeof ConfigSchema>;

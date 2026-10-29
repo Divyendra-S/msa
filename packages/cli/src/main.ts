@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { cp, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -13,6 +14,7 @@ import {
   openProject,
   prove,
   Runner,
+  runningViewer,
   writeProofBranch,
   stopOnSignals,
   type TraceMode,
@@ -38,6 +40,7 @@ import {
   sortFailures,
 } from "@windtunnel/explorer";
 import { findProjectDir, serveStdio, Workspace } from "@windtunnel/mcp";
+import { buildUi, startViewer, uiStatus } from "@windtunnel/viewer";
 
 export interface Flags {
   cwd?: string;
@@ -62,6 +65,8 @@ export interface Flags {
   crawl?: boolean;
   users?: string;
   "no-triage"?: boolean;
+  port?: string;
+  "no-open"?: boolean;
   help?: boolean;
 }
 
@@ -86,6 +91,8 @@ Commands
   usage               What Wind Tunnel returned to agents per job, and what small-model decisions cost
   prove <experiment…> Prove a fix: fails on --base (default HEAD), passes on the working tree (or --patch)
                       in every ordering, fails again on the base, other experiments don't get worse
+  view                Local viewer in the browser: runs, aligned timelines, first divergence, trace chain,
+                      database changes, rules, usage; Run hunt (Muse Code) and Open in Claude Code
   mcp                 MCP server on stdin/stdout for coding agents (Claude Code, Codex, Muse Code)
   skills --out <dir>  Copy the agent skills (init, hunt, prove, test) into <dir>, e.g. .agents/skills
   doctor              Check Node, git, the config file and Postgres
@@ -116,6 +123,8 @@ Options
   --prefix <text>     (skills) prefix for skill names, e.g. windtunnel-
   --base-patch <file> (prove) diff applied to --base (default: the working tree) to get the code with
                       the bug; the fix is then --base itself unless --patch is given
+  --port <n>          (view) port on 127.0.0.1 (default 4477, or the next free one)
+  --no-open           (view) don't open the browser
   --all               (clean) also drop snapshots and delete worktrees
   --json              Machine-readable output
 `;
@@ -153,6 +162,8 @@ export async function main(args: string[], flags: Flags): Promise<number> {
       case "mcp":
         await serveStdio(flags.cwd ? resolve(flags.cwd) : process.cwd());
         return 0;
+      case "view":
+        return await view(flags);
       case "doctor":
         return await doctor(flags);
       case "prepare":
@@ -542,4 +553,49 @@ async function skills(flags: Flags): Promise<number> {
   }
   print(flags, written, written.map((w) => `wrote ${w}`).join("\n"));
   return 0;
+}
+
+/** Serves the viewer until Ctrl-C; a viewer already running for the project is reused. */
+async function view(flags: Flags): Promise<number> {
+  const dir = await findProjectDir(flags.cwd ? resolve(flags.cwd) : process.cwd());
+  const project = await openProject(dir);
+  const running = await runningViewer(project.stateDir);
+  if (running && !flags.port) {
+    const url = `${running.url}/?token=${running.token}`;
+    process.stdout.write(`The viewer for this project is already running (pid ${running.pid}):\n  ${url}\n`);
+    if (!flags["no-open"]) openBrowser(url);
+    return 0;
+  }
+  const ui = await uiStatus();
+  if (ui !== "ok") {
+    process.stderr.write(ui === "missing" ? "Building the viewer (once)…\n" : "The viewer's UI changed: rebuilding…\n");
+    await buildUi();
+  }
+  const port = flags.port === undefined ? undefined : Number(flags.port);
+  if (port !== undefined && !(Number.isInteger(port) && port >= 0 && port < 65536)) throw new ConfigError(`--port: not a port: ${flags.port}`);
+  const viewer = await startViewer({ cwd: dir, ...(port !== undefined ? { port } : {}) });
+  process.stdout.write(
+    [
+      `Wind Tunnel viewer for ${viewer.root}`,
+      `  ${viewer.openUrl}`,
+      "",
+      "Open that link (it signs this browser in to the viewer; other sites can't reach it). Ctrl-C stops it.",
+      process.env.MODEL_API_KEY ? "Run hunt: on, billed to the Meta key in this shell (MODEL_API_KEY)." : "Run hunt: off until you start the viewer in the shell with MODEL_API_KEY (scripts/muse-env.sh).",
+      "",
+    ].join("\n"),
+  );
+  if (!flags["no-open"]) openBrowser(viewer.openUrl);
+  stopOnSignals(() => viewer.close());
+  await new Promise(() => undefined);
+  return 0;
+}
+
+function openBrowser(url: string): void {
+  const [command, args] =
+    process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : ["xdg-open", [url]];
+  try {
+    spawn(command, args, { stdio: "ignore", detached: true }).on("error", () => undefined).unref();
+  } catch {
+    // No browser to open: the link is printed.
+  }
 }

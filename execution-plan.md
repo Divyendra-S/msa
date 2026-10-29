@@ -74,10 +74,10 @@
 
 ## Phase 6 — Local API + viewer
 
-- [ ] Local API (HTTP + event stream)
-- [ ] Web viewer: runs list, aligned timelines, first divergence, trace chain, DB diff, rule results, usage meter
-- [ ] "Run hunt" button (`muse exec --json`)
-- [ ] "Open in Claude Code" button (deep link)
+- [x] Local API (HTTP + event stream): `windtunnel view`, JSON routes and server-sent events on 127.0.0.1 (session cookie or token, Host and Origin checks); the run store is polled, so runs from the CLI or an agent's MCP server show up as they start
+- [x] Web viewer (Vite + React): runs grouped by batch, aligned timelines (steps lined up by tab and name on one clock, any runs side by side), first divergence (requests, then database writes), trace chain, DB diff, rule results, requests, page screenshots, logs, usage meter; evidence packets link to it while it runs
+- [x] "Run hunt" button (`muse exec --json`, `hunt.command`): needs `MODEL_API_KEY`, never starts `claude` or `codex`, strips other providers' variables; reads JSONL without a fixed schema (Muse Code's isn't documented). Tested with a stand-in, not yet with Muse Code itself
+- [x] "Open in Claude Code" button (`claude-cli://open?cwd=…&q=…`: prompt typed, not sent), in the header (hunt) and on each run (fix and prove)
 
 ## Phase 7 — Bug Zoo + benchmark
 

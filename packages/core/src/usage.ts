@@ -34,6 +34,8 @@ export interface UsageTotals {
   decisions: Record<DecidedBy, number>;
   usd: number;
   levelOneTokens: number;
+  /** When its latest event happened (from listUsage). */
+  last?: string;
 }
 
 /** About 4 characters per token for the English, code and tables our tools return. An estimate, not a tokenizer. */
@@ -57,10 +59,10 @@ export class UsageMeter {
     this.file = join(stateDir, USAGE_DIR, `${job}.jsonl`);
   }
 
-  /** A job for one MCP server session. */
+  /** A job for one MCP server session (WINDTUNNEL_JOB when set, e.g. by a hunt the viewer started). */
   static forSession(stateDir: string): UsageMeter {
     const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(2, 14);
-    return new UsageMeter(stateDir, `mcp-${stamp.slice(0, 6)}-${stamp.slice(6)}`);
+    return new UsageMeter(stateDir, process.env.WINDTUNNEL_JOB ?? `mcp-${stamp.slice(0, 6)}-${stamp.slice(6)}`);
   }
 
   /** CLI use: WINDTUNNEL_JOB, else one job per day. */
@@ -153,7 +155,7 @@ export async function listUsage(stateDir: string, limit = 20): Promise<UsageTota
     const events = (await readFile(join(dir, f), "utf8")).split("\n").filter(Boolean).map((l) => JSON.parse(l) as UsageEvent);
     out.push({ totals: totalsOf(f.replace(/\.jsonl$/, ""), events), last: events.at(-1)?.at ?? "" });
   }
-  return out.sort((a, b) => b.last.localeCompare(a.last)).slice(0, limit).map((x) => x.totals);
+  return out.sort((a, b) => b.last.localeCompare(a.last)).slice(0, limit).map((x) => ({ ...x.totals, ...(x.last ? { last: x.last } : {}) }));
 }
 
 function kilo(n: number): string {

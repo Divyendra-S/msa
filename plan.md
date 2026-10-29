@@ -143,6 +143,7 @@ The output is a branch or PR with regression experiments and an evidence report,
    ├─ Evidence     short summary packets for the model + drill-down handles
    ├─ Prover       fix matrix · revert check · regression set · branch/PR output
    └─ Local API    HTTP + event stream: start hunts, list runs, fetch evidence, stream progress
+                   (built: `windtunnel view` on 127.0.0.1, session token, polls the run store)
         │
         ├─ Web viewer (all platforms): aligned timelines, first divergence, trace chain, DB diff, usage meter
         └─ Swift Mac app (stretch): menu bar, notifications, Run hunt, viewer in a native window
@@ -197,11 +198,11 @@ The output is a branch or PR with regression experiments and an evidence report,
 | F12 | **Re-test only what changed.** Record which handlers and files each experiment touches; after an edit, run only those; cache results by code hash | Editing one handler re-runs only its experiments, with 0 tokens |
 | F13 | **MCP server + host packaging.** ≤ 7 tools, short descriptions. Skills written once and packaged for Muse Code (settings snippet), Claude Code (plugin with helper subagent) and Codex (plugin) | The same hunt works in Muse Code and in Claude Code pointed at Muse; Claude Code plugin's fixed context cost is under 300 tokens |
 | F14 | **Decider + repair + triage.** Ambiguous small decisions go to rules, then Muse Spark or Jev (whichever key is set), then back to the agent. Used for crawling, fixing broken selectors (healed selector written back to the file) and failure sorting (bug / flaky / outdated test / environment) | Works with no extra key; with Spark or Jev, fewer decisions reach the main model |
-| F15 | **Viewer.** Runs list, branch timelines aligned by step, first divergence highlighted, trace chain, DB diff, rule results, usage meter, "Open in Claude Code" button | The demo can be presented from the viewer alone |
+| F15 | **Viewer.** Runs list, branch timelines aligned by step, first divergence highlighted, trace chain, DB diff, rule results, usage meter, "Open in Claude Code" button | The demo can be presented from the viewer alone. **Built:** `windtunnel view` ([docs/viewer.md](docs/viewer.md)) |
 | F16 | **Usage meter + budgets.** Count the tokens of everything our tools return; per-job budget; Jev cost shown | Meter appears on every job |
 | F17 | **Free sweep (no model).** Console errors, failed requests, broken links, accessibility (axe-core), slow pages, found during the crawl | Runs as part of the map step at 0 tokens |
 | F18 | **Bug Zoo + benchmark** (see §11) | Scoreboard for 3 setups committed to `bench/results/` |
-| F19 | **Run from the viewer.** A "Run hunt" button starts `muse exec --json` with the Meta key and streams its events into the viewer | The demo starts from the viewer with one click |
+| F19 | **Run from the viewer.** A "Run hunt" button starts `muse exec --json` with the Meta key and streams its events into the viewer | The demo starts from the viewer with one click. **Built:** command in `hunt.command`; events read without a fixed schema, since Muse Code's isn't documented |
 
 ### 8.2 Stretch (only if MVP is done)
 

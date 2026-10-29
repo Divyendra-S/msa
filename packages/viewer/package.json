@@ -1,11 +1,25 @@
 {
   "name": "@windtunnel/viewer",
   "version": "0.0.0",
-  "description": "Wind Tunnel local web viewer",
+  "description": "Wind Tunnel local API and web viewer: runs, aligned timelines, first divergence, trace chain, database changes, usage, Run hunt",
   "license": "MIT",
   "private": true,
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@windtunnel/core": "workspace:*",
+    "@windtunnel/mcp": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "vite": "8.3.4"
   }
 }
