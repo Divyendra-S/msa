@@ -220,6 +220,11 @@ describe("runner", { skip: !(await pgAvailable()) && "Postgres not reachable (pn
     const { steps } = await repFile<{ steps: StepRecord[] }>("fail-after", "result.json");
     assert.match(steps.find((s) => s.step === "result")!.seen!.text, /Failed 502/);
     assert.equal(steps.find((s) => s.step === "result")!.seen!.path, "/");
+    // Each step leaves a screenshot of its tab.
+    const shot = steps.find((s) => s.step === "result")!.shot;
+    assert.match(shot ?? "", /^step-\d+-alice\.jpg$/);
+    const jpeg = await readFile(join(results.get("fail-after")!.dir, "reps", "1", "screens", shot!));
+    assert.equal(jpeg.subarray(0, 2).toString("hex"), "ffd8");
   });
 
   it("ordered races release requests in the chosen order; `each` runs every order", async () => {

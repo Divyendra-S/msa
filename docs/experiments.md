@@ -234,6 +234,7 @@ the experiment re-run (see [Failure sorting](agents.md#failure-sorting-and-selec
       app.log                        the app's output
       trace-<user>.zip               Playwright trace (runs that broke a rule or errored)
       screens/<tab>.jpg              screenshot when the flow failed
+      screens/step-<n>-<tab>.jpg     the tab when each step ended (named on the step as `shot`)
       snapshot-<tab>.json            the page's controls and texts when the flow failed (selector repair)
 ```
 

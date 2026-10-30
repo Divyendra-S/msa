@@ -33,6 +33,8 @@ export interface StepRecord {
   quiet: boolean;
   /** What the page said when the step ended (rules read it as `windtunnel_pages`). */
   seen?: { path: string; text: string };
+  /** The tab when the step ended, in `screens/` (`step-03-alice.jpg`). */
+  shot?: string;
 }
 
 export interface FlowError {
@@ -137,6 +139,7 @@ export class Rep {
   private readonly running = new Set<Promise<void>>();
   private readonly active = new Set<StepInstance>();
   private readonly sqlDone = new Set<BrowserPerturbation>();
+  private shots = 0;
   private readonly webhooks: WebhookControl;
   /** Logged-in contexts of users that `replay-as` sends requests as. */
   private readonly replayers = new Map<string, Promise<BrowserContext>>();
@@ -459,6 +462,17 @@ export class Rep {
     return `snapshot-${name}.json`;
   }
 
+  /** A small screenshot of the tab at the end of a step, after its end time is taken; returns its file name. */
+  private async shoot(tab: Tab): Promise<string | undefined> {
+    const name = `step-${String(++this.shots).padStart(2, "0")}-${tab.label.replace(/[^\w-]/g, "_")}.jpg`;
+    const dir = join(this.input.dir, "screens");
+    await mkdir(dir, { recursive: true });
+    return tab.page.screenshot({ path: join(dir, name), type: "jpeg", quality: 50, timeout: 2_000 }).then(
+      () => name,
+      () => undefined,
+    );
+  }
+
   private login(tab: Tab, name?: string): Promise<void> {
     const userName = name ?? tab.user.name;
     const user = this.input.users[userName];
@@ -584,6 +598,8 @@ export class Rep {
       this.network.refreshArmed = this.tabs.some((t) => t.current?.refreshPending);
       if (tab.session.loggedInAs && tab.session.loggedInAs !== tab.user.name) record.as = tab.session.loggedInAs;
       record.end = this.now();
+      const shot = await this.shoot(tab);
+      if (shot) record.shot = shot;
       this.steps.push(record);
     }
   }

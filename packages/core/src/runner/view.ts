@@ -187,7 +187,7 @@ export interface RepView {
   webhooks: RepDetail["webhooks"];
   charges: RepDetail["charges"];
   console: RepDetail["console"];
-  /** Screenshots taken when the flow failed, by tab (`screens/<tab>.jpg`). */
+  /** Screenshots taken when the flow failed, by tab (`screens/<tab>.jpg`); each step's are on the step. */
   screenshots: string[];
   /** Playwright traces kept for this run. */
   traces: string[];
@@ -266,7 +266,7 @@ export async function repView(store: RunStore, id: string, n: number, options: E
     webhooks: d.webhooks,
     charges: d.charges,
     console: d.console,
-    screenshots: screens.filter((f) => f.endsWith(".jpg")).sort(),
+    screenshots: screens.filter((f) => f.endsWith(".jpg") && !f.startsWith("step-")).sort(),
     traces: d.traces,
     log: log.trimEnd().split("\n").slice(-150).filter(Boolean),
   };

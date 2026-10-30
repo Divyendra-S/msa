@@ -143,6 +143,30 @@ describe("viewer", () => {
     assert.deepEqual([e.pages, e.routes, e.tables], [["/"], ["POST /api/send"], ["hits"]]);
   });
 
+  it("replays each experiment's newest run: a lane per tab, a column per step, its pages and requests", async () => {
+    const replay = await json("/api/replay");
+    assert.equal(replay.runs, 1);
+    const [e] = replay.experiments;
+    assert.equal(e.id, "send-twice");
+    assert.deepEqual(e.history, [{ id: RUN, outcome: "flaky", startedAt: "2026-10-29T10:00:00.000Z" }]);
+    assert.deepEqual(e.lanes, [{ tab: "alice", user: "alice" }]);
+    // Where it pushed: double submit, on the send step.
+    assert.deepEqual(e.columns, [
+      { step: "open", start: 5, pressure: [] },
+      { step: "send", start: 58, pressure: ["double submit"] },
+    ]);
+    const [open, send] = e.frames;
+    assert.deepEqual([open.path, open.text, open.actions, open.shot, open.requests], ["/", "Send", ["open /"], undefined, []]);
+    assert.equal(send.shot, `/api/runs/${RUN}/reps/1/screens/step-02-alice.jpg`);
+    assert.deepEqual(send.actions, ['click "Send"']);
+    assert.deepEqual(send.tags, ["double-clicked"]);
+    assert.deepEqual(send.requests, [
+      { method: "POST", path: "/api/send", count: 2, statuses: [200, 200], together: false, tags: ["double-clicked"], notes: ["double-clicked"] },
+    ]);
+    assert.deepEqual(e.rules, { broken: [{ id: "at-most-one-hit", rows: 1, sample: "hits 2" }], held: 0 });
+    assert.deepEqual(e.changes, ["hits +2"]);
+  });
+
   it("gives a run's evidence packet as text", async () => {
     const { text } = await json<{ text: string }>(`/api/runs/${RUN}/evidence`);
     assert.match(text, /send-twice/);
@@ -244,8 +268,17 @@ async function writeStore(dir: string): Promise<void> {
   const experiment = { id: "send-twice", description: "Alice double-clicks Send.", flow: "send", params: {}, perturb: [{ do: "double-click", step: "send" }], rules: "all", repeat: 2, timeout: 60_000 };
   const startedAt = "2026-10-29T10:00:00.000Z";
   const steps = (twice: boolean) => [
-    { tab: "alice", step: "open", start: 5, end: 55, actions: [], quiet: true },
-    { tab: "alice", step: "send", start: 58, end: 130, actions: [], quiet: true, ...(twice ? { harness: ["double-clicked"] } : {}) },
+    { tab: "alice", step: "open", start: 5, end: 55, actions: [{ at: 5, action: 'goto "/"' }], quiet: true, seen: { path: "/", text: "Send" } },
+    {
+      tab: "alice",
+      step: "send",
+      start: 58,
+      end: 130,
+      actions: [{ at: 58, action: "click getByRole('button', { name: 'Send' })" }],
+      quiet: true,
+      shot: "step-02-alice.jpg",
+      ...(twice ? { harness: ["double-clicked"] } : {}),
+    },
   ];
   const requests = (twice: boolean) => [
     { id: 1, tab: "alice", step: "open", method: "GET", url: "/", type: "document", start: 10, end: 50, status: 200 },

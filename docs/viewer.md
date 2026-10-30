@@ -124,10 +124,11 @@ must send JSON, and must come from the viewer's own origin when it has an `Origi
 | `GET /api/runs?limit=` | runs newest first; unfinished ones carry `running: {done, total}` |
 | `GET /api/runs/<run>` | experiment, result, repetitions, the one to show first (`focus`), the run to compare with (`reference`), failure sorting |
 | `GET /api/runs/<run>/reps/<n>` | steps, requests (handler, SQL counts), rules, errors, database diff, trace chain, race, webhooks, charges, console, screenshots, app log |
-| `GET /api/runs/<run>/reps/<n>/screens/<tab>.jpg` | a screenshot taken where the flow failed |
+| `GET /api/runs/<run>/reps/<n>/screens/<file>.jpg` | a screenshot: where the flow failed (`<tab>.jpg`), or a tab when a step ended (`step-<n>-<tab>.jpg`) |
 | `GET /api/runs/<run>/evidence` | `{text}`: the evidence packet the agent gets from `windtunnel_evidence` |
 | `GET /api/compare?lanes=<run>/<n>,…` | up to 8 runs: lanes, rows lined up by tab and step, the reference lane, each lane's first divergence |
 | `GET /api/experiments` | every experiment (id, description, flow, users, repeat, file, perturbations) with its newest run |
+| `GET /api/replay` | every experiment in the order it was first run, with its runs so far, and its newest run as the browser lived it: a lane per tab, a column per step (the same step in two tabs shares one), each step's page (path, text, screenshot), actions, harness notes and requests (grouped, with statuses, whether two tabs sent them at once and what the harness did to them), where the experiment pushed, webhook deliveries under the step they came during, the rules that broke with a sample row, and what changed in the database |
 | `GET /api/map` | the app as a picture: pages (what they show, the routes they call, how the live crawl found them), routes (what each does in order, what it reads and writes, calls out, hints), tables, services; and each experiment's newest run through them: the pages and routes it reached, the tables it changed, its steps in order with each route's count and whether two were in the app at once, and where it pushes |
 | `POST /api/experiments/run {experiments?, repeat?}` | runs them with the CLI (`windtunnel run`), one run at a time (409 while one goes) |
 | `GET /api/jobs`, `POST /api/jobs/<id>/stop` | runs started here, with the CLI's output; stops one |

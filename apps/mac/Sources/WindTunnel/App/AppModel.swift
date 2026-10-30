@@ -4,13 +4,14 @@ import Observation
 import UserNotifications
 
 enum Pane: String, CaseIterable, Identifiable {
-  case overview, map, runs, experiments, hunt, usage
+  case overview, map, replay, runs, experiments, hunt, usage
   var id: String { rawValue }
 
   var title: String {
     switch self {
     case .overview: "Overview"
     case .map: "Map"
+    case .replay: "Replay"
     case .runs: "Runs"
     case .experiments: "Experiments"
     case .hunt: "Hunt"
@@ -22,6 +23,7 @@ enum Pane: String, CaseIterable, Identifiable {
     switch self {
     case .overview: "square.grid.2x2"
     case .map: "point.3.connected.trianglepath.dotted"
+    case .replay: "film.stack"
     case .runs: "list.bullet.rectangle"
     case .experiments: "flask"
     case .hunt: "scope"
@@ -88,6 +90,9 @@ final class AppModel {
   /// What the Map follows: the whole app, an experiment, or one page, route or table.
   var mapFocus: MapFocus = .app
   var appMapError: String?
+  var replay: Replay?
+  var replayError: String?
+  let shots = Shots()
   var usage: Usage?
   var hunts: [HuntInfo] = []
   var jobs: [RunJob] = []
@@ -252,6 +257,9 @@ final class AppModel {
     appMap = nil
     appMapError = nil
     mapFocus = .app
+    replay = nil
+    replayError = nil
+    shots.clear()
     usage = nil
     hunts = []
     jobs = []
@@ -329,6 +337,17 @@ final class AppModel {
     }
   }
 
+  /// How each experiment's newest run went, step by step, with the pages.
+  func loadReplay() async {
+    guard let api else { return }
+    do {
+      replay = try await api.get("/api/replay")
+      replayError = nil
+    } catch {
+      replayError = error.localizedDescription
+    }
+  }
+
   func loadHunts() async {
     if let h: [HuntInfo] = try? await api?.get("/api/hunts") { hunts = h }
   }
@@ -381,6 +400,7 @@ final class AppModel {
       if changed.contains(where: { id in runs.first { $0.id == id }?.outcome != "running" }) {
         await loadExperiments()
         if appMap != nil { await loadMap() }
+        if replay != nil { await loadReplay() }
       }
     case .usage:
       await loadUsage()

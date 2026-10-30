@@ -39,6 +39,7 @@ struct MainView: View {
           switch model.section {
           case .overview: OverviewView()
           case .map: MapPane()
+          case .replay: ReplayPane()
           case .runs: RunsSplit()
           case .experiments: ExperimentsSplit()
           case .hunt: HuntView()

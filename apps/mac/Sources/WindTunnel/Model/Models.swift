@@ -630,3 +630,99 @@ nonisolated struct AppMap: Decodable, Sendable {
   let experiments: [Experiment]
   let crawl: Crawl?
 }
+
+/// `GET /api/replay`: every experiment in the order it was first run, and its newest run as the
+/// browser lived it: a lane per tab, a column per step, the page when each step ended.
+nonisolated struct Replay: Decodable, Sendable {
+  struct Run: Decodable, Hashable, Sendable {
+    let id: String
+    let outcome: String
+    let startedAt: String
+    let rep: Int
+    let reps: Int
+    let broken: [String]
+    let durationMs: Double
+    let error: String?
+  }
+  struct Past: Decodable, Hashable, Sendable {
+    let id: String
+    let outcome: String
+    let startedAt: String
+  }
+  struct Lane: Decodable, Hashable, Sendable {
+    let tab: String
+    let user: String
+  }
+  struct Column: Decodable, Hashable, Sendable {
+    let step: String
+    let attempt: String?
+    let start: Double
+    let pressure: [String]
+  }
+  struct Request: Decodable, Hashable, Sendable {
+    let method: String
+    let path: String
+    let count: Int
+    let statuses: [Int?]
+    let together: Bool
+    let tags: [String]
+    let notes: [String]
+    let from: String?
+
+    var failed: Bool { statuses.contains { ($0 ?? 999) >= 400 } }
+    var pushed: Bool { together || !tags.isEmpty }
+  }
+  struct Frame: Decodable, Hashable, Sendable {
+    let lane: Int
+    let column: Int
+    let step: String
+    let attempt: String?
+    let start: Double
+    let end: Double
+    let `as`: String?
+    let path: String?
+    let text: String?
+    let shot: String?
+    let actions: [String]
+    let harness: [String]
+    let tags: [String]
+    let error: String?
+    let requests: [Request]
+  }
+  struct Delivery: Decodable, Hashable, Sendable {
+    let column: Int
+    let at: Double
+    let type: String
+    let status: Int?
+    let ms: Double?
+  }
+  struct Broken: Decodable, Hashable, Sendable {
+    let id: String
+    let description: String?
+    let rows: Int
+    let sample: String?
+  }
+  struct Rules: Decodable, Hashable, Sendable {
+    let broken: [Broken]
+    let held: Int
+  }
+  struct Experiment: Decodable, Hashable, Identifiable, Sendable {
+    let id: String
+    let description: String?
+    let users: [String]
+    let pressure: [AppMap.Pressure]
+    let history: [Past]
+    let run: Run?
+    let lanes: [Lane]
+    let columns: [Column]
+    let frames: [Frame]
+    let webhooks: [Delivery]
+    let rules: Rules
+    let changes: [String]
+
+    var broke: Bool { !rules.broken.isEmpty }
+  }
+  let experiments: [Experiment]
+  let runs: Int
+  let since: String?
+}
