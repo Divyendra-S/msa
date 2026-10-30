@@ -1,9 +1,11 @@
-export { Branch, Branches, type BranchInfo, type CreateBranchOptions } from "./branches/branches.ts";
+export { Branch, Branches, type BranchInfo, type CreateBranchOptions, type SeedCopy } from "./branches/branches.ts";
 export { chromiumStatus, playwrightCli } from "./browser.ts";
 export { type CodeVersion, type CodeVersionSpec, CodeVersions, type PreparedVersion } from "./branches/code-versions.ts";
 export { PgServer } from "./branches/postgres.ts";
 export { clean, type CleanResult, stopOnSignals } from "./cleanup.ts";
 export {
+  APP_KINDS,
+  type AppKind,
   CONFIG_FILE,
   ConfigError,
   ConfigSchema,
@@ -12,6 +14,7 @@ export {
   parseConfig,
   type WindtunnelConfig,
 } from "./config.ts";
+export { type Database, databaseEnv, describeDatabase, openSqlite } from "./database.ts";
 export { CommandError, Service, sh } from "./exec.ts";
 export { changedFiles } from "./git.ts";
 export { openProject, type Project } from "./project.ts";
@@ -26,6 +29,8 @@ export {
   type Rule,
   type RuleResult,
   RULES_FILE,
+  type RuleTarget,
+  ruleSource,
   type RunFacts,
 } from "./rules.ts";
 export { runFacts } from "./runner/facts.ts";
@@ -71,6 +76,7 @@ export {
   type RepOutcome,
   type RepSummary,
   type RunOptions,
+  type Seam,
   Runner,
   type TestRun,
   type VariantResult,

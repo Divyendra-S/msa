@@ -1,4 +1,5 @@
 import pg from "pg";
+import { type Database, openSqlite, plainRow, quoteIdent } from "../database.ts";
 
 export type Row = Record<string, unknown>;
 
@@ -47,7 +48,11 @@ SELECT n.nspname AS schema, c.relname AS name,
  ORDER BY 1, 2`;
 
 /** Reads every user table. Meant for seeded, demo-size databases. */
-export async function snapshotDatabase(url: string, maxRows = 2_000): Promise<DbSnapshot> {
+export function snapshotDatabase(db: Database, maxRows = 2_000): Promise<DbSnapshot> {
+  return db.kind === "postgres" ? snapshotPostgres(db.url, maxRows) : snapshotSqlite(db.path, maxRows);
+}
+
+async function snapshotPostgres(url: string, maxRows: number): Promise<DbSnapshot> {
   const client = new pg.Client({ connectionString: url, application_name: "windtunnel-diff" });
   client.on("error", () => undefined);
   await client.connect();
@@ -73,6 +78,32 @@ export async function snapshotDatabase(url: string, maxRows = 2_000): Promise<Db
     return snapshot;
   } finally {
     await client.end();
+  }
+}
+
+async function snapshotSqlite(path: string, maxRows: number): Promise<DbSnapshot> {
+  const db = await openSqlite(path, { readOnly: true });
+  try {
+    // One read transaction: every table as of the same moment.
+    db.exec("BEGIN");
+    const tables = db.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY name").all() as { name: string }[];
+    const snapshot: DbSnapshot = {};
+    for (const { name } of tables) {
+      const columns = db.prepare(`PRAGMA table_info(${quoteIdent(name)})`).all() as { name: string; pk: number }[];
+      const key = columns.filter((c) => c.pk > 0).sort((a, b) => a.pk - b.pk).map((c) => c.name);
+      const order = key.length > 0 ? ` ORDER BY ${key.map(quoteIdent).join(", ")}` : "";
+      const rows = db.prepare(`SELECT * FROM ${quoteIdent(name)}${order} LIMIT ${maxRows + 1}`).all() as Row[];
+      if (rows.length > maxRows) {
+        const { n } = db.prepare(`SELECT count(*) AS n FROM ${quoteIdent(name)}`).get() as { n: number };
+        snapshot[name] = { key, count: n };
+      } else {
+        snapshot[name] = { key, count: rows.length, rows: rows.map((r) => plainRow({ ...r })) };
+      }
+    }
+    db.exec("COMMIT");
+    return snapshot;
+  } finally {
+    db.close();
   }
 }
 
@@ -131,8 +162,4 @@ function summarize(tables: Record<string, TableDiff>): string {
     return `${name} ${bits.join(" ")}`;
   });
   return parts.join(" · ") || "no changes";
-}
-
-function quoteIdent(name: string): string {
-  return `"${name.replace(/"/g, '""')}"`;
 }

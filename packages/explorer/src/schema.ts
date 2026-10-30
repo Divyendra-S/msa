@@ -1,3 +1,4 @@
+import { type Database, openSqlite } from "@windtunnel/core";
 import pg from "pg";
 
 export interface ColumnInfo {
@@ -99,6 +100,59 @@ export async function readSchema(url: string): Promise<TableInfo[]> {
     return [...tables.values()].sort((a, b) => a.name.localeCompare(b.name));
   } finally {
     await client.end();
+  }
+}
+
+/** The schema of a fresh seed copy, whatever the database; undefined when the app has none. */
+export async function seedSchema(copy: { database?: Database }): Promise<TableInfo[] | undefined> {
+  const db = copy.database;
+  if (!db) return undefined;
+  return db.kind === "postgres" ? readSchema(db.url) : readSqliteSchema(db.path);
+}
+
+/** Tables, keys and row counts of a SQLite file (opened read-only). */
+export async function readSqliteSchema(path: string): Promise<TableInfo[]> {
+  const db = await openSqlite(path, { readOnly: true });
+  try {
+    const all = <T>(sql: string) => db.prepare(sql).all() as T[];
+    const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
+    const names = all<{ name: string }>("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY name");
+    return names.map(({ name }) => {
+      const columns = all<{ name: string; type: string; notnull: number; dflt_value: string | null; pk: number }>(`PRAGMA table_info(${quote(name)})`);
+      const primaryKey = columns.filter((c) => c.pk > 0).sort((a, b) => a.pk - b.pk).map((c) => c.name);
+      // An INTEGER PRIMARY KEY is the rowid: the database picks it.
+      const rowid = primaryKey.length === 1 && /^integer$/i.test(columns.find((c) => c.name === primaryKey[0])!.type);
+      const unique = all<{ name: string; unique: number; origin: string; partial: number }>(`PRAGMA index_list(${quote(name)})`)
+        .filter((i) => i.unique && i.origin !== "pk")
+        .map((i) => `(${all<{ name: string }>(`PRAGMA index_info(${quote(i.name)})`).map((c) => c.name).join(", ")})`);
+      const foreign = new Map<number, { columns: string[]; table: string }>();
+      for (const f of all<{ id: number; table: string; from: string }>(`PRAGMA foreign_key_list(${quote(name)})`)) {
+        const entry = foreign.get(f.id) ?? { columns: [], table: f.table };
+        entry.columns.push(f.from);
+        foreign.set(f.id, entry);
+      }
+      const rows = (db.prepare(`SELECT count(*) AS n FROM ${quote(name)}`).get() as { n: number }).n;
+      return {
+        name,
+        columns: columns.map((c) => {
+          const generated = rowid && c.name === primaryKey[0];
+          return {
+            name: c.name,
+            type: shortType(c.type.toLowerCase()) || "any",
+            nullable: !c.notnull && !c.pk,
+            ...(c.dflt_value !== null && !generated ? { default: c.dflt_value } : {}),
+            ...(generated ? { generated: true } : {}),
+          };
+        }),
+        primaryKey,
+        unique,
+        foreignKeys: [...foreign.values()],
+        checks: [],
+        rows,
+      };
+    });
+  } finally {
+    db.close();
   }
 }
 

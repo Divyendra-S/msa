@@ -16,6 +16,6 @@ export {
 export { type AppMap, buildAppMap, formatAppMap, formatEffects, type PageInfo, type RouteInfo } from "./map.ts";
 export { findInSource, parseLocator, rankCandidates, replaceInSource, similarity } from "./repair.ts";
 export { findNextRoutes, type RouteFile } from "./routes.ts";
-export { formatTable, readSchema, type TableInfo } from "./schema.ts";
+export { formatTable, readSchema, readSqliteSchema, seedSchema, type TableInfo } from "./schema.ts";
 export { type Effect, parseSql, SourceIndex, type SqlEffect } from "./source.ts";
 export { afterTriage, answerDecision, controlOf, type FailureLabel, formatTriage, sortFailures, type TriageEntry } from "./triage.ts";

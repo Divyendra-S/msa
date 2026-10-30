@@ -34,6 +34,24 @@ db:
   it("rejects invalid YAML", () => {
     assert.throws(() => parseConfig("app: [unclosed"), ConfigError);
   });
+
+  it("is a web app with no database unless it says otherwise", () => {
+    const config = parseConfig("app:\n  start: node server.js\n");
+    assert.equal(config.app.kind, "web");
+    assert.equal(config.app.isolateHome, false);
+    assert.equal(config.db, undefined);
+    assert.equal(parseConfig("app:\n  kind: tauri\n  start: x\n").app.kind, "tauri");
+    assert.throws(() => parseConfig("app:\n  kind: flutter\n  start: x\n"), /app\.kind/);
+  });
+
+  it("reads a SQLite database inside the run's data folder", () => {
+    const config = parseConfig("app:\n  start: x\n  isolateHome: true\ndb:\n  kind: sqlite\n  seed: node seed.js\n");
+    assert.deepEqual(config.db, { kind: "sqlite", file: "app.db", seed: "node seed.js" });
+    assert.equal(config.app.isolateHome, true);
+    for (const file of ["/tmp/app.db", "../app.db", "data/../../app.db"]) {
+      assert.throws(() => parseConfig(`app:\n  start: x\ndb:\n  kind: sqlite\n  file: ${file}\n  seed: s\n`), /db\.file/, file);
+    }
+  });
 });
 
 describe("expandVars", () => {
@@ -52,7 +70,7 @@ describe("parseRules", () => {
     assert.deepEqual(rules, [{ id: "one-order-per-cart", sql: "SELECT 1 WHERE false", expect: "empty" }]);
   });
 
-  it("rejects bad ids and missing sql", () => {
+  it("rejects bad ids and rules with nothing to run", () => {
     assert.throws(() => parseRules("Bad Id:\n  sql: SELECT 1\n"), ConfigError);
     assert.throws(() => parseRules("ok-id:\n  description: no sql\n"), ConfigError);
   });

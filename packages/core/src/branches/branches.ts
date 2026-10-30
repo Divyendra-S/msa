@@ -1,11 +1,13 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { copyFile, mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { MockPay, type Tenant } from "@windtunnel/mock-pay";
 import { expandVars } from "../config.ts";
+import { type Database, databaseEnv, openSqlite } from "../database.ts";
 import { Service, sh } from "../exec.ts";
 import { allocatePort, releasePort } from "../ports.ts";
-import { openProject, type Project } from "../project.ts";
+import { exists, openProject, type Project } from "../project.ts";
+import { HttpProxy } from "../runner/proxy.ts";
 import { type CodeVersion, type CodeVersionSpec, CodeVersions, type PreparedVersion } from "./code-versions.ts";
 import { PgServer } from "./postgres.ts";
 import { type SqlLog, SqlProxy } from "./sql-log.ts";
@@ -16,48 +18,68 @@ export interface CreateBranchOptions {
   /** Where the app log goes (default `.windtunnel/logs/branches/<id>`). */
   logDir?: string;
   /** Runs after the database copy exists and before the app starts. */
-  beforeStart?: (database: { name: string; url: string }) => Promise<void>;
+  beforeStart?: (database: Database | undefined) => Promise<void>;
+  /** Put an HTTP proxy in front of the app: clients and $BASE_URL go through it (the seam for any client). */
+  proxy?: boolean;
 }
 
 export interface BranchInfo {
   id: string;
   version: CodeVersion;
+  /** Where clients reach the app: the proxy when there is one, else the app itself. */
   baseUrl: string;
+  /** The app itself, past any proxy. */
+  appUrl: string;
   port: number;
-  database: { name: string; url: string };
+  database?: Database;
+  /** The run's own folder for files ($DATA_DIR; $HOME too with `app.isolateHome`). */
+  dataDir: string;
   pid?: number;
   logDir: string;
 }
 
 /**
- * One isolated execution: a code version (worktree) + a fresh database copy +
+ * One isolated execution: a code version (worktree) + a fresh database copy and data folder +
  * a running app process + its own payment-provider tenant.
  */
 export class Branch implements BranchInfo {
   readonly id: string;
   readonly version: CodeVersion;
   readonly baseUrl: string;
+  readonly appUrl: string;
   readonly port: number;
-  readonly database: { name: string; url: string };
+  readonly database?: Database;
+  readonly dataDir: string;
   readonly logDir: string;
   readonly payments?: { url: string; tenant: Tenant };
   /** The app's statements, when SQL logging is on. */
   readonly sql?: SqlLog;
+  /** The HTTP proxy in front of the app, when the branch was created with one. */
+  readonly proxy?: HttpProxy;
   private readonly service: Service;
   private readonly teardown: () => Promise<void>;
   private stopping?: Promise<void>;
 
   constructor(
-    init: BranchInfo & { service: Service; payments?: Branch["payments"]; sql?: SqlLog; teardown: () => Promise<void> },
+    init: BranchInfo & {
+      service: Service;
+      payments?: Branch["payments"];
+      sql?: SqlLog;
+      proxy?: HttpProxy;
+      teardown: () => Promise<void>;
+    },
   ) {
     this.id = init.id;
     this.version = init.version;
     this.baseUrl = init.baseUrl;
+    this.appUrl = init.appUrl;
     this.port = init.port;
     this.database = init.database;
+    this.dataDir = init.dataDir;
     this.logDir = init.logDir;
     this.payments = init.payments;
     this.sql = init.sql;
+    this.proxy = init.proxy;
     this.service = init.service;
     this.teardown = init.teardown;
   }
@@ -81,12 +103,22 @@ export class Branch implements BranchInfo {
       id: this.id,
       version: this.version,
       baseUrl: this.baseUrl,
+      appUrl: this.appUrl,
       port: this.port,
       database: this.database,
+      dataDir: this.dataDir,
       pid: this.pid,
       logDir: this.logDir,
     };
   }
+}
+
+/** A fresh copy of a version's seed with no app running: for rule checks on the seed and the project's tests. */
+export interface SeedCopy {
+  database?: Database;
+  dataDir: string;
+  /** DATA_DIR, the database's variables, and HOME with `app.isolateHome`. */
+  env: Record<string, string>;
 }
 
 /**
@@ -96,17 +128,20 @@ export class Branch implements BranchInfo {
 export class Branches {
   readonly project: Project;
   readonly versions: CodeVersions;
-  readonly pg: PgServer;
+  /** The Postgres server, when the app's database is Postgres. */
+  readonly pg?: PgServer;
   private readonly slots: Semaphore;
   private readonly live = new Set<Branch>();
   private pruning?: Promise<string[]>;
   private mockPay?: Promise<MockPay>;
   private sqlProxy?: Promise<SqlProxy | undefined>;
+  private readonly sqliteBuilds = new Map<string, Promise<void>>();
 
   constructor(project: Project) {
     this.project = project;
     this.versions = new CodeVersions(project);
-    this.pg = new PgServer(project.config.db.url);
+    const db = project.config.db;
+    this.pg = db?.kind === "postgres" ? new PgServer(db.url) : undefined;
     this.slots = new Semaphore(project.config.parallel);
   }
 
@@ -124,31 +159,40 @@ export class Branches {
     return `${this.dbPrefix}seed_${versionId}`;
   }
 
+  /** The seed snapshot of a code version when the database is SQLite: a file, never opened for writing. */
+  sqliteSnapshot(versionId: string): string {
+    return join(this.project.cacheDir, "sqlite", `${versionId}.db`);
+  }
+
   /** Resolves, checks out, installs and builds a version, and builds its seed snapshot. */
   async prepare(spec: CodeVersionSpec | CodeVersion = {}): Promise<PreparedVersion> {
     const version = isResolved(spec) ? spec : await this.versions.resolve(spec);
     const isNew = !(await this.versions.list()).includes(version.id);
     const prepared = await this.versions.prepare(version);
     if (isNew) await this.prune().catch(() => []);
-    await this.pg.ensureSnapshot(this.snapshotName(version.id), async (url) => {
-      await sh(this.project.config.db.seed, {
-        cwd: prepared.appDir,
-        env: { DATABASE_URL: url },
-        logFile: this.versions.logFile(version.id),
+    const db = this.project.config.db;
+    const seed = (env: Record<string, string>) =>
+      sh(db!.seed, { cwd: prepared.appDir, env, logFile: this.versions.logFile(version.id) });
+    if (db?.kind === "postgres") {
+      await this.pg!.ensureSnapshot(this.snapshotName(version.id), (url) => seed({ DATABASE_URL: url }).then(() => undefined));
+    } else if (db?.kind === "sqlite") {
+      await this.ensureSqliteSnapshot(version.id, async (dataDir) => {
+        const database = this.sqliteDatabase(dataDir, "");
+        await mkdir(dirname(database.path), { recursive: true });
+        await seed(this.stateEnv(dataDir, database));
       });
-    });
+    }
     return prepared;
   }
 
-  /** Runs `fn` against a throwaway copy of a version's seed snapshot (no app process). */
-  async withSeedCopy<T>(spec: CodeVersionSpec | CodeVersion, fn: (url: string) => Promise<T>): Promise<T> {
+  /** Runs `fn` against a throwaway copy of a version's seed and a new data folder (no app process). */
+  async withSeedCopy<T>(spec: CodeVersionSpec | CodeVersion, fn: (copy: SeedCopy) => Promise<T>): Promise<T> {
     const { version } = await this.prepare(spec);
-    const name = `${this.dbPrefix}run_${newBranchId()}`;
-    const url = await this.pg.clone(this.snapshotName(version.id), name);
+    const state = await this.freshState(version.id, newBranchId(), false);
     try {
-      return await fn(url);
+      return await fn({ database: state.database, dataDir: state.dataDir, env: this.stateEnv(state.dataDir, state.database) });
     } finally {
-      await this.pg.drop(name).catch(() => undefined);
+      await state.drop().catch(() => undefined);
     }
   }
 
@@ -169,29 +213,44 @@ export class Branches {
       const logDir = options.logDir ?? join(this.project.stateDir, "logs", "branches", id);
       await mkdir(logDir, { recursive: true });
 
-      const dbName = `${this.dbPrefix}run_${id}`;
-      const dbUrl = await this.pg.clone(this.snapshotName(version.id), dbName);
-      if (!options.keepDatabase) cleanup.push(() => this.pg.drop(dbName));
-      await options.beforeStart?.({ name: dbName, url: dbUrl });
+      const state = await this.freshState(version.id, id, !!options.keepDatabase);
+      cleanup.push(() => state.drop());
+      const { database, dataDir } = state;
+      await options.beforeStart?.(database);
 
-      // The app reaches its database through the SQL proxy, which logs its statements.
-      const proxy = await this.startSqlProxy();
-      const sql = proxy?.record(dbName);
-      if (sql) cleanup.push(() => sql.stop());
-      const appDbUrl = proxy ? proxy.urlFor(dbUrl) : dbUrl;
+      // The app reaches a Postgres database through the SQL proxy, which logs its statements.
+      let appDbUrl: string | undefined;
+      let sql: SqlLog | undefined;
+      if (database?.kind === "postgres") {
+        const sqlProxy = await this.startSqlProxy();
+        sql = sqlProxy?.record(database.name);
+        if (sql) cleanup.push(() => sql!.stop());
+        appDbUrl = sqlProxy ? sqlProxy.urlFor(database.url) : database.url;
+      }
 
       const port = await allocatePort();
       cleanup.push(() => releasePort(port));
-      const baseUrl = expandVars(this.project.config.app.baseUrl, { PORT: String(port) }).replace(/\/$/, "");
+      const appUrl = expandVars(this.project.config.app.baseUrl, { PORT: String(port) }).replace(/\/$/, "");
+      let baseUrl = appUrl;
+      let proxy: HttpProxy | undefined;
+      if (options.proxy) {
+        const proxyPort = await allocatePort();
+        cleanup.push(() => releasePort(proxyPort));
+        proxy = await HttpProxy.start({ port: proxyPort, target: appUrl });
+        cleanup.push(() => proxy!.close());
+        baseUrl = expandVars(this.project.config.app.baseUrl, { PORT: String(proxyPort) }).replace(/\/$/, "");
+      }
 
-      const vars: Record<string, string> = { PORT: String(port), BASE_URL: baseUrl, DATABASE_URL: appDbUrl };
+      const stateEnv = this.stateEnv(dataDir, database, appDbUrl);
+      const vars: Record<string, string> = { PORT: String(port), BASE_URL: baseUrl, ...stateEnv };
       let payments: Branch["payments"];
       const mockPayConfig = this.project.config.mockPay;
       if (mockPayConfig) {
         const mockPay = await this.startMockPay();
         const secret = `whsec_${randomBytes(12).toString("hex")}`;
         const tenant = mockPay.tenant(id, {
-          webhookUrl: `${baseUrl}${mockPayConfig.webhookPath}`,
+          // Webhooks come from the payment provider's servers, not a client: straight to the app.
+          webhookUrl: `${appUrl}${mockPayConfig.webhookPath}`,
           webhookSecret: secret,
           webhookDelayMs: mockPayConfig.webhookDelayMs,
           chargeLatencyMs: mockPayConfig.chargeLatencyMs,
@@ -203,9 +262,9 @@ export class Branches {
       }
 
       const scope = { ...process.env, ...vars };
-      // PORT, DATABASE_URL and BASE_URL are always set, so an app that forgets to
-      // map them can't fall back to a developer database. `app.env` adds to or overrides them.
-      const env: Record<string, string> = { PORT: vars.PORT!, DATABASE_URL: appDbUrl, BASE_URL: baseUrl };
+      // PORT, BASE_URL, DATA_DIR and the database's variables are always set, so an app that forgets
+      // to map them can't fall back to a developer database. `app.env` adds to or overrides them.
+      const env: Record<string, string> = { PORT: vars.PORT!, BASE_URL: baseUrl, ...stateEnv };
       for (const [key, value] of Object.entries(this.project.config.app.env)) env[key] = expandVars(value, scope);
 
       const appLog = join(logDir, "app.log");
@@ -218,21 +277,25 @@ export class Branches {
       // Lets `windtunnel clean` find this process and database if we crash.
       const pidFile = join(this.project.stateDir, "pids", `${id}.json`);
       await mkdir(join(this.project.stateDir, "pids"), { recursive: true });
-      await writeFile(pidFile, JSON.stringify({ pid: service.pid, database: dbName, port, startedAt: new Date().toISOString() }));
+      const dbName = database?.kind === "postgres" ? database.name : undefined;
+      await writeFile(pidFile, JSON.stringify({ pid: service.pid, database: dbName, dataDir, port, startedAt: new Date().toISOString() }));
       cleanup.push(() => rm(pidFile, { force: true }));
 
-      await waitForReady(`${baseUrl}${this.project.config.app.ready}`, service, this.project.config.app.readyTimeoutMs, appLog);
+      await waitForReady(`${appUrl}${this.project.config.app.ready}`, service, this.project.config.app.readyTimeoutMs, appLog);
 
       const branch: Branch = new Branch({
         id,
         version,
         baseUrl,
+        appUrl,
         port,
-        database: { name: dbName, url: dbUrl },
+        database,
+        dataDir,
         logDir,
         service,
         payments,
         sql,
+        proxy,
         teardown: async () => {
           this.live.delete(branch);
           await teardown();
@@ -265,7 +328,8 @@ export class Branches {
       if (inUse.has(id) || Date.now() - lastUsed < idleMs || (await this.versions.isBusy(id))) continue;
       try {
         await this.versions.remove(id);
-        await this.pg.drop(this.snapshotName(id));
+        await this.pg?.drop(this.snapshotName(id));
+        await rm(this.sqliteSnapshot(id), { force: true });
         removed.push(id);
       } catch {
         // Another process may be pruning the same version.
@@ -279,7 +343,94 @@ export class Branches {
     await Promise.allSettled([...this.live].map((b) => b.stop()));
     if (this.mockPay) await (await this.mockPay).close();
     if (this.sqlProxy) await (await this.sqlProxy)?.close();
-    await this.pg.close();
+    await this.pg?.close();
+  }
+
+  /** Where the run's files go: `<cache>/data/<id>`, removed with the branch unless kept. */
+  dataDirFor(id: string): string {
+    return join(this.project.cacheDir, "data", id);
+  }
+
+  /** A new data folder and a copy of the version's seed database for one run or seed check. */
+  private async freshState(
+    versionId: string,
+    id: string,
+    keep: boolean,
+  ): Promise<{ database?: Database; dataDir: string; drop: () => Promise<void> }> {
+    const dataDir = this.dataDirFor(id);
+    await mkdir(dataDir, { recursive: true });
+    const undo: (() => Promise<unknown>)[] = [];
+    if (!keep) undo.push(() => rm(dataDir, { recursive: true, force: true }));
+    const drop = async () => {
+      for (const fn of undo.reverse()) await fn().catch(() => undefined);
+    };
+    const db = this.project.config.db;
+    let database: Database | undefined;
+    try {
+      if (db?.kind === "postgres") {
+        const name = `${this.dbPrefix}run_${id}`;
+        const url = await this.pg!.clone(this.snapshotName(versionId), name);
+        if (!keep) undo.push(() => this.pg!.drop(name));
+        database = { kind: "postgres", name, url };
+      } else if (db?.kind === "sqlite") {
+        const copy = this.sqliteDatabase(dataDir, this.sqliteSnapshot(versionId));
+        await mkdir(dirname(copy.path), { recursive: true });
+        await copyFile(copy.seed, copy.path);
+        database = copy;
+      }
+    } catch (err) {
+      await drop();
+      throw err;
+    }
+    return { database, dataDir, drop };
+  }
+
+  private sqliteDatabase(dataDir: string, seed: string): Database & { kind: "sqlite" } {
+    const db = this.project.config.db;
+    if (db?.kind !== "sqlite") throw new Error("the app's database is not SQLite");
+    return { kind: "sqlite", path: join(dataDir, db.file), seed };
+  }
+
+  /** The variables that point a process at a run's state. `postgresUrl` overrides the URL the app gets (the SQL proxy). */
+  private stateEnv(dataDir: string, database: Database | undefined, postgresUrl?: string): Record<string, string> {
+    return {
+      DATA_DIR: dataDir,
+      ...databaseEnv(database, postgresUrl),
+      ...(this.project.config.app.isolateHome ? { HOME: dataDir } : {}),
+    };
+  }
+
+  /**
+   * Builds a version's SQLite snapshot once: the seed runs in a new data folder, then the
+   * file is checkpointed and moved into place, so a half-built snapshot is never used.
+   */
+  private ensureSqliteSnapshot(versionId: string, build: (dataDir: string) => Promise<void>): Promise<void> {
+    let pending = this.sqliteBuilds.get(versionId);
+    if (!pending) {
+      pending = (async () => {
+        const target = this.sqliteSnapshot(versionId);
+        if (await exists(target)) return;
+        const dataDir = join(this.project.cacheDir, "sqlite", `${versionId}.build-${newBranchId()}`);
+        await mkdir(dataDir, { recursive: true });
+        try {
+          await build(dataDir);
+          const { path } = this.sqliteDatabase(dataDir, "");
+          if (!(await exists(path))) throw new Error(`the seed command did not create the database at $DATABASE_PATH (${path})`);
+          // Writes still in a write-ahead log go into the file, which is copied alone.
+          const conn = await openSqlite(path);
+          try {
+            conn.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+          } finally {
+            conn.close();
+          }
+          await rename(path, target);
+        } finally {
+          await rm(dataDir, { recursive: true, force: true });
+        }
+      })().finally(() => this.sqliteBuilds.delete(versionId));
+      this.sqliteBuilds.set(versionId, pending);
+    }
+    return pending;
   }
 
   private startMockPay(): Promise<MockPay> {
@@ -289,7 +440,9 @@ export class Branches {
 
   /** One proxy for every branch; off when disabled in the config or the server needs TLS. */
   private startSqlProxy(): Promise<SqlProxy | undefined> {
-    const { url, sqlLog } = this.project.config.db;
+    const db = this.project.config.db;
+    if (db?.kind !== "postgres") return Promise.resolve(undefined);
+    const { url, sqlLog } = db;
     const u = new URL(url);
     const tls = /^(require|verify-ca|verify-full)$/.test(u.searchParams.get("sslmode") ?? "") || u.searchParams.get("ssl") === "true";
     if (!sqlLog || tls) return Promise.resolve(undefined);

@@ -65,6 +65,48 @@ export async function sh(command: string, options: RunOptions): Promise<RunResul
   return result;
 }
 
+export interface ScriptResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+  timedOut: boolean;
+}
+
+/** Runs a shell command with `input` on stdin, keeping stdout and stderr apart. Never throws on the exit code. */
+export async function runScript(
+  command: string,
+  options: Omit<RunOptions, "logFile"> & { input?: string },
+): Promise<ScriptResult> {
+  const child = spawn(command, {
+    cwd: options.cwd,
+    env: { ...process.env, ...options.env },
+    shell: true,
+    stdio: ["pipe", "pipe", "pipe"],
+    detached: process.platform !== "win32",
+  });
+  const out: Buffer[] = [];
+  const err: Buffer[] = [];
+  child.stdout!.on("data", (d: Buffer) => out.push(d));
+  child.stderr!.on("data", (d: Buffer) => err.push(d));
+  // A command that never reads its input closes the pipe early.
+  child.stdin!.on("error", () => undefined);
+  child.stdin!.end(options.input ?? "");
+  let timedOut = false;
+  const timer = options.timeoutMs
+    ? setTimeout(() => {
+        timedOut = true;
+        killTree(child, "SIGKILL");
+      }, options.timeoutMs).unref()
+    : undefined;
+  const code = await new Promise<number>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", (c, signal) => resolve(c ?? (signal ? 128 : 1)));
+  }).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+  return { code, stdout: Buffer.concat(out).toString("utf8"), stderr: Buffer.concat(err).toString("utf8"), timedOut };
+}
+
 /** A long-running process (an app server) whose whole process tree can be stopped. */
 export class Service {
   readonly command: string;

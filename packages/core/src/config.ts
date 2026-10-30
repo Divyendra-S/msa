@@ -4,7 +4,12 @@ import { z } from "zod";
 
 export const CONFIG_FILE = "windtunnel.config.yaml";
 
+/** What kind of app this is. Only `web` runs today; the others are planned (platforms-plan.md). */
+export const APP_KINDS = ["web", "tauri", "android", "ios", "mac"] as const;
+export type AppKind = (typeof APP_KINDS)[number];
+
 const AppSchema = z.object({
+  kind: z.enum(APP_KINDS).default("web"),
   /** Installs dependencies in a fresh worktree. Detected from the lockfile when omitted. */
   install: z.string().optional(),
   build: z.string().optional(),
@@ -17,9 +22,14 @@ const AppSchema = z.object({
   /** The project's own tests, part of a proof's regression set. Run in each version's worktree with $DATABASE_URL on a fresh seed copy. */
   test: z.string().optional(),
   testTimeoutMs: z.number().int().positive().default(600_000),
+  /**
+   * Point $HOME at the run's own data folder ($DATA_DIR), for apps that keep files under the
+   * user's home (`~/Library/Application Support/<id>`). Every run starts with it empty.
+   */
+  isolateHome: z.boolean().default(false),
 });
 
-const DbSchema = z.object({
+const PostgresSchema = z.object({
   kind: z.literal("postgres"),
   /** Any URL on the Postgres server to use. Wind Tunnel creates its own databases there. */
   url: z.string(),
@@ -28,6 +38,22 @@ const DbSchema = z.object({
   /** Log the app's SQL through a local proxy, for the trace chain (off for servers that need TLS). */
   sqlLog: z.boolean().default(true),
 });
+
+const SqliteSchema = z.object({
+  kind: z.literal("sqlite"),
+  /**
+   * The database file, relative to the run's data folder ($DATA_DIR). The app gets its full
+   * path as $DATABASE_PATH (and `file:<path>` as $DATABASE_URL).
+   */
+  file: z
+    .string()
+    .default("app.db")
+    .refine((f) => !f.startsWith("/") && !f.split("/").includes(".."), "a path inside the data folder, without .."),
+  /** Creates schema and seed data in $DATABASE_PATH. Runs once per code version to build the snapshot. */
+  seed: z.string(),
+});
+
+const DbSchema = z.discriminatedUnion("kind", [PostgresSchema, SqliteSchema]);
 
 const MockPaySchema = z.object({
   webhookPath: z.string(),
@@ -82,7 +108,8 @@ const HuntSchema = z.object({
 
 export const ConfigSchema = z.object({
   app: AppSchema,
-  db: DbSchema,
+  /** Optional: an app without a database is checked by `check:` rules and what users saw. */
+  db: DbSchema.optional(),
   mockPay: MockPaySchema.optional(),
   users: z.record(z.string(), UserSchema).default({}),
   parallel: z.number().int().min(1).max(32).default(4),

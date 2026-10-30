@@ -1,10 +1,32 @@
 # Wind Tunnel beyond web apps — Plan
 
-Last updated 2026-10-30. **Status: Phase 1 is next; nothing started.**
+Last updated 2026-10-30. **Status: Phase 1 done and pushed. Phase 2 (Tauri) is in progress.**
 
 Today Wind Tunnel tests Next.js + Postgres web apps. This plan adds Tauri apps, Android and iOS
 apps on an emulator or simulator, and native Swift Mac apps, all running in the background: no
 window on screen, no mouse or keyboard taken.
+
+## Progress
+
+| Phase | State |
+|---|---|
+| 1 Groundwork | Done, pushed |
+| 2 Tauri | In progress |
+| 3 Android | Not started |
+| 4 iOS | Not started |
+| 5 Swift Mac apps | Not started |
+
+What Phase 1 changed, for anyone using Wind Tunnel today:
+
+- Web apps run exactly as before; `windtunnel run --seam proxy` (or `WINDTUNNEL_SEAM=proxy`)
+  sends the browser through an HTTP proxy instead of Playwright's routes, with the same
+  verdicts on the whole Bug Zoo.
+- Every run has its own empty data folder, `$DATA_DIR`; `app.isolateHome: true` makes it `$HOME`
+  too.
+- The database can be SQLite (`db.kind: sqlite`), or there can be none.
+- Rules can be SQL on SQLite, SQL on what users got and saw (with no database), or a `check:`
+  command that prints the broken rows as JSON lines.
+- `app.kind` names the kind of app; only `web` runs until its phase is done.
 
 ## The idea
 
@@ -49,25 +71,59 @@ The code reader (Map, `windtunnel scan`, the agent's hints) also needs one reade
 
 Separate the four parts. No new platform yet; web runs the same.
 
-- [ ] **Seam:** split `network.ts` into the logic (request patterns, perturbations and their
+- [x] **Seam:** split `network.ts` into the logic (request patterns, perturbations and their
   counts, the race barrier and release order, the request log) and a transport that carries
   one call: forward it, answer it, fail it, drop the answer, send it twice, hold it. The
   Playwright route becomes the first transport.
-- [ ] **HTTP proxy transport:** a reverse proxy in front of a run's server, one port per tab or
+  Done: `runner/network.ts` (the logic and the `Call` interface: `send`, `answer`, `fulfill`,
+  `drop`, `pass`), `runner/route.ts` (Playwright routes).
+- [x] **HTTP proxy transport:** a reverse proxy in front of a run's server, one port per tab or
   device so it knows who sent what. Checked by running zoo/shop's experiments with the browser
   going through the proxy instead of the route: the same verdicts.
-- [ ] **Driver:** what the runner does with a `Tab` goes through one interface: do an action, read
+  Done: `runner/proxy.ts`, one per branch (`branches.create(…, { proxy: true })`); `$BASE_URL`
+  is the proxy. A call names its tab in `x-windtunnel-tab` (the browser sets it per page;
+  a phone will get its own port instead). Answers close the connection, so a dropped call is
+  never on a reused one the client would retry. `windtunnel run --seam proxy` or
+  `WINDTUNNEL_SEAM=proxy`.
+- [x] **Driver:** what the runner does with a `Tab` goes through one interface: do an action, read
   what's on screen, take a screenshot, open, close. Playwright is the first driver.
-- [ ] **Fresh state:** besides the Postgres copy, a data folder per run (`HOME` pointed at it),
+  Done: `runner/driver.ts` (sessions and tabs), `runner/playwright-driver.ts`. Flows still get
+  a Playwright `page`; phones add their own surface in Phase 3.
+- [x] **Fresh state:** besides the Postgres copy, a data folder per run (`HOME` pointed at it),
   and a SQLite file copied per run from a snapshot built once per code version.
-- [ ] **Rules:** SQL rules run on SQLite too; `check:` rules run a script that prints the broken
+  Done: `$DATA_DIR` for every run, `app.isolateHome: true` for `HOME`; `db.kind: sqlite` with
+  `db.file` inside the folder.
+- [x] **Rules:** SQL rules run on SQLite too; `check:` rules run a script that prints the broken
   rows as JSON lines (for files and media).
-- [ ] **Config:** `app.kind: web | tauri | android | ios | mac`, default `web`; `db` becomes
-  optional so an app can have no Postgres.
+  Done: SQLite read-only with the seed attached as `windtunnel_seed`; without a database, SQL
+  rules on the run facts in memory; `check:` gets the facts on stdin. Database diff and the
+  map's schema read SQLite too.
+- [x] **Config:** `app.kind: web | tauri | android | ios | mac`, default `web`; `db` becomes
+  optional so an app can have no Postgres. Other kinds are refused by `run` until their phase.
 
-**Done when:** `pnpm typecheck` and `pnpm test` pass, `pnpm zoo:verify` gives the same results,
-the zoo/shop experiments give the same verdicts through the proxy, and there are tests for the
-seam logic with a fake transport, a SQLite rule and a `check:` rule.
+**Done when:**
+
+- [x] `pnpm typecheck` and `pnpm test` pass: 133 tests, 0 failing.
+- [x] `pnpm zoo:verify` gives the same results: PASS through the route (840 runs in 622 s).
+  The clean shop and the controls pass every experiment; each case breaks its rules in every run.
+- [x] The zoo/shop experiments give the same verdicts through the proxy:
+  `WINDTUNNEL_SEAM=proxy pnpm zoo:verify` PASS, 840 runs in 611 s (622 s through the route),
+  and its table of results is identical to the route's, line for line.
+- [x] Tests for the seam logic with a fake transport, a SQLite rule and a `check:` rule:
+  `network.test.ts` (fake transport), `proxy.test.ts` (against a real server), `rules.test.ts`
+  (SQLite, facts only, `check:`), `sqlite-runner.test.ts` (an app on SQLite with no Postgres,
+  through both seams). `runner.test.ts` also runs its 23 experiments through both seams: the
+  same verdicts.
+- [x] A Replay screenshot of a run that went through the proxy: the Mac app's Replay pane on
+  zoo/shop after the proxy `zoo:verify` (`checkout-back-resubmit`, `"seam": "proxy"` in its
+  `result.json`), every step with its screenshot and its requests under the right tab.
+- [x] Docs: README (data folder, SQLite, `app.kind`), `docs/experiments.md` (SQLite and `check:`
+  rules, `--seam`), the init skill, `activity.md`.
+- [x] The owner says "push".
+
+Found on the way: without `Connection: close` on the proxy's answers, Chromium silently sent a
+"lost" request again on its reused connection (3 sends instead of 2), which would have turned
+`lose-response` into `duplicate`. Every answer now closes its connection.
 
 ## Phase 2 — Tauri
 

@@ -73,7 +73,11 @@ export class Decider {
       threshold: decider.confidence,
       budgetUsd: budget.usd,
       meter,
-      secrets: [...Object.values(users).map((u) => u.password), db.url, ...[spark, jev].filter((k): k is string => !!k)],
+      secrets: [
+        ...Object.values(users).map((u) => u.password),
+        ...(db?.kind === "postgres" ? [db.url] : []),
+        ...[spark, jev].filter((k): k is string => !!k),
+      ],
     });
   }
 

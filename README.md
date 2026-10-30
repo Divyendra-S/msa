@@ -125,6 +125,23 @@ pnpm wt --cwd zoo/shop clean [--all] # leftover processes and run databases (--a
 Worktrees live outside the repo in `~/.cache/windtunnel/` (override with
 `WINDTUNNEL_CACHE_DIR`); the 10 most recently used versions are kept.
 
+Each branch also gets its own empty data folder (`$DATA_DIR`), removed when it stops. The
+database can instead be SQLite, a file in that folder copied per run from a snapshot built
+once per code version; or there can be none:
+
+```yaml
+app:
+  start: node server.js
+  isolateHome: true        # $HOME is the data folder too, for apps that keep files in ~
+db:
+  kind: sqlite
+  file: data/app.db        # inside $DATA_DIR; the app gets $DATABASE_PATH (and file:… as $DATABASE_URL)
+  seed: node scripts/seed.js
+```
+
+`app.kind` is `web` (the default). `tauri`, `android`, `ios` and `mac` are planned; see
+[`platforms-plan.md`](platforms-plan.md).
+
 ## Experiments
 
 An experiment is a flow (a Playwright script split into named steps) plus perturbations,

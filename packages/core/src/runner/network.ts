@@ -1,11 +1,22 @@
-import type { BrowserContext, Page, Request, Route } from "playwright";
 import type { NetworkPerturbation, RaceOrder, RaceSpec } from "./experiment.ts";
 import { matchesRequest, parseRequestPattern, type RequestPattern } from "./match.ts";
 import { sleep, within } from "./time.ts";
 
+/** Clients whose calls count together when a step waits for quiet: a browser context, a phone. */
+export interface Group {
+  busy: number;
+  parked: number;
+}
+
+export function newGroup(): Group {
+  return { busy: 0, parked: 0 };
+}
+
 /** What a tab exposes to the network layer. */
 export interface NetworkTab {
   label: string;
+  /** Where its calls count as in flight. */
+  readonly group: Group;
   /** The step running in this tab, if any. Requests are attributed to it. */
   readonly stepName: string | undefined;
   /** True once when the current step has "refresh during" armed. */
@@ -44,40 +55,39 @@ export interface RaceRecord {
   timedOut: boolean;
 }
 
-/** Sends `request` again with `user`'s session after the app answered `original`. */
-export type Replayer = (user: string, request: Request, original: RequestRecord) => Promise<RequestRecord>;
-
-/** Requests that make up "network activity" for step timing and the request log. */
-const TRACKED_TYPES = new Set(["document", "fetch", "xhr"]);
-
-/** Link prefetches are background noise: not logged, and steps don't wait for them. */
-function isPrefetch(request: Request): boolean {
-  const headers = request.headers();
-  return (
-    "next-router-prefetch" in headers ||
-    headers["sec-purpose"]?.includes("prefetch") === true ||
-    headers.purpose === "prefetch"
-  );
+/** The app's answer to a call, as its transport keeps it; only the status is shared. */
+export interface Answer {
+  readonly status: number;
 }
 
-function tracked(request: Request): boolean {
-  return TRACKED_TYPES.has(request.resourceType()) && !isPrefetch(request);
-}
-function pageOf(request: Request): Page | undefined {
-  try {
-    return request.frame().page();
-  } catch {
-    return undefined; // service worker requests have no frame
-  }
+/**
+ * One call caught at the seam, carried by its transport: a browser route, a proxied HTTP
+ * request, an `invoke` in a Tauri page. The network layer decides what happens to it; the
+ * transport knows how.
+ */
+export interface Call {
+  readonly method: string;
+  /** Absolute URL. */
+  readonly url: string;
+  /** As the client sent them, lower-case names. */
+  readonly headers: Record<string, string>;
+  readonly body?: Buffer;
+  /** A page load or an API call, as opposed to a script, stylesheet or image. */
+  readonly tracked: boolean;
+  /** Sends the call to the app and resolves with its whole answer; the client hasn't seen it yet. */
+  send(): Promise<Answer>;
+  /** Gives the client an answer from `send()`. */
+  answer(answer: Answer): Promise<void>;
+  /** Gives the client an answer the harness made up. */
+  fulfill(status: number, body: string): Promise<void>;
+  /** The client sees a network error instead of an answer. `abandoned`: it has stopped waiting (the page reloaded). */
+  drop(options?: { abandoned?: boolean }): Promise<void>;
+  /** Lets the call through untouched. */
+  pass(): Promise<void>;
 }
 
-const LOST_RESPONSE = "connectionreset";
-const DROPPED = "canceled by the browser (page navigated away)";
-
-interface ContextState {
-  busy: number;
-  parked: number;
-}
+/** Sends a call again with `user`'s session after the app answered `original`. */
+export type Replayer = (user: string, call: Call, original: RequestRecord) => Promise<RequestRecord>;
 
 interface ActivePerturbation {
   spec: NetworkPerturbation;
@@ -87,19 +97,18 @@ interface ActivePerturbation {
 }
 
 interface Parked {
-  route: Route;
-  request: Request;
+  call: Call;
   tab: NetworkTab;
   record: RequestRecord;
   arrival: number;
-  state: ContextState;
+  group?: Group;
   done: () => void;
 }
 
 /**
- * Per-run network control for every browser context: logs requests, tracks
- * in-flight work for step timing, applies network perturbations and holds race
- * requests at a barrier.
+ * Per-run network control, whatever carries the calls: logs requests, tracks in-flight work
+ * for step timing, applies network perturbations and holds race requests at a barrier.
+ * Transports log calls (`record`, `opened`, `settle`) and hand the ones they catch to `handle`.
  */
 export class Network {
   readonly log: RequestRecord[] = [];
@@ -107,31 +116,29 @@ export class Network {
   /** Set while a step has "refresh during" armed, so every request is routed. */
   refreshArmed = false;
   private readonly t0: number;
-  private readonly tabOf: (page: Page) => NetworkTab | undefined;
+  /** Who gets answers, in harness notes: `browser`, `app`. */
+  private readonly client: string;
   private readonly perturbations: ActivePerturbation[];
   private readonly raceSpec?: RaceSpec & { pattern: RequestPattern; count: number; order: RaceOrder };
   private readonly parked: Parked[] = [];
   private raceReleased = false;
   private raceTimer?: NodeJS.Timeout;
   private arrivals = 0;
-  private readonly records = new WeakMap<Request, RequestRecord>();
-  private readonly states = new Map<BrowserContext, ContextState>();
-  /** In-flight requests and the context they count against. */
-  private readonly open = new WeakMap<Request, ContextState>();
-  private readonly openByPage = new Map<Page, Set<Request>>();
+  /** In-flight requests and the group they count against. */
+  private readonly open = new Map<RequestRecord, Group>();
   private readonly work = new Set<Promise<unknown>>();
   private readonly replay?: Replayer;
 
   constructor(options: {
     t0: number;
-    tabOf: (page: Page) => NetworkTab | undefined;
     perturbations: NetworkPerturbation[];
     race?: RaceSpec & { count: number; order: RaceOrder };
     /** Sends a request again as another user (`replay-as`). */
     replay?: Replayer;
+    client?: string;
   }) {
     this.t0 = options.t0;
-    this.tabOf = options.tabOf;
+    this.client = options.client ?? "browser";
     this.replay = options.replay;
     this.perturbations = options.perturbations.map((spec) => ({
       spec,
@@ -142,52 +149,56 @@ export class Network {
     if (options.race) this.raceSpec = { ...options.race, pattern: parseRequestPattern(options.race.request) };
   }
 
-  async attach(context: BrowserContext): Promise<void> {
-    const state: ContextState = { busy: 0, parked: 0 };
-    this.states.set(context, state);
-    context.on("request", (request) => {
-      if (!tracked(request)) return;
-      const page = pageOf(request);
-      // A new document: the browser may never report on requests the old one left open.
-      if (page && request.isNavigationRequest() && request.frame() === page.mainFrame()) this.orphan(page);
-      state.busy += 1;
-      this.open.set(request, state);
-      if (page) {
-        let set = this.openByPage.get(page);
-        if (!set) this.openByPage.set(page, (set = new Set()));
-        set.add(request);
-      }
-      this.recordFor(request);
-    });
-    context.on("response", (response) => {
-      const record = this.records.get(response.request());
-      if (record) record.response ??= this.now();
-    });
-    context.on("requestfinished", (request) => {
-      const record = this.settle(request);
-      if (record) void request.response().then((r) => (record.status = r?.status()), () => undefined);
-    });
-    context.on("requestfailed", (request) => {
-      const record = this.settle(request, request.failure()?.errorText ?? "failed");
-      // The app may have answered before the browser gave up (e.g. a 500, then a navigation).
-      if (record) void within(request.response(), 300).then((r) => r && (record.status = r.status()), () => undefined);
-    });
-
-    const patterns = [...this.perturbations.map((p) => p.pattern), ...(this.raceSpec ? [this.raceSpec.pattern] : [])];
-    await context.route(
-      (url) => this.refreshArmed || patterns.some((p) => p.path.test(url.pathname)),
-      (route, request) => this.track(this.handle(route, request, state)),
+  /** Whether calls to this URL may need the harness (a transport can let the rest through unseen). */
+  wants(url: URL): boolean {
+    return (
+      this.refreshArmed ||
+      this.perturbations.some((p) => p.pattern.path.test(url.pathname)) ||
+      (!!this.raceSpec && this.raceSpec.pattern.path.test(url.pathname))
     );
   }
 
-  /** Waits until a context has no unfinished requests (held race requests excepted) for `windowMs`. */
-  async quiet(context: BrowserContext, windowMs = 75, maxMs = 15_000): Promise<boolean> {
-    const state = this.states.get(context);
-    if (!state) return true;
+  /** Logs a call; `start` defaults to now. */
+  record(fields: Omit<RequestRecord, "id" | "start"> & { start?: number }): RequestRecord {
+    const record: RequestRecord = { id: this.log.length + 1, ...fields, start: fields.start ?? this.now() };
+    this.log.push(record);
+    return record;
+  }
+
+  /** The call is in flight: steps in its group wait for it. */
+  opened(record: RequestRecord, group: Group): void {
+    if (this.open.has(record)) return;
+    group.busy += 1;
+    this.open.set(record, group);
+  }
+
+  /** Marks a call finished, once; false when it already was (or was never opened). */
+  settle(record: RequestRecord, failure?: string): boolean {
+    const group = this.open.get(record);
+    if (!group) return false;
+    this.open.delete(record);
+    group.busy -= 1;
+    record.end = this.now();
+    if (failure) record.failure = failure;
+    return true;
+  }
+
+  isOpen(record: RequestRecord): boolean {
+    return this.open.has(record);
+  }
+
+  /** Held at the race barrier right now. */
+  isHeld(record: RequestRecord): boolean {
+    return this.parked.some((p) => p.record === record);
+  }
+
+  /** Waits until a group has no unfinished requests (held race requests excepted) for `windowMs`. */
+  async quiet(group: Group | undefined, windowMs = 75, maxMs = 15_000): Promise<boolean> {
+    if (!group) return true;
     const deadline = Date.now() + maxMs;
     let since = Date.now();
     while (Date.now() < deadline) {
-      if (state.busy - state.parked > 0) since = Date.now();
+      if (group.busy - group.parked > 0) since = Date.now();
       else if (Date.now() - since >= windowMs) return true;
       await sleep(10);
     }
@@ -203,62 +214,19 @@ export class Network {
     }
   }
 
-  /**
-   * Settles the requests a page left open when it started loading a new document: with the
-   * status if the answer had arrived, otherwise as dropped. Held race requests stay held.
-   */
-  private orphan(page: Page): void {
-    for (const request of this.openByPage.get(page) ?? []) {
-      if (this.parked.some((p) => p.request === request)) continue;
-      void within(request.response(), 300)
-        .catch(() => false as const)
-        .then((response) => {
-          const record = this.settle(request, response ? undefined : DROPPED);
-          if (record && response) record.status = response.status();
-        });
-    }
+  /** Decides what happens to a call from `tab`: a refresh, the race barrier, a perturbation, or nothing. */
+  handle(call: Call, tab: NetworkTab, record: RequestRecord): Promise<void> {
+    return this.track(this.decide(call, tab, record));
   }
 
-  /** Marks a request finished, once. Returns its record the first time. */
-  private settle(request: Request, failure?: string): RequestRecord | undefined {
-    const state = this.open.get(request);
-    if (!state) return undefined;
-    this.open.delete(request);
-    const page = pageOf(request);
-    if (page) this.openByPage.get(page)?.delete(request);
-    state.busy -= 1;
-    const record = this.recordFor(request);
-    record.end = this.now();
-    if (failure) record.failure = failure;
-    return record;
-  }
-
-  /**
-   * Answers or aborts a routed request. If the browser has already dropped it (the
-   * page navigated away), the call succeeds silently and no finished/failed event
-   * ever comes, so a request still open after a grace period is settled here.
-   */
-  private async reply(request: Request, send: () => Promise<void>, graceMs = 2_000): Promise<void> {
-    await send().catch(() => undefined);
-    if (!this.open.has(request)) return;
-    const timer = setTimeout(() => this.settle(request, DROPPED), graceMs);
-    timer.unref();
-  }
-
-  private async handle(route: Route, request: Request, state: ContextState): Promise<void> {
-    const tab = this.tabFor(request);
-    if (!tab) return route.fallback();
-    const record = this.recordFor(request);
-    const method = request.method();
-    const url = request.url();
-
-    if (tracked(request) && tab.takeRefresh()) {
+  private async decide(call: Call, tab: NetworkTab, record: RequestRecord): Promise<void> {
+    if (call.tracked && tab.takeRefresh()) {
       // The server gets the request; the user reloads before the answer arrives.
       note(record, "page refreshed while the app handled this request");
-      const answer = route.fetch({ maxRedirects: 0 }).then((r) => r.body());
+      const answer = call.send();
       void tab.reload();
       await answer.catch(() => undefined);
-      await this.reply(request, () => route.abort(LOST_RESPONSE), 0);
+      await call.drop({ abandoned: true });
       return;
     }
 
@@ -266,15 +234,15 @@ export class Network {
     if (
       race &&
       !this.raceReleased &&
-      matchesRequest(race.pattern, method, url) &&
+      matchesRequest(race.pattern, call.method, call.url) &&
       (!race.step || tab.stepName === race.step)
     ) {
-      return this.park(route, request, tab, record, state);
+      return this.park(call, tab, record);
     }
 
-    const perturbation = this.takePerturbation(method, url, tab);
-    if (perturbation) return this.apply(perturbation, route, request, record);
-    return route.fallback();
+    const perturbation = this.takePerturbation(call.method, call.url, tab);
+    if (perturbation) return this.apply(perturbation, call, record);
+    return call.pass();
   }
 
   /** Network perturbations that never matched a request. */
@@ -296,38 +264,35 @@ export class Network {
   }
 
   /** Applies a perturbation; resolves once the app has answered (or was never asked). */
-  private async apply(p: NetworkPerturbation, route: Route, request: Request, record: RequestRecord): Promise<void> {
+  private async apply(p: NetworkPerturbation, call: Call, record: RequestRecord): Promise<void> {
     switch (p.do) {
       case "delay":
         note(record, `delayed ${p.ms} ms`);
         await sleep(p.ms);
-        record.sent = Date.now() - this.t0;
-        return this.forward(route, request);
+        record.sent = this.now();
+        return this.forward(call);
       case "fail":
         note(record, `answered ${p.status}${p.after ? ` after ${p.after} ms` : ""} by the harness; the app never saw it`);
         record.sent = null;
         if (p.after) await sleep(p.after);
-        return this.reply(request, () =>
-          route.fulfill({ status: p.status, contentType: "text/plain", body: "Service unavailable (injected)" }),
-        );
+        return call.fulfill(p.status, "Service unavailable (injected)");
       case "lose-response": {
-        const response = await route.fetch({ maxRedirects: 0 });
-        await response.body().catch(() => undefined);
+        const answer = await call.send();
         record.response ??= this.now();
-        note(record, `response lost: the app answered ${response.status()}, the browser saw a network error`);
-        return this.reply(request, () => route.abort(LOST_RESPONSE));
+        note(record, `response lost: the app answered ${answer.status}, the ${this.client} saw a network error`);
+        return call.drop();
       }
       case "duplicate": {
-        const [first, second] = await Promise.all([route.fetch({ maxRedirects: 0 }), route.fetch({ maxRedirects: 0 })]);
+        const [first, second] = await Promise.all([call.send(), call.send()]);
         record.response ??= this.now();
-        note(record, `sent to the app twice (${first.status()}, ${second.status()}); the browser got the first answer`);
-        return this.reply(request, () => route.fulfill({ response: first }));
+        note(record, `sent to the app twice (${first.status}, ${second.status}); the ${this.client} got the first answer`);
+        return call.answer(first);
       }
       case "replay-as": {
-        const response = await route.fetch({ maxRedirects: 0 });
+        const answer = await call.send();
         record.response ??= this.now();
-        await this.reply(request, () => route.fulfill({ response }));
-        const replayed = await this.replay?.(p.user, request, record).catch((err: Error) => err);
+        await call.answer(answer);
+        const replayed = await this.replay?.(p.user, call, record).catch((err: Error) => err);
         if (!replayed || replayed instanceof Error) {
           note(record, `could not replay it as ${p.user}${replayed ? `: ${replayed.message.split("\n")[0]}` : ""}`);
         } else {
@@ -338,25 +303,23 @@ export class Network {
     }
   }
 
-  /** Logs a request the harness sent itself, not a page (a replay); returns its record. */
+  /** Logs a request the harness sent itself, not a client (a replay); returns its record. */
   external(fields: Omit<RequestRecord, "id">): RequestRecord {
-    const record: RequestRecord = { id: this.log.length + 1, ...fields };
-    this.log.push(record);
-    return record;
+    return this.record(fields);
   }
 
-  private async forward(route: Route, request: Request): Promise<void> {
-    const response = await route.fetch({ maxRedirects: 0 });
-    await this.reply(request, () => route.fulfill({ response }));
+  private async forward(call: Call): Promise<void> {
+    await call.answer(await call.send());
   }
 
-  private park(route: Route, request: Request, tab: NetworkTab, record: RequestRecord, state: ContextState): Promise<void> {
+  private park(call: Call, tab: NetworkTab, record: RequestRecord): Promise<void> {
     const race = this.raceSpec!;
     const arrival = ++this.arrivals;
     note(record, `held at the race barrier (arrival ${arrival})`);
-    state.parked += 1;
+    const group = this.open.get(record);
+    if (group) group.parked += 1;
     return new Promise<void>((done) => {
-      this.parked.push({ route, request, tab, record, arrival, state, done });
+      this.parked.push({ call, tab, record, arrival, group, done });
       if (this.parked.length === 1) this.raceTimer = setTimeout(() => this.releaseRace(true), race.timeout);
       if (this.parked.length >= race.count) this.releaseRace(false);
     });
@@ -376,17 +339,15 @@ export class Network {
       timedOut,
     };
     const go = async (entry: Parked, position: number) => {
-      entry.state.parked -= 1;
+      if (entry.group) entry.group.parked -= 1;
       note(entry.record, race.order === "together" ? "released with the others" : `released ${ordinal(position)}`);
-      entry.record.sent = Date.now() - this.t0;
+      entry.record.sent = this.now();
       try {
-        const perturbation = this.takePerturbation(entry.request.method(), entry.request.url(), entry.tab);
-        await (perturbation
-          ? this.apply(perturbation, entry.route, entry.request, entry.record)
-          : this.forward(entry.route, entry.request));
+        const perturbation = this.takePerturbation(entry.call.method, entry.call.url, entry.tab);
+        await (perturbation ? this.apply(perturbation, entry.call, entry.record) : this.forward(entry.call));
       } catch (err) {
         note(entry.record, `release failed: ${(err as Error).message.split("\n")[0]}`);
-        await this.reply(entry.request, () => entry.route.abort());
+        await entry.call.drop().catch(() => undefined);
       } finally {
         entry.done();
       }
@@ -399,34 +360,6 @@ export class Network {
     );
   }
 
-  private recordFor(request: Request): RequestRecord {
-    let record = this.records.get(request);
-    if (!record) {
-      const url = new URL(request.url());
-      const tab = this.tabFor(request);
-      record = {
-        id: this.log.length + 1,
-        tab: tab?.label ?? "?",
-        step: tab?.stepName,
-        method: request.method(),
-        url: url.pathname + url.search,
-        type: request.resourceType(),
-        start: this.now(),
-      };
-      this.records.set(request, record);
-      this.log.push(record);
-    }
-    return record;
-  }
-
-  private tabFor(request: Request): NetworkTab | undefined {
-    try {
-      return this.tabOf(request.frame().page());
-    } catch {
-      return undefined;
-    }
-  }
-
   private track<T>(promise: Promise<T>): Promise<T> {
     const tracked = promise.catch(() => undefined);
     this.work.add(tracked);
@@ -434,7 +367,7 @@ export class Network {
     return promise;
   }
 
-  private now(): number {
+  now(): number {
     return Date.now() - this.t0;
   }
 }
@@ -461,3 +394,7 @@ function ordinal(n: number): string {
   return n === 1 ? "first" : n === 2 ? "second" : n === 3 ? "third" : `#${n}`;
 }
 
+/** Link prefetches are background noise: not logged, and steps don't wait for them. */
+export function isPrefetch(headers: Record<string, string | undefined>): boolean {
+  return "next-router-prefetch" in headers || headers["sec-purpose"]?.includes("prefetch") === true || headers.purpose === "prefetch";
+}

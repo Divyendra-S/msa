@@ -8,17 +8,40 @@ file says what happened recently, why, and what to know before changing things.
 
 ## Where things stand (2026-10-30)
 
-- `main` is at `1e2dc2e` (Replay), pushed. Phases 1–7 are done; Phase 8 (submission) is partly
-  done.
-- **Next: [`platforms-plan.md`](platforms-plan.md), Phase 1 (groundwork).** Five phases, one at
-  a time: groundwork, Tauri, Android, iOS, Swift Mac apps. Each phase is checked, shown in a
-  Replay screenshot and pushed before the next starts.
+- `main` has Phases 1–7 done; Phase 8 (submission) is partly done.
+- **[`platforms-plan.md`](platforms-plan.md) Phase 1 (groundwork) is done and pushed**:
+  typecheck, 133 tests, and `zoo:verify` through the route and through the proxy (identical
+  tables) all pass. Phase 2 (Tauri) is in progress. Five phases, one at a time: groundwork,
+  Tauri, Android, iOS, Swift Mac apps.
 - Waiting on the project owner, not on code: the Muse Code install and `pnpm bench check --paid`,
   the npm publish of `windtunnel-cli`, the demo video.
 - Open after that: verify a headless Claude hunt with a real API key; an "Explain with Claude"
   panel; a test-database leak to fix; stretch items S1, S3, S5–S7 in `execution-plan.md`.
 
 ## Recent work, newest first
+
+### Platforms Phase 1: the seam, driver, fresh state and rules work beyond the browser
+
+Web runs the same; these are the parts the Tauri, phone and Mac phases plug into.
+
+- **Seam** (`runner/network.ts`): the logic (patterns, perturbations, the race barrier, the
+  request log, in-flight counts per `Group`) is separate from the transport that carries a
+  call (`Call`: `send`, `answer`, `fulfill`, `drop`, `pass`). Transports: Playwright routes
+  (`runner/route.ts`, the default) and an HTTP reverse proxy (`runner/proxy.ts`).
+- **Proxy**: one per branch when asked (`--seam proxy`, `WINDTUNNEL_SEAM=proxy`); `$BASE_URL`
+  and the browser go through it, webhooks and replays go straight to the app. Tabs are named
+  by an `x-windtunnel-tab` header the driver sets per page. Answers carry `Connection: close`:
+  Chromium silently resends a request whose reused connection resets before any answer, which
+  would turn a lost response into a duplicate.
+- **Driver** (`runner/driver.ts`, `runner/playwright-driver.ts`): `Rep` no longer touches
+  Playwright; sessions and tabs do actions, read the screen, take screenshots.
+- **Fresh state**: every run has `$DATA_DIR` (`<cache>/data/<id>`, removed with the branch);
+  `app.isolateHome` points `HOME` there. `db.kind: sqlite` copies a per-version snapshot
+  (`<cache>/sqlite/<version>.db`) into the folder. `db` is optional.
+- **Rules**: SQLite (read-only, seed attached as `windtunnel_seed`), facts-only SQL without a
+  database, and `check:` commands (`exec.ts` `runScript`). DB diff and the map's schema read
+  SQLite. `app.kind` exists; only `web` runs.
+- Node's `node:sqlite` is used (no new dependency), loaded only for SQLite apps.
 
 ### `1e2dc2e` Mac app: Replay, each experiment's newest run as pages on a board
 

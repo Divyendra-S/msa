@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 import type { Project } from "../project.ts";
-import type { Rule } from "../rules.ts";
+import { type Rule, ruleSource } from "../rules.ts";
 import type { Experiment } from "./experiment.ts";
 import { findFlowFile, LOGIN_FLOW } from "./flows.ts";
 
@@ -16,7 +16,7 @@ export async function experimentInputs(project: Project, experiment: Experiment,
   hash.update(JSON.stringify({ ...experiment, file: undefined }));
   for (const file of await flowFiles(project, experiment)) hash.update(`\0${relative(project.stateDir, file)}\0${await readFile(file, "utf8").catch(() => "")}`);
   const used = experiment.rules === "all" ? rules : rules.filter((r) => experiment.rules.includes(r.id));
-  for (const r of [...used].sort((a, b) => a.id.localeCompare(b.id))) hash.update(`\0rule ${r.id}\0${r.sql}\0${r.expect}`);
+  for (const r of [...used].sort((a, b) => a.id.localeCompare(b.id))) hash.update(`\0rule ${r.id}\0${ruleSource(r)}\0${r.expect}`);
   return hash.digest("hex").slice(0, 16);
 }
 

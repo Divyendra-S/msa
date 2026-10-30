@@ -1,15 +1,17 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import pg from "pg";
 import type { MockEvent, Tenant } from "@windtunnel/mock-pay";
-import type { Browser, BrowserContext, Page, Request } from "playwright";
+import { type Database, runStatement } from "../database.ts";
 import type { FlowContext, TestUser } from "../flow-api.ts";
+import type { Driver, DriverSession, DriverTab, ScreenState } from "./driver.ts";
 import type { BrowserPerturbation, Experiment, RaceOrder, Variant, WebhookSpec } from "./experiment.ts";
 import { isNetworkPerturbation } from "./experiment.ts";
 import type { LoadedFlow } from "./flows.ts";
-import { type ActionCall, describeAction, instrumentPage } from "./instrument.ts";
-import { Network, type RaceRecord, type RequestRecord } from "./network.ts";
-import { type LocatorFailure, locatorFailure, snapshotPage } from "./snapshot.ts";
+import { type ActionCall, describeAction } from "./instrument.ts";
+import { type Call, type Group, Network, newGroup, type RaceRecord, type RequestRecord } from "./network.ts";
+import { pathOf } from "./playwright-driver.ts";
+import type { HttpProxy } from "./proxy.ts";
+import { type LocatorFailure, locatorFailure } from "./snapshot.ts";
 import { writeJson } from "./store.ts";
 import { sleep, within } from "./time.ts";
 
@@ -49,13 +51,7 @@ export interface FlowError {
   snapshot?: string;
 }
 
-export interface PageState {
-  path: string;
-  /** Texts of role="alert" elements. */
-  alerts: string[];
-  /** The start of the visible text. */
-  text: string;
-}
+export type PageState = ScreenState;
 
 export interface ConsoleRecord {
   tab: string;
@@ -77,10 +73,15 @@ export interface WebhookRecord {
 export interface RepInput {
   experiment: Experiment;
   variant: Variant;
-  browser: Browser;
+  driver: Driver;
+  /** Where clients reach the app (the proxy, when there is one). */
   baseUrl: string;
+  /** The app itself, for requests the harness sends (replays). */
+  appUrl: string;
+  /** The seam: the proxy in front of the app, or (without one) the driver's own routes. */
+  proxy?: HttpProxy;
   /** The branch's database, for `sql` perturbations. */
-  databaseUrl?: string;
+  database?: Database;
   tenant?: Tenant;
   flow: LoadedFlow;
   login?: LoadedFlow;
@@ -92,7 +93,9 @@ export interface RepInput {
 
 interface Session {
   user: string;
-  context: BrowserContext;
+  driver: DriverSession;
+  /** Where its tabs' calls count as in flight. */
+  group: Group;
   tabs: Tab[];
   loggedInAs?: string;
   login?: Promise<void>;
@@ -102,9 +105,8 @@ interface Tab {
   label: string;
   user: TestUser;
   session: Session;
-  page: Page;
-  /** The instrumented page the flow sees. */
-  view: Page;
+  driver: DriverTab;
+  readonly group: Group;
   /** Opened by a second-tab perturbation: skips steps until this one. */
   skipUntil?: string;
   isFork: boolean;
@@ -120,8 +122,6 @@ interface Tab {
 type StepInstance = { started: number };
 
 const MAX_CONSOLE = 100;
-/** Page text kept per step. */
-const MAX_SEEN = 2_000;
 
 /** One execution of an experiment's flow(s) against one branch. */
 export class Rep {
@@ -135,14 +135,14 @@ export class Rep {
   readonly t0 = Date.now();
   private readonly sessions = new Map<string, Session>();
   private readonly tabs: Tab[] = [];
-  private readonly tabByPage = new Map<Page, Tab>();
+  private readonly tabByLabel = new Map<string, Tab>();
   private readonly running = new Set<Promise<void>>();
   private readonly active = new Set<StepInstance>();
   private readonly sqlDone = new Set<BrowserPerturbation>();
   private shots = 0;
   private readonly webhooks: WebhookControl;
-  /** Logged-in contexts of users that `replay-as` sends requests as. */
-  private readonly replayers = new Map<string, Promise<BrowserContext>>();
+  /** Logged-in sessions of users that `replay-as` sends requests as. */
+  private readonly replayers = new Map<string, Promise<DriverSession>>();
   private closing = false;
 
   constructor(input: RepInput) {
@@ -151,14 +151,13 @@ export class Rep {
     const race = experiment.race;
     this.network = new Network({
       t0: this.t0,
-      tabOf: (page) => this.tabByPage.get(page),
       perturbations: experiment.perturb.filter(isNetworkPerturbation),
       race: race && {
         ...race,
         count: race.count ?? Math.max(2, input.tabs.length),
         order: (input.variant.order ?? race.order) as RaceOrder,
       },
-      replay: (user, request, original) => this.replayAs(user, request, original),
+      replay: (user, call, original) => this.replayAs(user, call, original),
     });
     this.webhooks = new WebhookControl(input.tenant, experiment.webhooks, this.active, () => {
       // When the earliest request that could have made the charge (not a GET, still waiting) was sent.
@@ -178,13 +177,15 @@ export class Rep {
   /** Runs every tab's flow, then lets held webhooks and requests finish. */
   async execute(): Promise<void> {
     this.webhooks.setup();
+    // Calls from a page that names no tab (a popup the app opened) are logged under "?"; no step waits for them.
+    this.input.proxy?.attach({ network: this.network, tabOf: (label) => this.tabByLabel.get(label), group: newGroup() });
     // Users that requests are replayed as log in before the flows start.
     for (const p of this.input.experiment.perturb) {
       if (p.do === "replay-as") await this.replayer(p.user).catch(() => undefined);
     }
     for (const { label, user } of this.input.tabs) {
       const session = await this.session(user);
-      await this.addTab(session, label, await session.context.newPage(), false);
+      await this.addTab(session, label, false);
     }
     for (const tab of [...this.tabs]) this.runFlow(tab);
     await this.waitForFlows();
@@ -218,21 +219,16 @@ export class Rep {
     return out;
   }
 
-  /** Stops tracing (saving traces when asked) and closes the browser contexts. */
+  /** Stops tracing (saving traces when asked) and closes the sessions. */
   async close(keepTraces: boolean): Promise<string[]> {
     this.closing = true;
+    this.input.proxy?.detach();
     const traces: string[] = [];
     for (const session of this.sessions.values()) {
-      if (this.input.trace !== "off") {
-        const path = keepTraces ? join(this.input.dir, `trace-${session.user}.zip`) : undefined;
-        await session.context.tracing.stop(path ? { path } : undefined).then(
-          () => path && traces.push(path),
-          () => undefined,
-        );
-      }
-      await session.context.close().catch(() => undefined);
+      const path = keepTraces && this.input.trace !== "off" ? join(this.input.dir, `trace-${session.user}.zip`) : undefined;
+      if (await session.driver.close(path)) traces.push(path!);
     }
-    for (const context of this.replayers.values()) await (await context.catch(() => undefined))?.close().catch(() => undefined);
+    for (const replayer of this.replayers.values()) await (await replayer.catch(() => undefined))?.close().catch(() => undefined);
     await Promise.allSettled([...this.running]);
     return traces;
   }
@@ -244,69 +240,65 @@ export class Rep {
   private async session(user: string): Promise<Session> {
     let session = this.sessions.get(user);
     if (session) return session;
-    const { experiment, browser, baseUrl, trace } = this.input;
-    const context = await browser.newContext({
-      baseURL: baseUrl,
-      viewport: { width: 1280, height: 800 },
-      locale: "en-US",
-      timezoneId: "UTC",
-      reducedMotion: "reduce",
-      serviceWorkers: "block",
-    });
-    context.setDefaultTimeout(10_000);
-    context.setDefaultNavigationTimeout(15_000);
-    if (experiment.clock || experiment.perturb.some((p) => p.do === "advance-clock")) {
-      await context.clock.install({ time: experiment.clock ? new Date(experiment.clock) : new Date() });
-    }
-    await this.network.attach(context);
-    if (trace !== "off") await context.tracing.start({ snapshots: true, screenshots: true, title: experiment.id });
-    session = { user, context, tabs: [] };
+    const { experiment, driver, baseUrl, trace, proxy } = this.input;
+    const group = newGroup();
+    const fakeClock = experiment.clock || experiment.perturb.some((p) => p.do === "advance-clock");
+    const tabOf = (label: string) => this.tabByLabel.get(label);
+    session = {
+      user,
+      group,
+      tabs: [],
+      driver: await driver.session(user, {
+        baseUrl,
+        ...(fakeClock ? { clock: experiment.clock ? new Date(experiment.clock) : new Date() } : {}),
+        ...(trace !== "off" ? { trace: experiment.id } : {}),
+        ...(proxy ? { tagTabs: true } : { route: { network: this.network, group, tabOf } }),
+      }),
+    };
     this.sessions.set(user, session);
     return session;
   }
 
-  /** A context logged in as `name`, used only to replay requests; it opens no tab. */
-  private replayer(name: string): Promise<BrowserContext> {
-    let context = this.replayers.get(name);
-    if (!context) {
-      context = this.logInReplayer(name);
-      this.replayers.set(name, context);
+  /** A session logged in as `name`, used only to replay requests: it talks to the app directly and keeps no tab. */
+  private replayer(name: string): Promise<DriverSession> {
+    let replayer = this.replayers.get(name);
+    if (!replayer) {
+      replayer = this.logInReplayer(name);
+      this.replayers.set(name, replayer);
     }
-    return context;
+    return replayer;
   }
 
-  private async logInReplayer(name: string): Promise<BrowserContext> {
-    const { users, login, browser, baseUrl, experiment } = this.input;
+  private async logInReplayer(name: string): Promise<DriverSession> {
+    const { users, login, driver, appUrl, experiment } = this.input;
     const user = users[name];
     if (!user) throw new Error(`unknown user "${name}"`);
     if (!login) throw new Error("add .windtunnel/flows/login.ts to log in");
-    const context = await browser.newContext({ baseURL: baseUrl, locale: "en-US", timezoneId: "UTC", serviceWorkers: "block" });
-    context.setDefaultTimeout(10_000);
-    const page = await context.newPage();
+    const session = await driver.session(`${name} (replay)`, { baseUrl: appUrl });
+    const tab = await session.open(`${name} (replay)`, { onAction: (call) => call.invoke(), onConsole: () => undefined });
     try {
       await login.flow.run({
-        page,
+        ...tab.surface,
         step: (_name, action) => action(),
         login: () => Promise.reject(new Error("login() inside the login flow")),
         user,
         users,
         params: experiment.params,
-        baseUrl,
+        baseUrl: appUrl,
         tab: `${name} (replay)`,
-        clock: page.clock,
       });
     } catch (err) {
-      await context.close().catch(() => undefined);
+      await session.close();
       throw new Error(`could not log in as ${name}: ${firstLine(err)}`);
     } finally {
-      await page.close().catch(() => undefined);
+      await tab.close();
     }
-    return context;
+    return session;
   }
 
   /** Sends a request again with another user's session (`replay-as`) and logs it. */
-  private async replayAs(user: string, request: Request, original: RequestRecord): Promise<RequestRecord> {
-    const context = await this.replayer(user);
+  private async replayAs(user: string, call: Call, original: RequestRecord): Promise<RequestRecord> {
+    const replayer = await this.replayer(user);
     const record = this.network.external({
       tab: `${user} (replay)`,
       user,
@@ -319,19 +311,15 @@ export class Rep {
     });
     try {
       const headers = Object.fromEntries(
-        Object.entries(request.headers()).filter(([name]) => name === "content-type" || name === "accept"),
+        Object.entries(call.headers).filter(([name]) => name === "content-type" || name === "accept"),
       );
-      const response = await context.request.fetch(new URL(original.url, this.input.baseUrl).href, {
+      const response = await replayer.fetch(new URL(original.url, this.input.appUrl).href, {
         method: original.method,
         headers,
-        data: request.postDataBuffer() ?? undefined,
-        maxRedirects: 0,
-        failOnStatusCode: false,
-        timeout: 15_000,
+        body: call.body,
       });
       record.response = this.now();
-      record.status = response.status();
-      await response.body().catch(() => undefined);
+      record.status = response.status;
     } catch (err) {
       record.failure = firstLine(err);
     }
@@ -339,14 +327,14 @@ export class Rep {
     return record;
   }
 
-  private async addTab(session: Session, label: string, page: Page, isFork: boolean, skipUntil?: string): Promise<Tab> {
+  private async addTab(session: Session, label: string, isFork: boolean, skipUntil?: string): Promise<Tab> {
     const user = this.input.users[session.user] ?? { name: session.user, email: "", password: "" };
-    const tab: Tab = {
+    // Registered before its page opens, so its first calls are already its own.
+    const tab = {
       label,
       user,
       session,
-      page,
-      view: page,
+      group: session.group,
       isFork,
       skipUntil,
       get stepName() {
@@ -358,18 +346,15 @@ export class Rep {
         this.current.record.harness = [...(this.current.record.harness ?? []), "page refreshed while a request was in flight"];
         return true;
       },
-      reload: async () => {
-        await page.reload().catch(() => undefined);
-      },
-    };
-    tab.view = instrumentPage(page, (call) => this.onAction(tab, call));
-    page.on("console", (msg) => {
-      if (msg.type() === "error" || msg.type() === "warning") this.log(tab, msg.type(), msg.text());
+      reload: () => tab.driver.reload(),
+    } as Tab;
+    this.tabByLabel.set(label, tab);
+    tab.driver = await session.driver.open(label, {
+      onAction: (call) => this.onAction(tab, call),
+      onConsole: (type, text) => this.log(tab, type, text),
     });
-    page.on("pageerror", (err) => this.log(tab, "pageerror", err.message));
     session.tabs.push(tab);
     this.tabs.push(tab);
-    this.tabByPage.set(page, tab);
     return tab;
   }
 
@@ -400,7 +385,7 @@ export class Rep {
   private contextFor(tab: Tab): FlowContext {
     const { experiment, users, baseUrl } = this.input;
     return {
-      page: tab.view,
+      ...tab.driver.surface,
       step: (name, action) => this.step(tab, name, action),
       login: (user) => this.login(tab, user),
       user: tab.user,
@@ -408,7 +393,6 @@ export class Rep {
       params: experiment.params,
       baseUrl,
       tab: tab.label,
-      clock: tab.page.clock,
     };
   }
 
@@ -418,7 +402,7 @@ export class Rep {
         await this.input.flow.flow.run(this.contextFor(tab));
       } catch (err) {
         if (this.closing) return;
-        const page = await pageState(tab.page);
+        const page = await tab.driver.state();
         const locator = locatorFailure((err as Error)?.message ?? "");
         const snapshot = await this.capture(tab);
         this.errors.push({
@@ -455,8 +439,8 @@ export class Rep {
     const dir = join(this.input.dir, "screens");
     const name = tab.label.replace(/[^\w-]/g, "_");
     await mkdir(dir, { recursive: true });
-    await tab.page.screenshot({ path: join(dir, `${name}.jpg`), type: "jpeg", quality: 60, timeout: 3_000 }).catch(() => undefined);
-    const snapshot = await snapshotPage(tab.page);
+    await tab.driver.screenshot(join(dir, `${name}.jpg`), { quality: 60, timeoutMs: 3_000 });
+    const snapshot = await tab.driver.snapshot();
     if (!snapshot) return undefined;
     await writeJson(join(this.input.dir, `snapshot-${name}.json`), snapshot);
     return `snapshot-${name}.json`;
@@ -467,10 +451,7 @@ export class Rep {
     const name = `step-${String(++this.shots).padStart(2, "0")}-${tab.label.replace(/[^\w-]/g, "_")}.jpg`;
     const dir = join(this.input.dir, "screens");
     await mkdir(dir, { recursive: true });
-    return tab.page.screenshot({ path: join(dir, name), type: "jpeg", quality: 50, timeout: 2_000 }).then(
-      () => name,
-      () => undefined,
-    );
+    return (await tab.driver.screenshot(join(dir, name), { quality: 50, timeoutMs: 2_000 })) ? name : undefined;
   }
 
   private login(tab: Tab, name?: string): Promise<void> {
@@ -519,18 +500,18 @@ export class Rep {
     const notes: string[] = [];
     for (const p of perturbations) {
       if (p.do === "expire-session") {
-        await tab.session.context.clearCookies(p.cookie ? { name: p.cookie } : undefined);
+        await tab.session.driver.expire(p.cookie);
         notes.push(p.cookie ? `cookie ${p.cookie} cleared` : "session cookies cleared");
       } else if (p.do === "advance-clock") {
-        await tab.session.context.clock.fastForward(p.by);
+        await tab.session.driver.advanceClock(p.by);
         notes.push(`clock advanced ${p.by} ms`);
       } else if (p.do === "sql" && !this.sqlDone.has(p)) {
         this.sqlDone.add(p);
-        const rows = await runSql(this.input.databaseUrl, p.sql);
+        const rows = await runStatement(this.input.database, p.sql);
         notes.push(`ran SQL (${rows} row(s)): ${p.sql.replace(/\s+/g, " ").trim()}`);
       } else if (p.do === "second-tab" && !tab.isFork) {
         const fork = await this.fork(tab, name);
-        notes.push(`opened a second tab (${fork.label}) at ${pathOf(tab.page.url())}`);
+        notes.push(`opened a second tab (${fork.label}) at ${pathOf(tab.driver.url())}`);
       }
     }
     let result = await this.attempt(tab, name, undefined, action, {
@@ -547,13 +528,13 @@ export class Rep {
         result = await this.attempt(tab, name, "resubmit", action, {
           notes: ["went back, then did the step again"],
           before: async () => {
-            await tab.page.goBack().catch(() => undefined);
-            await this.network.quiet(tab.session.context);
+            await tab.driver.back();
+            await this.network.quiet(tab.group);
           },
         });
       } else if (p.do === "refresh" && p.when === "after") {
-        await tab.page.reload().catch(() => undefined);
-        await this.network.quiet(tab.session.context);
+        await tab.driver.reload();
+        await this.network.quiet(tab.group);
         const last = this.steps.findLast((s) => s.tab === tab.label && s.step === name);
         if (last) last.harness = [...(last.harness ?? []), "page refreshed after the step"];
       }
@@ -588,8 +569,8 @@ export class Rep {
       record.error = firstLine(err);
       throw err;
     } finally {
-      record.quiet = await this.network.quiet(tab.session.context);
-      const seen = await pageText(tab.page);
+      record.quiet = await this.network.quiet(tab.group);
+      const seen = await tab.driver.seen();
       if (seen) record.seen = seen;
       if (tab.current.refreshPending) {
         record.harness = [...(record.harness ?? []), "refresh: the step sent no request to interrupt"];
@@ -607,13 +588,12 @@ export class Rep {
   /** Opens a second tab of the same session on the current page; it runs the flow from `step` on. */
   private async fork(tab: Tab, step: string): Promise<Tab> {
     const session = tab.session;
-    const page = await session.context.newPage();
     const label = `${session.user}#${session.tabs.length + 1}`;
-    const fork = await this.addTab(session, label, page, true, step);
+    const fork = await this.addTab(session, label, true, step);
     const arrived = new Promise<void>((resolve) => {
       fork.arrive = async () => {
-        await page.goto(tab.page.url()).catch(() => undefined);
-        await this.network.quiet(session.context);
+        await fork.driver.open(tab.driver.url());
+        await this.network.quiet(session.group);
         resolve();
       };
     });
@@ -710,44 +690,3 @@ function firstLine(err: unknown): string {
   return ((err as Error)?.message ?? String(err)).split("\n")[0]!.slice(0, 500);
 }
 
-function pathOf(url: string): string {
-  try {
-    const u = new URL(url);
-    return u.pathname + u.search;
-  } catch {
-    return url;
-  }
-}
-
-/** Runs one statement against the branch's database; returns the affected row count. */
-async function runSql(url: string | undefined, sql: string): Promise<number> {
-  if (!url) throw new Error("sql perturbation: this run has no database");
-  const client = new pg.Client({ connectionString: url, application_name: "windtunnel-perturb" });
-  client.on("error", () => undefined);
-  await client.connect();
-  try {
-    return (await client.query(sql)).rowCount ?? 0;
-  } finally {
-    await client.end();
-  }
-}
-
-/** The page's path and visible text, whitespace collapsed. */
-async function pageText(page: Page): Promise<{ path: string; text: string } | undefined> {
-  if (page.isClosed()) return undefined;
-  const text = await within(page.locator("body").innerText({ timeout: 1_000 }).catch(() => undefined), 1_500);
-  if (typeof text !== "string") return undefined;
-  return { path: pathOf(page.url()), text: text.replace(/\s+/g, " ").trim().slice(0, MAX_SEEN) };
-}
-
-/** Where the page is and what it says, for evidence when a flow fails. */
-async function pageState(page: Page): Promise<PageState | undefined> {
-  try {
-    const path = new URL(page.url()).pathname;
-    const alerts = (await within(page.getByRole("alert").allInnerTexts(), 1_000)) || [];
-    const body = (await within(page.locator("body").innerText({ timeout: 1_000 }), 1_500)) || "";
-    return { path, alerts: alerts.map((a) => a.trim()).filter(Boolean), text: body.replace(/\s+/g, " ").trim().slice(0, 300) };
-  } catch {
-    return undefined;
-  }
-}

@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
   ConfigError,
+  describeDatabase,
   formatProof,
   formatResults,
   formatUsage,
@@ -21,7 +22,7 @@ import {
   formatDecision,
   formatTriage,
   readCrawl,
-  readSchema,
+  seedSchema,
   sortFailures,
 } from "@windtunnel/explorer";
 import { z } from "zod";
@@ -57,7 +58,7 @@ export function createServer(workspace: Workspace): McpServer {
     },
     tool("windtunnel_map", async ({ focus, crawl: fresh }, progress) => {
       const runner = await workspace.open();
-      const schema = await runner.branches.withSeedCopy({}, readSchema).catch(() => undefined);
+      const schema = await runner.branches.withSeedCopy({}, seedSchema).catch(() => undefined);
       const map = await buildAppMap(runner.project, { schema });
       const version = await runner.branches.versions.resolve({});
       let n = 0;
@@ -187,7 +188,7 @@ export function createServer(workspace: Workspace): McpServer {
         `branch    ${branch.id} (stop with action "stop")`,
         `version   ${branch.version.id} (${branch.version.label})`,
         `app       ${branch.baseUrl}`,
-        `database  ${branch.database.url}`,
+        `database  ${describeDatabase(branch.database)}`,
         ...(branch.payments ? [`payments  ${branch.payments.url}`] : []),
         `logs      ${branch.logDir}`,
       ].join("\n");

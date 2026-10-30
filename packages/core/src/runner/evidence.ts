@@ -253,7 +253,7 @@ export async function drillDown(store: RunStore, handle: string, options: Eviden
     else {
       text = [
         `Rule ${id}: ${result.ok ? "held" : result.error ? `error: ${result.error}` : "broken"}${rule?.description ? ` — ${rule.description}` : ""}`,
-        rule && `SQL: ${rule.sql.replace(/\s+/g, " ").trim()}`,
+        rule && (rule.sql !== undefined ? `SQL: ${rule.sql.replace(/\s+/g, " ").trim()}` : `Check: ${rule.check}`),
         ...result.rows.map((r) => `  ${inline(r)}`),
       ].filter(Boolean).join("\n");
     }

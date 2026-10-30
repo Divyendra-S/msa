@@ -13,6 +13,7 @@ const { values, positionals } = parseArgs({
     repeat: { type: "string" },
     trace: { type: "string" },
     headed: { type: "boolean", default: false },
+    seam: { type: "string" },
     limit: { type: "string" },
     json: { type: "boolean", default: false },
     focus: { type: "string" },

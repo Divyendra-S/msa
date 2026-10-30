@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import pg from "pg";
-import { Branches } from "../src/branches/branches.ts";
+import { type Branch, Branches } from "../src/branches/branches.ts";
 import { PgServer } from "../src/branches/postgres.ts";
 import { clean } from "../src/cleanup.ts";
 
@@ -101,14 +101,14 @@ parallel: 2
     const [a, b] = await Promise.all([branches.create(), branches.create()]);
     assert.equal(a.version.id, b.version.id);
     assert.notEqual(a.port, b.port);
-    assert.notEqual(a.database.name, b.database.name);
+    assert.notEqual(postgres(a).name, postgres(b).name);
 
     const first = await get(a.baseUrl);
     assert.equal(first.version, "v1");
     assert.equal(first.items, 2);
     assert.equal(first.payments, a.payments?.url);
 
-    const db = new pg.Client({ connectionString: a.database.url });
+    const db = new pg.Client({ connectionString: postgres(a).url });
     await db.connect();
     await db.query("INSERT INTO items (name) VALUES ('only in a')");
     await db.end();
@@ -126,7 +126,7 @@ parallel: 2
 
     await a.stop();
     const c = await third;
-    assert.equal(await branches.pg.exists(a.database.name), false, "run database dropped");
+    assert.equal(await branches.pg!.exists(postgres(a).name), false, "run database dropped");
     await assert.rejects(fetch(a.baseUrl), "app process stopped");
     await Promise.all([b.stop(), c.stop()]);
   });
@@ -167,14 +167,19 @@ parallel: 2
     const removed = [...first, ...(await branches.prune(1, 0))];
     assert.deepEqual(removed.sort(), before.slice(1).map((v) => v.id).sort());
     assert.deepEqual(await branches.versions.list(), [before[0]!.id]);
-    assert.equal(await branches.pg.exists(branches.snapshotName(removed[0]!)), false);
+    assert.equal(await branches.pg!.exists(branches.snapshotName(removed[0]!)), false);
   });
 
   it("clean --all drops snapshots and worktrees", async () => {
-    assert.ok((await branches.pg.list(`${branches.dbPrefix}seed_`)).length > 0);
+    assert.ok((await branches.pg!.list(`${branches.dbPrefix}seed_`)).length > 0);
     const result = await clean(branches, { all: true });
     assert.equal(result.worktrees, 1);
-    assert.deepEqual(await branches.pg.list(branches.dbPrefix), []);
+    assert.deepEqual(await branches.pg!.list(branches.dbPrefix), []);
     assert.deepEqual(await branches.versions.list(), []);
   });
 });
+
+function postgres(branch: Branch): { name: string; url: string } {
+  assert.equal(branch.database?.kind, "postgres");
+  return branch.database as { name: string; url: string };
+}

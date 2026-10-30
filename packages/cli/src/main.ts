@@ -8,6 +8,7 @@ import {
   type CodeVersionSpec,
   clean,
   ConfigError,
+  describeDatabase,
   formatProof,
   formatResults,
   formatUsage,
@@ -17,6 +18,7 @@ import {
   prove,
   Runner,
   runningViewer,
+  type Seam,
   writeProofBranch,
   stopOnSignals,
   type TraceMode,
@@ -38,7 +40,7 @@ import {
   formatSweep,
   formatTriage,
   readCrawl,
-  readSchema,
+  seedSchema,
   sortFailures,
 } from "@windtunnel/explorer";
 import { findProjectDir, serveStdio, Workspace } from "@windtunnel/mcp";
@@ -56,6 +58,7 @@ export interface Flags {
   repeat?: string;
   trace?: string;
   headed?: boolean;
+  seam?: string;
   limit?: string;
   json?: boolean;
   focus?: string;
@@ -107,10 +110,10 @@ Commands
                       database changes, rules, usage; Run hunt (Muse Code) and Open in Claude Code
   mcp                 MCP server on stdin/stdout for coding agents (Claude Code, Codex, Muse Code)
   skills --out <dir>  Copy the agent skills (init, hunt, prove, test) into <dir>, e.g. .agents/skills
-  doctor              Check Node, git, the config file and Postgres
+  doctor              Check Node, git, the config file and the database
   prepare             Check out, install and build a code version, and seed its snapshot
-  branch              Start an isolated branch (app + database copy) and keep it running
-  clean               Stop leftover app processes and drop run databases
+  branch              Start an isolated branch (app + database copy + data folder) and keep it running
+  clean               Stop leftover app processes, drop run databases and remove data folders
 
 Options
   --cwd <dir>         Project folder (default: current folder)
@@ -121,6 +124,8 @@ Options
   --no-triage         (run) don't sort failures or heal renamed locators in flow files
   --trace <mode>      (run) Playwright traces: failures (default: runs that broke a rule or errored), on, off
   --headed            (run) show the browser
+  --seam <where>      (run) where the browser's calls are caught: route (default: Playwright's routes) or
+                      proxy (an HTTP proxy in front of the app, as for phones and desktop apps)
   --keep-db           (run, branch) keep run databases after stopping
   --limit <n>         (runs) how many to list (default 20)
   --focus <text>      (map) only routes and pages whose path or file contains this
@@ -280,11 +285,13 @@ async function doctor(flags: Flags): Promise<number> {
     checks.push({ name: "config", ok: true, detail: project.configPath });
     checks.push({ name: "git", ok: true, detail: project.repoRoot });
     branches = new Branches(project);
-    checks.push({ name: "postgres", ok: true, detail: `server ${await branches.pg.ping()}` });
+    const db = project.config.db;
+    if (branches.pg) checks.push({ name: "postgres", ok: true, detail: `server ${await branches.pg.ping()}` });
+    else checks.push({ name: "database", ok: true, detail: db ? `sqlite, ${db.kind === "sqlite" ? db.file : ""} in each run's data folder` : "none (db is not set)" });
   } catch (err) {
     checks.push({ name: branches ? "postgres" : "config", ok: false, detail: (err as Error).message });
   } finally {
-    await branches?.pg.close();
+    await branches?.pg?.close();
   }
 
   print(flags, checks, checks.map((c) => `${c.ok ? "ok  " : "FAIL"}  ${c.name.padEnd(9)} ${c.detail}`).join("\n"));
@@ -305,7 +312,7 @@ async function prepare(flags: Flags): Promise<number> {
         `version   ${prepared.version.id} (${prepared.version.label})`,
         `commit    ${prepared.version.commit}`,
         `worktree  ${prepared.worktree}`,
-        `snapshot  ${branches.snapshotName(prepared.version.id)}`,
+        `snapshot  ${seedSnapshot(branches, prepared.version.id)}`,
         `took      ${Date.now() - started} ms`,
       ].join("\n"),
     );
@@ -313,6 +320,14 @@ async function prepare(flags: Flags): Promise<number> {
   } finally {
     await branches.close();
   }
+}
+
+/** The seed snapshot `prepare` built: a template database, a SQLite file, or none. */
+function seedSnapshot(branches: Branches, versionId: string): string {
+  const kind = branches.project.config.db?.kind;
+  if (kind === "postgres") return branches.snapshotName(versionId);
+  if (kind === "sqlite") return branches.sqliteSnapshot(versionId);
+  return "none (no database)";
 }
 
 async function branch(flags: Flags): Promise<number> {
@@ -327,7 +342,9 @@ async function branch(flags: Flags): Promise<number> {
       `branch    ${b.id}`,
       `version   ${b.version.id} (${b.version.label})`,
       `app       ${b.baseUrl}`,
-      `database  ${b.database.url}`,
+      `database  ${describeDatabase(b.database)}`,
+      `data      ${b.dataDir}`,
+      ...(b.proxy ? [`app itself ${b.appUrl}`] : []),
       ...(b.payments ? [`payments  ${b.payments.url}`] : []),
       `logs      ${b.logDir}`,
       `ready in  ${Date.now() - started} ms. Press Ctrl-C to stop.`,
@@ -344,7 +361,7 @@ async function cleanCommand(flags: Flags): Promise<number> {
     print(
       flags,
       result,
-      `stopped ${result.processes} process(es), dropped ${result.databases.length} database(s), removed ${result.worktrees} worktree(s)`,
+      `stopped ${result.processes} process(es), dropped ${result.databases.length} database(s), removed ${result.dataDirs} data folder(s) and ${result.worktrees} worktree(s)`,
     );
     return 0;
   } finally {
@@ -355,6 +372,7 @@ async function cleanCommand(flags: Flags): Promise<number> {
 async function run(ids: string[], flags: Flags): Promise<number> {
   const trace = flags.trace ?? "failures";
   if (!["off", "failures", "on"].includes(trace)) throw new ConfigError(`--trace must be off, failures or on`);
+  if (flags.seam !== undefined && flags.seam !== "route" && flags.seam !== "proxy") throw new ConfigError("--seam must be route or proxy");
   const repeat = flags.repeat === undefined ? undefined : Number(flags.repeat);
   if (repeat !== undefined && !(Number.isInteger(repeat) && repeat >= 1 && repeat <= 100)) {
     throw new ConfigError("--repeat must be a whole number from 1 to 100");
@@ -375,6 +393,7 @@ async function run(ids: string[], flags: Flags): Promise<number> {
       repeat,
       trace: trace as TraceMode,
       headed: flags.headed,
+      ...(flags.seam ? { seam: flags.seam as Seam } : {}),
       keepDatabase: flags["keep-db"],
       onRep: live(flags)
         ? (r) => process.stderr.write(`  ${r.outcome.padEnd(6)} ${r.experiment}${r.variant === "default" ? "" : ` [${r.variant}]`} #${r.rep}  ${r.durationMs} ms\n`)
@@ -469,7 +488,7 @@ async function evidence(args: string[], flags: Flags): Promise<number> {
 async function map(flags: Flags): Promise<number> {
   const branches = await Branches.open(await findProjectDir(flags.cwd ?? process.cwd()));
   try {
-    const schema = flags["no-schema"] ? undefined : await branches.withSeedCopy(await versionSpec(flags), readSchema);
+    const schema = flags["no-schema"] ? undefined : await branches.withSeedCopy(await versionSpec(flags), seedSchema);
     const appMap = await buildAppMap(branches.project, { schema });
     await metered(branches.project.stateDir);
     const version = await branches.versions.resolve(await versionSpec(flags));

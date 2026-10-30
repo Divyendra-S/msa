@@ -40,6 +40,7 @@ Rules for a good config:
 - The seed must be deterministic: same data every time, no random ids or dates that matter.
 - Two users at least, so experiments can test two buyers or another user's data. If the seed has none, propose adding test users to it.
 - Never point `db.url` at a shared or production database. Wind Tunnel creates and drops databases on that server.
+- An app on SQLite: `db: { kind: sqlite, file: app.db, seed: <command> }`. Each run gets its own copy of the seeded file inside its data folder; point the app at `$DATABASE_PATH` (or `$DATABASE_URL`, `file:<path>`) in `app.env`. An app with no database leaves `db` out.
 - If the app calls a payment provider, point its base URL at `$MOCK_PAY_URL` and its webhook secret at `$MOCK_PAY_SECRET` in `app.env`. The mock speaks a Stripe-like API (`POST /v1/charges` with `idempotency-key`, signed webhooks in a `mockpay-signature: t=…,v1=<hmac-sha256 of "t.body">` header). If the app's client can't talk to it, leave `mockPay` out and say so.
 
 Show the user the config and what you assumed in one short message, and ask once before writing it.

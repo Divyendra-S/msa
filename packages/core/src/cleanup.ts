@@ -12,17 +12,19 @@ const execFileAsync = promisify(execFile);
 export interface CleanResult {
   processes: number;
   databases: string[];
+  /** Run data folders removed (kept ones too). */
+  dataDirs: number;
   worktrees: number;
 }
 
 /**
- * Removes what earlier sessions left behind: app processes and run databases.
+ * Removes what earlier sessions left behind: app processes, run databases and data folders.
  * With `all`, also drops seed snapshots and deletes worktrees (forcing rebuilds).
  * Only call this when no other Wind Tunnel session is using the project.
  */
 export async function clean(branches: Branches, options: { all?: boolean } = {}): Promise<CleanResult> {
   const { project, pg } = branches;
-  const result: CleanResult = { processes: 0, databases: [], worktrees: 0 };
+  const result: CleanResult = { processes: 0, databases: [], dataDirs: 0, worktrees: 0 };
 
   const pidsDir = join(project.stateDir, "pids");
   if (await exists(pidsDir)) {
@@ -40,12 +42,21 @@ export async function clean(branches: Branches, options: { all?: boolean } = {})
   }
 
   const prefixes = [`${branches.dbPrefix}run_`, ...(options.all ? [`${branches.dbPrefix}seed_`] : [])];
-  for (const prefix of prefixes) {
-    for (const name of await pg.list(prefix)) {
-      await pg.drop(name);
+  for (const prefix of pg ? prefixes : []) {
+    for (const name of await pg!.list(prefix)) {
+      await pg!.drop(name);
       result.databases.push(name);
     }
   }
+
+  const dataRoot = join(project.cacheDir, "data");
+  if (await exists(dataRoot)) {
+    for (const dir of await readdir(dataRoot)) {
+      await rm(join(dataRoot, dir), { recursive: true, force: true });
+      result.dataDirs += 1;
+    }
+  }
+  if (options.all) await rm(join(project.cacheDir, "sqlite"), { recursive: true, force: true });
 
   if (options.all) result.worktrees = await branches.versions.removeAll();
   return result;

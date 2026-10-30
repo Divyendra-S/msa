@@ -195,6 +195,30 @@ They are temporary tables of the rule check's own session: created only when a r
 them, filled from the run's request log and steps, gone when the check ends. The app's
 database never holds them. On the seed data (`windtunnel validate`) they are empty.
 
+### SQLite, and apps without a database
+
+With `db.kind: sqlite` the same rules run on the run's own copy of the SQLite file, opened
+read-only, with the seed snapshot attached as `windtunnel_seed` (so `windtunnel_seed.products`
+works the same). Write them in SQLite's dialect. An app with no `db` in its config can still
+have SQL rules on `windtunnel_requests` and `windtunnel_pages`: they run in an empty
+in-memory SQLite database.
+
+### Check rules: files, media, anything SQL can't read
+
+```yaml
+every-order-has-its-receipt:
+  description: Each paid order has its own receipt file.
+  check: node .windtunnel/checks/receipts.mjs
+```
+
+A `check:` command prints the rows that break the rule, one JSON object per line, and nothing
+else on stdout (log to stderr). It runs in the app's folder after the flow, with the run's
+`DATA_DIR`, `DATABASE_URL` (and `DATABASE_PATH` for SQLite), `BASE_URL` (the app still
+running), `RUN_DIR` (the run's folder, with its screenshots) and `HOME` when the app gets an
+isolated one. The run facts (`{ requests, pages }`, the rows of the two tables above) come as
+JSON on stdin. Exiting non-zero, printing a line that isn't JSON, or taking over 30 s is a
+rule error, not a broken rule.
+
 Results list anything that never took effect under "not exercised": a network perturbation
 that matched no request, a race that held fewer requests than it waited for, webhooks when
 the app made no payment, out-of-order webhooks with only one event at a time.
@@ -258,6 +282,7 @@ windtunnel run [experiment…]   # all experiments by default
   --trace failures|on|off      # Playwright traces (default: failures)
   --keep-db                    # keep run databases
   --headed                     # show the browser
+  --seam route|proxy           # where the browser's calls are caught (default route; also $WINDTUNNEL_SEAM)
   --json                       # results as JSON
 windtunnel validate [experiment…]  # also runs every rule on the seed data (each must hold there)
 windtunnel affected [experiment…]  # which experiments the working tree's changes affect, and why

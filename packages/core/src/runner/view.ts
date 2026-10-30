@@ -1,6 +1,6 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import type { RuleResult } from "../rules.ts";
+import { type RuleResult, ruleSource } from "../rules.ts";
 import type { DbDiff } from "./db-diff.ts";
 import {
   type EvidenceOptions,
@@ -258,7 +258,7 @@ export async function repView(store: RunStore, id: string, n: number, options: E
     ...(d.warnings?.length ? { warnings: d.warnings } : {}),
     steps: d.steps,
     requests,
-    rules: d.rules.map((r) => ({ ...r, ...(rules.get(r.id)?.description ? { description: rules.get(r.id)!.description } : {}), ...(rules.get(r.id) ? { sql: rules.get(r.id)!.sql.trim() } : {}) })),
+    rules: d.rules.map((r) => ({ ...r, ...(rules.get(r.id)?.description ? { description: rules.get(r.id)!.description } : {}), ...(rules.get(r.id) ? { sql: ruleSource(rules.get(r.id)!).trim() } : {}) })),
     errors: d.errors,
     ...(rep.diff ? { diff: rep.diff } : {}),
     ...(trace ? { trace } : {}),

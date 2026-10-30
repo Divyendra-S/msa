@@ -97,6 +97,8 @@ describe("runner", { skip: !(await pgAvailable()) && "Postgres not reachable (pn
   let cache: string;
   let runner: Runner;
   const results = new Map<string, ExperimentResult>();
+  /** The same experiments with the browser going through the HTTP proxy instead of Playwright's routes. */
+  const proxied = new Map<string, ExperimentResult>();
 
   async function repFile<T>(id: string, file: string, rep = 1): Promise<T> {
     const result = results.get(id);
@@ -126,7 +128,9 @@ describe("runner", { skip: !(await pgAvailable()) && "Postgres not reachable (pn
     process.env.WINDTUNNEL_CACHE_DIR = cache;
 
     runner = await Runner.open(repo);
-    for (const result of await runner.run(await loadExperiments(runner.project))) results.set(result.experiment, result);
+    const experiments = await loadExperiments(runner.project);
+    for (const result of await runner.run(experiments)) results.set(result.experiment, result);
+    for (const result of await runner.run(experiments, { seam: "proxy" })) proxied.set(result.experiment, result);
   });
 
   after(async () => {
@@ -134,6 +138,23 @@ describe("runner", { skip: !(await pgAvailable()) && "Postgres not reachable (pn
     await runner?.close();
     if (!process.env.WT_KEEP) await rm(repo, { recursive: true, force: true });
     await rm(cache, { recursive: true, force: true });
+  });
+
+  it("gives the same verdicts with the browser going through the HTTP proxy", async () => {
+    const differ: string[] = [];
+    for (const [id, route] of results) {
+      const proxy = proxied.get(id)!;
+      const rules = (r: ExperimentResult) => r.reps.map((x) => `${x.variant}:${x.broken.sort().join("+")}`).join(" ");
+      if (proxy.outcome !== route.outcome || rules(proxy) !== rules(route)) {
+        const error = proxy.variants.find((v) => v.firstError)?.firstError?.message;
+        differ.push(`${id}: route ${route.outcome} ${rules(route)}, proxy ${proxy.outcome} ${rules(proxy)}${error ? ` (${error})` : ""}`);
+      }
+    }
+    assert.deepEqual(differ, []);
+    const lost = JSON.parse(await readFile(join(proxied.get("lost-response")!.dir, "reps", "1", "requests.json"), "utf8")) as RequestRecord[];
+    const sends = lost.filter((r) => r.method === "POST" && r.url === "/api/send");
+    assert.equal(sends.length, 2, "the lost call and the user's retry; the browser retried nothing itself");
+    assert.equal(sends[0]!.failure, "connection reset by the harness");
   });
 
   it("runs a flow step by step and records requests and database changes", async () => {
@@ -311,7 +332,7 @@ describe("runner", { skip: !(await pgAvailable()) && "Postgres not reachable (pn
 
   it("keeps a run store with an index", async () => {
     const entries = await runner.store.list(100);
-    assert.equal(entries.length, Object.keys(EXPERIMENTS).length);
+    assert.equal(entries.length, 2 * Object.keys(EXPERIMENTS).length, "each experiment ran with the route and through the proxy");
     const summary = (await runner.store.read(results.get("plain")!.runId)) as ExperimentResult;
     assert.equal(summary.outcome, "pass");
   });

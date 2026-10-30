@@ -4,6 +4,7 @@ import { chromium, type Browser } from "playwright";
 import { type Branch, Branches } from "../branches/branches.ts";
 import type { CodeVersion, CodeVersionSpec } from "../branches/code-versions.ts";
 import { ConfigError } from "../config.ts";
+import type { Database } from "../database.ts";
 import { CommandError, sh } from "../exec.ts";
 import type { TestUser } from "../flow-api.ts";
 import { checkRules, loadRules, type Rule, type RuleResult } from "../rules.ts";
@@ -19,6 +20,7 @@ import {
 } from "./experiment.ts";
 import { findFlowFile, LOGIN_FLOW, type LoadedFlow, loadFlow } from "./flows.ts";
 import { experimentInputs } from "./inputs.ts";
+import { PlaywrightDriver } from "./playwright-driver.ts";
 import { Rep, type TraceMode } from "./rep.ts";
 import { RunStore, writeJson } from "./store.ts";
 
@@ -35,8 +37,15 @@ export interface RunOptions {
   /** Playwright traces (default `failures`: kept for runs that broke a rule or errored). */
   trace?: TraceMode;
   headed?: boolean;
+  /**
+   * Where the harness catches the browser's calls: Playwright's routes (default), or an HTTP
+   * proxy in front of the app, the seam phones and desktop apps use. Default: $WINDTUNNEL_SEAM.
+   */
+  seam?: Seam;
   onRep?: (rep: RepSummary & { experiment: string }) => void;
 }
+
+export type Seam = "route" | "proxy";
 
 export interface RepSummary {
   rep: number;
@@ -122,6 +131,10 @@ export class Runner {
 
   /** Validates experiments against the project; throws a ConfigError listing every problem. */
   async validate(experiments: Experiment[]): Promise<{ rules: Rule[]; warnings: string[] }> {
+    const { kind } = this.project.config.app;
+    if (kind !== "web") {
+      throw new ConfigError(`app.kind ${kind}: only web apps can run experiments so far (the plan for ${kind} apps is in platforms-plan.md)`);
+    }
     const rules = await loadRules(this.project);
     const problems: string[] = [];
     const warnings: string[] = [];
@@ -136,7 +149,9 @@ export class Runner {
 
   /** Runs every rule on a fresh copy of the seed data, where each must hold; returns the problems. */
   async checkRulesOnSeed(rules: Rule[], version: CodeVersionSpec | CodeVersion = {}): Promise<string[]> {
-    const results = await this.branches.withSeedCopy(version, (url) => checkRules(url, rules));
+    const results = await this.branches.withSeedCopy(version, (copy) =>
+      checkRules({ database: copy.database, cwd: this.project.root, env: copy.env }, rules),
+    );
     return results.flatMap((r) =>
       r.error
         ? [`rule ${r.id}: SQL error: ${r.error}`]
@@ -147,8 +162,8 @@ export class Runner {
   }
 
   /**
-   * Runs `app.test` in a version's worktree, with DATABASE_URL on a fresh copy of the seed
-   * so tests never touch a real database. Undefined when the project has no test command.
+   * Runs `app.test` in a version's worktree, with DATABASE_URL on a fresh copy of the seed (and
+   * DATA_DIR on a new folder) so tests never touch real data. Undefined when the project has no test command.
    */
   async runTests(spec: CodeVersionSpec | CodeVersion): Promise<TestRun | undefined> {
     const { test: command, testTimeoutMs } = this.project.config.app;
@@ -157,10 +172,10 @@ export class Runner {
     const version = prepared.version.id;
     const log = join(this.project.stateDir, "logs", "tests", `${version}-${Date.now().toString(36)}.log`);
     const started = Date.now();
-    return this.branches.withSeedCopy(prepared.version, async (url) => {
+    return this.branches.withSeedCopy(prepared.version, async (copy) => {
       let exitCode = 0;
       try {
-        await sh(command, { cwd: prepared.appDir, env: { DATABASE_URL: url, CI: "1" }, logFile: log, timeoutMs: testTimeoutMs });
+        await sh(command, { cwd: prepared.appDir, env: { ...copy.env, CI: "1" }, logFile: log, timeoutMs: testTimeoutMs });
       } catch (err) {
         if (!(err instanceof CommandError)) throw err;
         exitCode = err.result.code;
@@ -180,6 +195,7 @@ export class Runner {
 
   async run(experiments: Experiment[], options: RunOptions = {}): Promise<ExperimentResult[]> {
     const { rules } = await this.validate(experiments);
+    options = { ...options, seam: options.seam ?? seamFromEnv() };
     const spec = options.version ?? {};
     const version = "tree" in spec ? spec : await this.branches.versions.resolve(spec);
     await this.branches.prepare(version);
@@ -270,12 +286,14 @@ export class Runner {
     const dir = this.store.repDir(job.dir, job.rep);
     await mkdir(dir, { recursive: true });
     const trace = job.options.trace ?? "failures";
+    const seam = job.options.seam ?? "route";
     let branch: Branch;
     try {
       branch = await this.branches.create(job.version, {
         logDir: dir,
         keepDatabase: job.options.keepDatabase,
-        beforeStart: async (db) => void (await this.baseline(job.version.id, db.url)),
+        proxy: seam === "proxy",
+        beforeStart: async (db) => void (db && (await this.baseline(job.version.id, db))),
       });
     } catch (err) {
       // One run that can't start must not take the others down with it.
@@ -301,9 +319,11 @@ export class Runner {
       rep = new Rep({
         experiment: job.experiment,
         variant: job.variant,
-        browser: await this.launch(),
+        driver: new PlaywrightDriver(await this.launch()),
         baseUrl: branch.baseUrl,
-        databaseUrl: branch.database.url,
+        appUrl: branch.appUrl,
+        proxy: branch.proxy,
+        database: branch.database,
         tenant: branch.payments?.tenant,
         flow: job.flow,
         login: job.login,
@@ -314,10 +334,22 @@ export class Runner {
       });
       await rep.execute();
 
-      ruleResults = await checkRules(branch.database.url, job.rules, runFacts(rep.requests, rep.steps, this.testUsers()));
-      const diff = diffSnapshots(await this.baseline(job.version.id, branch.database.url), await snapshotDatabase(branch.database.url));
-      diffSummary = diff.summary;
-      await writeJson(`${dir}/db-diff.json`, diff);
+      const target = {
+        database: branch.database,
+        cwd: this.project.root,
+        env: {
+          DATA_DIR: branch.dataDir,
+          BASE_URL: branch.appUrl,
+          RUN_DIR: dir,
+          ...(this.project.config.app.isolateHome ? { HOME: branch.dataDir } : {}),
+        },
+      };
+      ruleResults = await checkRules(target, job.rules, runFacts(rep.requests, rep.steps, this.testUsers()));
+      if (branch.database) {
+        const diff = diffSnapshots(await this.baseline(job.version.id, branch.database), await snapshotDatabase(branch.database));
+        diffSummary = diff.summary;
+        await writeJson(`${dir}/db-diff.json`, diff);
+      }
 
       const broken = ruleResults.filter((r) => !r.ok && !r.error);
       const ruleErrors = ruleResults.filter((r) => r.error);
@@ -349,7 +381,14 @@ export class Runner {
     await writeJson(`${dir}/result.json`, {
       ...summary,
       startedAt: rep ? new Date(rep.t0).toISOString() : undefined,
-      branch: { id: branch.id, port: branch.port, database: branch.database.name, kept: !!job.options.keepDatabase },
+      branch: {
+        id: branch.id,
+        port: branch.port,
+        database: branch.database?.kind === "postgres" ? branch.database.name : branch.database?.path,
+        dataDir: branch.dataDir,
+        kept: !!job.options.keepDatabase,
+        ...(branch.proxy ? { seam: "proxy" } : {}),
+      },
       rules: ruleResults,
       errors: rep?.errors ?? [],
       timedOut: rep?.timedOut ?? false,
@@ -392,10 +431,10 @@ export class Runner {
   }
 
   /** The seed state of a version, read from the first fresh database copy. */
-  private baseline(versionId: string, url: string): Promise<DbSnapshot> {
+  private baseline(versionId: string, db: Database): Promise<DbSnapshot> {
     let snapshot = this.baselines.get(versionId);
     if (!snapshot) {
-      snapshot = snapshotDatabase(url);
+      snapshot = snapshotDatabase(db);
       this.baselines.set(versionId, snapshot);
     }
     return snapshot;
@@ -405,6 +444,13 @@ export class Runner {
     this.browser ??= chromium.launch({ headless: !this.headed });
     return this.browser;
   }
+}
+
+function seamFromEnv(): Seam {
+  const value = process.env.WINDTUNNEL_SEAM;
+  if (value === undefined || value === "" || value === "route") return "route";
+  if (value === "proxy") return "proxy";
+  throw new ConfigError(`WINDTUNNEL_SEAM=${value}: use route or proxy`);
 }
 
 function summarizeVariant(name: string, reps: RepSummary[]): VariantResult {
