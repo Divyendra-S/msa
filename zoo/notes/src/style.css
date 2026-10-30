@@ -1,0 +1,100 @@
+:root {
+  color-scheme: light;
+  --ink: #1d2433;
+  --muted: #6b7385;
+  --line: #e3e6ec;
+  --accent: #3a5bd9;
+  --panel: #f6f7f9;
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  color: var(--ink);
+}
+
+body {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  height: 100vh;
+  background: #fff;
+}
+
+aside {
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  padding: 16px 12px;
+  overflow-y: auto;
+}
+
+ul {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+
+button {
+  font: inherit;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+#new {
+  width: 100%;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+#notes button {
+  width: 100%;
+  text-align: left;
+  border-color: transparent;
+  background: transparent;
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#notes button[aria-current="true"] {
+  background: #e6ebfb;
+}
+
+main {
+  display: flex;
+  flex-direction: column;
+  padding: 20px 24px;
+  min-width: 0;
+}
+
+#empty {
+  color: var(--muted);
+}
+
+textarea {
+  flex: 1;
+  font: inherit;
+  font-size: 16px;
+  border: none;
+  outline: none;
+  resize: none;
+}
+
+footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+#status {
+  flex: 1;
+  margin: 0;
+  color: var(--muted);
+}
+
+[hidden] {
+  display: none !important;
+}

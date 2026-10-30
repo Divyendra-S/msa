@@ -1,5 +1,5 @@
 import type { NetworkPerturbation, RaceOrder, RaceSpec } from "./experiment.ts";
-import { matchesRequest, parseRequestPattern, type RequestPattern } from "./match.ts";
+import { INVOKE_PATH, matchesRequest, parseRequestPattern, type RequestPattern } from "./match.ts";
 import { sleep, within } from "./time.ts";
 
 /** Clients whose calls count together when a step waits for quiet: a browser context, a phone. */
@@ -392,6 +392,24 @@ function note(record: RequestRecord, text: string): void {
 
 function ordinal(n: number): string {
   return n === 1 ? "first" : n === 2 ? "second" : n === 3 ? "third" : `#${n}`;
+}
+
+/** How a call shows in the request log: a Tauri command call as `INVOKE save_note`, anything else as its method and path. */
+export function callName(method: string, url: URL): { method: string; url: string } {
+  if (method === "POST" && url.pathname.startsWith(INVOKE_PATH)) {
+    const command = url.pathname.slice(INVOKE_PATH.length);
+    try {
+      return { method: "INVOKE", url: decodeURIComponent(command) };
+    } catch {
+      return { method: "INVOKE", url: command };
+    }
+  }
+  return { method, url: url.pathname + url.search };
+}
+
+/** windtunnel-tauri's own traffic (its page script, the event stream), not the app's calls: not logged. */
+export function isHarnessCall(url: URL): boolean {
+  return url.pathname.startsWith("/__windtunnel/") && !url.pathname.startsWith(INVOKE_PATH);
 }
 
 /** Link prefetches are background noise: not logged, and steps don't wait for them. */

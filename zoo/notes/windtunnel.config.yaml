@@ -1,0 +1,19 @@
+# Wind Tunnel config for the Bug Zoo notes app (Tauri v2, SQLite).
+# Runs in the background: windtunnel-tauri hides its window and serves its frontend and
+# commands on $WINDTUNNEL_PORT, where headless WebKit drives it. $HOME is each run's own folder.
+app:
+  kind: tauri
+  # Rust builds share $CARGO_TARGET_DIR (in Wind Tunnel's cache); each version keeps its own binary.
+  build: >-
+    cargo build --quiet --manifest-path src-tauri/Cargo.toml --features windtunnel &&
+    cp "$CARGO_TARGET_DIR/debug/notes" notes-app
+  start: ./notes-app
+  readyTimeoutMs: 30000
+
+db:
+  kind: sqlite
+  # Where the app keeps its database: app_data_dir() under $HOME, which is the run's data folder.
+  file: Library/Application Support/dev.windtunnel.notes/notes.db
+  seed: cat schema.sql seed.sql | sqlite3 "$DATABASE_PATH"
+
+parallel: 4

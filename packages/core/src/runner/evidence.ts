@@ -589,7 +589,8 @@ function inline(row: Row | Record<string, unknown>): string {
 }
 
 function short(v: unknown): string {
-  const s = typeof v === "string" ? v : JSON.stringify(v);
+  // A value's line breaks stay on its line, as \n.
+  const s = typeof v === "string" ? v.replace(/\r?\n/g, "\\n") : JSON.stringify(v);
   // Timestamps: date and time, without the zone and sub-millisecond digits.
   const ts = /^(\d{4}-\d\d-\d\d)T(\d\d:\d\d:\d\d(?:\.\d{1,3})?)/.exec(s ?? "");
   if (ts) return `${ts[1]} ${ts[2]}`;

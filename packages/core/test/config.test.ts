@@ -40,7 +40,10 @@ db:
     assert.equal(config.app.kind, "web");
     assert.equal(config.app.isolateHome, false);
     assert.equal(config.db, undefined);
-    assert.equal(parseConfig("app:\n  kind: tauri\n  start: x\n").app.kind, "tauri");
+    const tauri = parseConfig("app:\n  kind: tauri\n  start: x\n").app;
+    assert.equal(tauri.kind, "tauri");
+    assert.equal(tauri.isolateHome, true, "a Tauri app keeps its data under HOME, so each run gets its own");
+    assert.equal(parseConfig("app:\n  kind: tauri\n  start: x\n  isolateHome: false\n").app.isolateHome, false);
     assert.throws(() => parseConfig("app:\n  kind: flutter\n  start: x\n"), /app\.kind/);
   });
 

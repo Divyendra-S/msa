@@ -1,0 +1,24 @@
+--- a/zoo/notes/src-tauri/src/commands.rs
++++ b/zoo/notes/src-tauri/src/commands.rs
+@@ -86,15 +86,12 @@
+ #[tauri::command]
+ pub fn save_note(db: State<Db>, id: i64, body: String, base_rev: i64) -> Result<Note> {
+     let db = db.0.lock().unwrap();
+-    let changed = db
+-        .execute(
+-            "UPDATE notes SET body = ?2, rev = rev + 1, updated_at = datetime('now') WHERE id = ?1",
+-            params![id, body],
+-        )
+-        .map_err(failed)?;
+-    if changed == 0 {
+-        return Err("This note was deleted.".into());
+-    }
++    db.execute(
++        "INSERT INTO notes (id, body, rev) VALUES (?1, ?2, ?3 + 1)
++         ON CONFLICT (id) DO UPDATE SET body = excluded.body, rev = notes.rev + 1, updated_at = datetime('now')",
++        params![id, body, base_rev],
++    )
++    .map_err(failed)?;
+     let saved = get(&db, id).map_err(failed)?;
+     db.execute(
+         "INSERT INTO revisions (note_id, rev, base_rev, body) VALUES (?1, ?2, ?3, ?4)",

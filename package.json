@@ -7,12 +7,13 @@
     "node": ">=22.18"
   },
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.flows.json && tsc -p packages/viewer/app/tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.flows.json && tsc -p packages/viewer/app/tsconfig.json && tsc -p zoo/notes/tsconfig.json",
     "test": "node --test \"packages/*/test/**/*.test.ts\" \"zoo/mock-pay/test/**/*.test.ts\" \"bench/test/**/*.test.ts\"",
     "db:up": "docker compose up -d --wait postgres",
     "db:down": "docker compose down",
     "zoo:install": "pnpm --dir zoo/shop install --frozen-lockfile --ignore-workspace",
     "zoo:verify": "node zoo/cases/verify.ts",
+    "zoo:verify:notes": "node zoo/cases/verify.ts --app notes",
     "zoo:prove": "node zoo/cases/prove.ts",
     "zoo:heal": "node zoo/cases/heal.ts",
     "demo:setup": "node zoo/demo/setup.ts",

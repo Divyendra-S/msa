@@ -1,0 +1,18 @@
+# Invariants for the Bug Zoo notes app. Each SQL query lists the rows that break the rule.
+
+one-blank-note:
+  description: At most one note is empty; New note opens it instead of making another.
+  sql: SELECT count(*) AS blank_notes FROM notes WHERE body = '' HAVING count(*) > 1
+  expect: empty
+
+no-lost-edit:
+  description: No two saves of a note start from the same revision (the later one silently overwrote the earlier).
+  sql: >-
+    SELECT note_id, base_rev, count(*) AS saves
+    FROM revisions GROUP BY note_id, base_rev HAVING count(*) > 1
+  expect: empty
+
+deleted-notes-stay-deleted:
+  description: A note moved to the trash is not back in the list.
+  sql: SELECT n.id, substr(n.body, 1, 40) AS body FROM notes n JOIN trash t ON t.id = n.id
+  expect: empty

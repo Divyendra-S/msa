@@ -1,5 +1,5 @@
 export { Branch, Branches, type BranchInfo, type CreateBranchOptions, type SeedCopy } from "./branches/branches.ts";
-export { chromiumStatus, playwrightCli } from "./browser.ts";
+export { browserFor, browserStatus, chromiumStatus, playwrightCli } from "./browser.ts";
 export { type CodeVersion, type CodeVersionSpec, CodeVersions, type PreparedVersion } from "./branches/code-versions.ts";
 export { PgServer } from "./branches/postgres.ts";
 export { clean, type CleanResult, stopOnSignals } from "./cleanup.ts";
@@ -15,7 +15,7 @@ export {
   type WindtunnelConfig,
 } from "./config.ts";
 export { type Database, databaseEnv, describeDatabase, openSqlite } from "./database.ts";
-export { CommandError, Service, sh } from "./exec.ts";
+export { CommandError, runScript, Service, sh } from "./exec.ts";
 export { changedFiles } from "./git.ts";
 export { openProject, type Project } from "./project.ts";
 export {

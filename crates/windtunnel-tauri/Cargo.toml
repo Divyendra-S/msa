@@ -1,0 +1,12 @@
+[package]
+name = "windtunnel-tauri"
+version = "0.1.0"
+edition = "2021"
+description = "Runs a Tauri app for Wind Tunnel: in the background, its invoke calls served over HTTP to a test browser"
+license = "MIT"
+publish = false
+
+[dependencies]
+tauri = "2.12"
+serde_json = "1"
+tiny_http = "0.12"

@@ -66,7 +66,10 @@ export class Workspace {
       .map((r) => ({ pattern: parseRequestPattern(`${r.method === "ANY" ? "*" : r.method} ${r.path}`), file: r.file }))
       // Literal paths before parameterised ones: /api/orders/new before /api/orders/:id.
       .sort((a, b) => a.pattern.text.split(/[:*]/).length - b.pattern.text.split(/[:*]/).length);
-    return (method, path) => routes.find((r) => matchesRequest(r.pattern, method, `http://x${path}`))?.file;
+    // A Tauri command call is logged as `INVOKE <command>`.
+    const commands = new Map(map.routes.filter((r) => r.method === "INVOKE").map((r) => [r.path, r.file]));
+    return (method, path) =>
+      method === "INVOKE" ? commands.get(path) : routes.find((r) => matchesRequest(r.pattern, method, `http://x${path}`))?.file;
   }
 
   /** The app map from the code, and the newest live crawl if there is one. */

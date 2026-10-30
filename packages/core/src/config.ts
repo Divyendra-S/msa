@@ -4,7 +4,7 @@ import { z } from "zod";
 
 export const CONFIG_FILE = "windtunnel.config.yaml";
 
-/** What kind of app this is. Only `web` runs today; the others are planned (platforms-plan.md). */
+/** What kind of app this is. `web` and `tauri` run today; the others are planned (platforms-plan.md). */
 export const APP_KINDS = ["web", "tauri", "android", "ios", "mac"] as const;
 export type AppKind = (typeof APP_KINDS)[number];
 
@@ -25,9 +25,10 @@ const AppSchema = z.object({
   /**
    * Point $HOME at the run's own data folder ($DATA_DIR), for apps that keep files under the
    * user's home (`~/Library/Application Support/<id>`). Every run starts with it empty.
+   * Default: on for Tauri apps, off for web apps.
    */
-  isolateHome: z.boolean().default(false),
-});
+  isolateHome: z.boolean().optional(),
+}).transform((app) => ({ ...app, isolateHome: app.isolateHome ?? app.kind === "tauri" }));
 
 const PostgresSchema = z.object({
   kind: z.literal("postgres"),

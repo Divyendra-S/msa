@@ -1,5 +1,15 @@
 import type { APIResponse, BrowserContext, Page, Request, Route } from "playwright";
-import { type Answer, type Call, type Group, isPrefetch, type Network, type NetworkTab, type RequestRecord } from "./network.ts";
+import {
+  type Answer,
+  type Call,
+  callName,
+  type Group,
+  isHarnessCall,
+  isPrefetch,
+  type Network,
+  type NetworkTab,
+  type RequestRecord,
+} from "./network.ts";
 import { within } from "./time.ts";
 
 /** Requests that make up "network activity" for step timing and the request log. */
@@ -9,7 +19,7 @@ const LOST_RESPONSE = "connectionreset";
 const DROPPED = "canceled by the browser (page navigated away)";
 
 function tracked(request: Request): boolean {
-  return TRACKED_TYPES.has(request.resourceType()) && !isPrefetch(request.headers());
+  return TRACKED_TYPES.has(request.resourceType()) && !isPrefetch(request.headers()) && !isHarnessCall(new URL(request.url()));
 }
 
 function pageOf(request: Request): Page | undefined {
@@ -44,13 +54,11 @@ export async function routeBrowser(
   const recordFor = (request: Request): RequestRecord => {
     let record = records.get(request);
     if (!record) {
-      const url = new URL(request.url());
       const tab = tabFor(request);
       record = network.record({
         tab: tab?.label ?? "?",
         step: tab?.stepName,
-        method: request.method(),
-        url: url.pathname + url.search,
+        ...callName(request.method(), new URL(request.url())),
         type: request.resourceType(),
       });
       records.set(request, record);

@@ -17,5 +17,6 @@ export { type AppMap, buildAppMap, formatAppMap, formatEffects, type PageInfo, t
 export { findInSource, parseLocator, rankCandidates, replaceInSource, similarity } from "./repair.ts";
 export { findNextRoutes, type RouteFile } from "./routes.ts";
 export { formatTable, readSchema, readSqliteSchema, seedSchema, type TableInfo } from "./schema.ts";
+export { findTauriApp, type TauriApp, type TauriCommand } from "./tauri.ts";
 export { type Effect, parseSql, SourceIndex, type SqlEffect } from "./source.ts";
 export { afterTriage, answerDecision, controlOf, type FailureLabel, formatTriage, sortFailures, type TriageEntry } from "./triage.ts";

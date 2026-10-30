@@ -1,0 +1,5 @@
+description: The user deletes a note while its autosave is still on its way, and the delete reaches the app first.
+flow: delete
+race:
+  request: invoke *_note
+  order: reverse

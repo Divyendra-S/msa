@@ -1,0 +1,8 @@
+id: 02-autosave-lost-edit
+title: Autosave loses an edit
+summary: Save is pressed while the autosave is on its way; both start from the same revision, and when the app handles them in the other order the older text wins.
+experiment: autosave-and-save
+perturbation: Race the autosave and Save, released in reverse order
+breaks: [no-lost-edit]
+handler: src/main.js
+fix: Keep one save in flight at a time; the next one waits, then saves on top of the revision the first made.

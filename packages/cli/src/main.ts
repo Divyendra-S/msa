@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
   Branches,
+  browserStatus,
   chromiumStatus,
   type CodeVersionSpec,
   clean,
@@ -18,6 +19,7 @@ import {
   prove,
   Runner,
   runningViewer,
+  runScript,
   type Seam,
   writeProofBranch,
   stopOnSignals,
@@ -284,6 +286,12 @@ async function doctor(flags: Flags): Promise<number> {
     const project = await openProject(flags.cwd);
     checks.push({ name: "config", ok: true, detail: project.configPath });
     checks.push({ name: "git", ok: true, detail: project.repoRoot });
+    if (project.config.app.kind === "tauri") {
+      const webkit = browserStatus("tauri");
+      checks.push({ name: "webkit", ok: webkit.installed, detail: webkit.installed ? webkit.path : "not downloaded: npx playwright install webkit" });
+      const cargo = await runScript("cargo --version", { cwd: project.root, timeoutMs: 15_000 }).catch(() => undefined);
+      checks.push({ name: "cargo", ok: cargo?.code === 0, detail: cargo?.code === 0 ? cargo.stdout.trim() : "not found: install Rust (https://rustup.rs)" });
+    }
     branches = new Branches(project);
     const db = project.config.db;
     if (branches.pg) checks.push({ name: "postgres", ok: true, detail: `server ${await branches.pg.ping()}` });

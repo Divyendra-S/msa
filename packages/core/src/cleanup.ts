@@ -19,7 +19,8 @@ export interface CleanResult {
 
 /**
  * Removes what earlier sessions left behind: app processes, run databases and data folders.
- * With `all`, also drops seed snapshots and deletes worktrees (forcing rebuilds).
+ * With `all`, also drops seed snapshots and deletes worktrees and the shared Rust build folder
+ * (forcing rebuilds).
  * Only call this when no other Wind Tunnel session is using the project.
  */
 export async function clean(branches: Branches, options: { all?: boolean } = {}): Promise<CleanResult> {
@@ -56,7 +57,10 @@ export async function clean(branches: Branches, options: { all?: boolean } = {})
       result.dataDirs += 1;
     }
   }
-  if (options.all) await rm(join(project.cacheDir, "sqlite"), { recursive: true, force: true });
+  if (options.all) {
+    await rm(join(project.cacheDir, "sqlite"), { recursive: true, force: true });
+    await rm(join(project.cacheDir, "cargo-target"), { recursive: true, force: true });
+  }
 
   if (options.all) result.worktrees = await branches.versions.removeAll();
   return result;

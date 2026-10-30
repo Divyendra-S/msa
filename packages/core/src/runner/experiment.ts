@@ -14,7 +14,7 @@ const ID = /^[a-z0-9][a-z0-9-]*$/;
 const Duration = z
   .union([z.number().int().nonnegative(), z.string().regex(DURATION, 'use a number of ms or e.g. "500ms", "3s", "25h"')])
   .transform(parseDuration);
-const Request = z.string().regex(REQUEST_PATTERN, 'expected "METHOD /path", e.g. "POST /api/orders"');
+const Request = z.string().regex(REQUEST_PATTERN, 'expected "METHOD /path", e.g. "POST /api/orders", or "invoke <command>"');
 const Step = z.string().min(1);
 /** Limits a perturbation to one tab (`alice`, `bob`, `alice#2`); default: every tab. */
 const Tab = z.string().optional();

@@ -1,0 +1,5 @@
+description: The user presses Save while the autosave is still on its way, and the app handles the two saves in the other order.
+flow: edit
+race:
+  request: invoke save_note
+  order: reverse

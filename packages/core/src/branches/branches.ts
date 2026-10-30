@@ -261,10 +261,17 @@ export class Branches {
         vars.MOCK_PAY_SECRET = secret;
       }
 
+      // A Tauri app built with windtunnel-tauri serves its frontend and its commands there.
+      if (this.project.config.app.kind === "tauri") vars.WINDTUNNEL_PORT = vars.PORT!;
       const scope = { ...process.env, ...vars };
       // PORT, BASE_URL, DATA_DIR and the database's variables are always set, so an app that forgets
       // to map them can't fall back to a developer database. `app.env` adds to or overrides them.
-      const env: Record<string, string> = { PORT: vars.PORT!, BASE_URL: baseUrl, ...stateEnv };
+      const env: Record<string, string> = {
+        PORT: vars.PORT!,
+        BASE_URL: baseUrl,
+        ...stateEnv,
+        ...(vars.WINDTUNNEL_PORT ? { WINDTUNNEL_PORT: vars.WINDTUNNEL_PORT } : {}),
+      };
       for (const [key, value] of Object.entries(this.project.config.app.env)) env[key] = expandVars(value, scope);
 
       const appLog = join(logDir, "app.log");

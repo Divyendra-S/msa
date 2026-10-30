@@ -4,6 +4,7 @@ import { FLOWS_DIR, loadExperiments, loadRules, type Project, stepNames } from "
 import { findNextRoutes, HTTP_METHODS } from "./routes.ts";
 import { formatTable, naturalKeys, type TableInfo } from "./schema.ts";
 import { type Effect, type FetchEffect, SourceIndex, type SqlEffect, type UiFacts, unique } from "./source.ts";
+import { findTauriApp } from "./tauri.ts";
 
 export interface RouteInfo {
   method: string;
@@ -73,7 +74,19 @@ export async function buildAppMap(project: Project, options: { schema?: TableInf
     }
   }
 
-  return { root: project.root, framework, routes, pages, helperFlags: [...helperFlags], schema: options.schema, windtunnel: await windtunnelFiles(project) };
+  // A Tauri app: its commands are what its pages call, as `INVOKE <command>`.
+  const tauri = await findTauriApp(project.root);
+  for (const c of tauri?.commands ?? []) {
+    const { flags, notes } = routeFlags("INVOKE", c.name, c.effects, uniqueKeys, owners);
+    notes.push(c.async ? "async: calls can overlap" : "runs on the main thread, one call at a time");
+    if (c.emits.length) notes.push(`emits ${c.emits.join(", ")}`);
+    if (c.callers.length) notes.push(`invoked from ${c.callers.join(", ")}`);
+    routes.push({ method: "INVOKE", path: c.name, file: c.file, ...(c.comment ? { comment: c.comment } : {}), effects: c.effects, flags, notes });
+  }
+  if (tauri && pages.length === 0) pages.push(...tauri.pages.map((p) => ({ ...p, kind: "page" as const })));
+  const name = tauri ? (framework === "unknown" ? tauri.framework : `${tauri.framework} + ${framework}`) : framework;
+
+  return { root: project.root, framework: name, routes, pages, helperFlags: [...helperFlags], schema: options.schema, windtunnel: await windtunnelFiles(project) };
 }
 
 async function windtunnelFiles(project: Project): Promise<AppMap["windtunnel"]> {
@@ -159,7 +172,7 @@ function routeFlags(
     } else if (w.afterExternal) {
       flags.push(`${e.op} ${e.tables[0]} after an external call`);
     }
-    if (e.op === "INSERT" && !e.onConflict && (method === "POST" || method === "ACTION" || method === "ANY")) {
+    if (e.op === "INSERT" && !e.onConflict && (method === "POST" || method === "ACTION" || method === "ANY" || method === "INVOKE")) {
       const keys = uniqueKeys?.get(e.tables[0]!);
       if (!keys) flags.push(`INSERT ${e.tables[0]}: no ON CONFLICT (schema not loaded: check for a unique key)`);
       else if (keys.length === 0) flags.push(`INSERT ${e.tables[0]}: no ON CONFLICT and no unique key besides the id; a repeated request adds a row`);
@@ -184,8 +197,16 @@ function routeFlags(
     if (!key) flags.push(`external ${e.method} ${e.url}${f.via ? ` (via ${f.via})` : ""} without an idempotency key`);
   }
 
+  // A desktop app's commands answer only its own windows: no login to check.
+  if (method === "INVOKE") {
+    for (const w of writes) {
+      if (w.effect.op === "INSERT" && w.effect.onConflict && /\bDO\s+UPDATE\b/i.test(w.effect.text)) {
+        flags.push(`upsert ${w.effect.tables[0]}: writes the row whether or not it still exists`);
+      }
+    }
+  }
   const authed = flat.some((f) => f.inAuth) || hasAuthCall(effects);
-  if (mutating && !authed) flags.push("no auth or signature check found");
+  if (mutating && !authed && method !== "INVOKE") flags.push("no auth or signature check found");
   // A logged-in route that loads a user's row by the id in its path, without the owner in the query.
   if (authed && /\[|:/.test(path)) {
     for (const f of sql) {
@@ -285,7 +306,8 @@ export function formatAppMap(map: AppMap, options: { focus?: string; maxChars?: 
     ].join("\n");
   }
 
-  lines.push("", `API routes and server actions (${routes.length}): what each handler does, in order; ! = pattern worth an experiment`);
+  const heading = map.routes.length > 0 && map.routes.every((r) => r.method === "INVOKE") ? "Commands" : "API routes and server actions";
+  lines.push("", `${heading} (${routes.length}): what each handler does, in order; ! = pattern worth an experiment`);
   for (const r of routes) {
     lines.push(
       `${r.method} ${r.path}  ${r.file}${r.comment ? `  // ${r.comment}` : ""}`,

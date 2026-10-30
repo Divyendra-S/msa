@@ -1,0 +1,5 @@
+description: The user double-clicks "New note".
+flow: new-note
+perturb:
+  - do: double-submit
+    step: new

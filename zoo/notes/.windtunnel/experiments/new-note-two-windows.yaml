@@ -1,0 +1,6 @@
+description: Two windows press "New note" at the same moment.
+flow: new-note
+users: [guest, guest]
+race:
+  request: invoke create_note
+  order: together

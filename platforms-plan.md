@@ -1,6 +1,7 @@
 # Wind Tunnel beyond web apps — Plan
 
-Last updated 2026-10-30. **Status: Phase 1 done and pushed. Phase 2 (Tauri) is in progress.**
+Last updated 2026-10-30. **Status: Phases 1 (groundwork) and 2 (Tauri) done and pushed. Phase 3
+(Android) is next.**
 
 Today Wind Tunnel tests Next.js + Postgres web apps. This plan adds Tauri apps, Android and iOS
 apps on an emulator or simulator, and native Swift Mac apps, all running in the background: no
@@ -11,7 +12,7 @@ window on screen, no mouse or keyboard taken.
 | Phase | State |
 |---|---|
 | 1 Groundwork | Done, pushed |
-| 2 Tauri | In progress |
+| 2 Tauri | Done, pushed |
 | 3 Android | Not started |
 | 4 iOS | Not started |
 | 5 Swift Mac apps | Not started |
@@ -26,7 +27,15 @@ What Phase 1 changed, for anyone using Wind Tunnel today:
 - The database can be SQLite (`db.kind: sqlite`), or there can be none.
 - Rules can be SQL on SQLite, SQL on what users got and saw (with no database), or a `check:`
   command that prints the broken rows as JSON lines.
-- `app.kind` names the kind of app; only `web` runs until its phase is done.
+- `app.kind` names the kind of app; `web` and `tauri` run, the others wait for their phase.
+
+What Phase 2 adds:
+
+- `app.kind: tauri`: a Tauri v2 app runs in the background (no window, never brought forward),
+  its frontend in headless WebKit, each `invoke` caught at the seam (`request: invoke
+  save_note`). The app adds `crates/windtunnel-tauri` behind a cargo feature.
+- `zoo/notes`, a Tauri notes app with three planted bugs; `pnpm zoo:verify:notes`.
+- The Map and `windtunnel scan` read `#[tauri::command]` functions.
 
 ## The idea
 
@@ -130,25 +139,85 @@ Found on the way: without `Connection: close` on the proxy's answers, Chromium s
 A Tauri app is a web page talking to Rust through `invoke("save_note", …)`. Those calls are its
 requests, and where its races are.
 
-- [ ] **Test app `zoo/notes`:** Tauri v2, plain TypeScript frontend, SQLite through rusqlite.
+- [x] **Test app `zoo/notes`:** Tauri v2, plain TypeScript frontend, SQLite through rusqlite.
   Planted bugs, each with a fix patch: double-clicking "New note" makes two notes; autosave and
   Save at the same moment lose an edit; deleting while an autosave is in flight brings the note
   back.
-- [ ] **Plugin `windtunnel-tauri`** (Rust crate in this repo, behind a cargo feature in the app):
+  Done: `zoo/notes`. The frontend is plain JavaScript with JSDoc types (checked by `pnpm
+  typecheck`) and no build step, and the seed is SQL run by macOS's `sqlite3`. That way the
+  app needs no Node: config commands get whatever `node` is on PATH, which here was Node 20.
+  Like the shop, the clean app is the fix and each bug is a patch in `zoo/notes/cases/`
+  (`01-double-new-note`, `02-autosave-lost-edit`, `03-delete-brings-note-back`). Rules:
+  `one-blank-note`, `no-lost-edit`, `deleted-notes-stay-deleted`.
+- [x] **Plugin `windtunnel-tauri`** (Rust crate in this repo, behind a cargo feature in the app):
   the app runs with its window hidden; the plugin passes each `invoke` from the runner to the
   real Rust code, and its events back.
   - First check: a hidden macOS web view may slow its timers; if passing calls on is too slow,
     use a window placed off screen.
-- [ ] **Runner:** headless Playwright WebKit loads the frontend. A script in the page provides
+  Done: `crates/windtunnel-tauri`. It serves the app's own embedded frontend and a stand-in for
+  Tauri's page scripts on `$WINDTUNNEL_PORT`. Each call is handed to `Webview::on_message` (the
+  public `InvokeRequest` API, with the app's invoke key) on the main thread, so it runs the
+  real command with the real state, permissions and plugins. Events come back as a server-sent
+  event stream. The hidden web view isn't used at all (its windows stay on `about:blank`), so
+  its timers don't matter: a call takes about 0.3 ms. The app's change is one call in place of
+  `builder.run(context)`. It can't be a plugin alone, because Tauri's window library brings
+  the app forward at launch, before any plugin or `setup` hook runs. So `run` sets the
+  `Prohibited` activation policy between `build()` and `run()`.
+- [x] **Runner:** headless Playwright WebKit loads the frontend. A script in the page provides
   `window.__TAURI_INTERNALS__`, whose `invoke` goes through the seam, then the plugin. Request
   patterns read `invoke save_note`. Two tabs are two windows on the same Rust state.
-- [ ] **Fresh state:** `HOME` per run, so the app's data folder (`~/Library/Application
+  Done: `app.kind: tauri` runs on WebKit (`browserFor` in `browser.ts`). An invoke is
+  `POST /__windtunnel/invoke/<command>`, logged as `INVOKE save_note` (`callName` in
+  `network.ts`). The plugin's own traffic (its script, the event stream) isn't logged. Both
+  seams work, route and proxy. `new-note-two-windows` races two windows on one app.
+  `windtunnel doctor` checks WebKit and cargo. Rust builds share `$CARGO_TARGET_DIR` in the
+  project's cache (removed by `clean --all`), so after the first build (about 50 s) a code
+  version builds in about 3.5 s.
+- [x] **Fresh state:** `HOME` per run, so the app's data folder (`~/Library/Application
   Support/<id>`) is new each time, filled from a snapshot of the seeded data.
-- [ ] **Code reader:** `#[tauri::command]` functions, the `invoke(...)` calls that reach them,
+  Done: `app.isolateHome` is on by default for Tauri apps. `db.file` names the SQLite file
+  under the run's HOME (`Library/Application Support/dev.windtunnel.notes/notes.db`), and it
+  is copied from the version's seed snapshot.
+- [x] **Code reader:** `#[tauri::command]` functions, the `invoke(...)` calls that reach them,
   and the tables they write, for the Map and `scan`.
+  Done: `packages/explorer/src/tauri.ts`. For each command it reads the SQL it runs (through
+  helper functions and `transaction()`), whether it is async, the events it emits, and the
+  frontend lines that invoke it. The page's buttons, fields and status texts come from its HTML
+  and scripts. In the Map the commands are `INVOKE <command>` routes, with an upsert hint
+  (`upsert notes: writes the row whether or not it still exists`). `windtunnel scan` takes a
+  Tauri folder too. Evidence packets name each call's command file.
 
 **Done when:** each planted bug fails its experiment and passes with its fix patch, no window
 appears during runs, and Replay shows a Tauri run with screenshots.
+
+- [x] Each planted bug fails its experiment in every run, and the clean app passes every
+  experiment. `pnpm zoo:verify:notes` PASSES: 72 runs in 30 s through the route, and the same
+  table through the proxy (`WINDTUNNEL_SEAM=proxy`, 72 runs in 29 s). Case 01 also breaks
+  `new-note-two-windows`.
+- [x] No window appears during runs. While `zoo:verify:notes` ran, a watcher polled the window
+  list every 100 ms. The app showed no window on any display, and the front app never changed.
+  The only new window was headless WebKit's own, which Playwright parks at (-10000, -10000).
+  The app runs with `ApplicationType = BackgroundOnly`.
+- [x] Replay shows a Tauri run with screenshots: the Mac app's Replay pane on `zoo/notes`.
+  `autosave-and-save` shows `INVOKE save_note` held for the race, and `delete-during-autosave`
+  (bug 03) breaks `deleted-notes-stay-deleted` with its row and the database changes. Every
+  step has its WebKit screenshot.
+- [x] `pnpm typecheck` and `pnpm test` pass: 138 tests, 0 failing (run with Node 24 first on
+  PATH, as `nvm use` sets it). `cargo test` in the crate passes.
+- [x] The shop's `zoo:verify` gives the same results as before (web apps unchanged): PASS,
+  840 runs in 632 s. The table is the same as Phase 1's, including the 3 expected errors in case
+  04. After `cargo fmt` and the rebuilt patches, `zoo:verify:notes` passes again (72 runs in
+  30.5 s).
+- [x] Docs: README (Tauri apps, layout), `docs/experiments.md` (`invoke` patterns, Tauri apps),
+  the init skill, `crates/windtunnel-tauri/README.md`, `zoo/notes/README.md`, `activity.md`.
+- [x] The owner says "push".
+
+Found on the way:
+- Tauri's window library calls `activateIgnoringOtherApps` as the app finishes launching.
+  Left alone, every run would have taken the keyboard from whatever the user was typing in.
+- Not yet supported (in the crate's README): `Channel` arguments, `convertFileSrc` and the
+  asset protocol, events aimed at one window, and windows the app creates visible after
+  launch. SQLite apps have no SQL log, so their trace chain stops at the command.
 
 ## Phase 3 — Android
 

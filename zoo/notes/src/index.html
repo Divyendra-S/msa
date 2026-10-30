@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Notes</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/main.js"></script>
+  </head>
+  <body>
+    <aside>
+      <button id="new" type="button">New note</button>
+      <nav aria-label="Notes"><ul id="notes"></ul></nav>
+    </aside>
+    <main>
+      <p id="empty">Pick a note, or start a new one.</p>
+      <textarea id="editor" aria-label="Note" spellcheck="false" hidden></textarea>
+      <footer>
+        <p id="status" role="status"></p>
+        <button id="save" type="button" hidden>Save</button>
+        <button id="delete" type="button" hidden>Delete</button>
+      </footer>
+    </main>
+  </body>
+</html>

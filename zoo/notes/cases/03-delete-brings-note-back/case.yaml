@@ -1,0 +1,8 @@
+id: 03-delete-brings-note-back
+title: Delete brings the note back
+summary: A note is deleted while its autosave is on its way; save_note writes the note whether or not it still exists, so the late autosave brings it back.
+experiment: delete-during-autosave
+perturbation: Race the autosave and Delete, Delete handled first
+breaks: [deleted-notes-stay-deleted]
+handler: src-tauri/src/commands.rs
+fix: Save with UPDATE … WHERE id = ?, and answer "This note was deleted." when no row changed.

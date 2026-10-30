@@ -1,6 +1,7 @@
 /**
  * Request patterns in experiment files: `"POST /api/orders"`, `"GET /api/orders/:id"`,
  * `"* /api/**"`. The query string is ignored; `*` matches one path segment, `**` any number.
+ * A Tauri app's command calls are `"invoke save_note"` (`*` matches any part of a name).
  */
 export interface RequestPattern {
   text: string;
@@ -8,11 +9,18 @@ export interface RequestPattern {
   path: RegExp;
 }
 
-export const REQUEST_PATTERN = /^(\*|[A-Za-z]+)\s+(\/\S*)$/;
+export const REQUEST_PATTERN = /^(?:(\*|[A-Za-z]+)\s+(\/\S*)|invoke\s+([^\s/]+))$/i;
+
+/** Where a Tauri page's `invoke` calls go (crates/windtunnel-tauri): `POST /__windtunnel/invoke/<command>`. */
+export const INVOKE_PATH = "/__windtunnel/invoke/";
 
 export function parseRequestPattern(text: string): RequestPattern {
   const m = REQUEST_PATTERN.exec(text.trim());
-  if (!m) throw new Error(`bad request pattern "${text}": expected "METHOD /path", e.g. "POST /api/orders"`);
+  if (!m) throw new Error(`bad request pattern "${text}": expected "METHOD /path", e.g. "POST /api/orders", or "invoke <command>"`);
+  if (m[3]) {
+    const command = m[3].split("*").map((part) => escapeRegExp(encodeURIComponent(part))).join("[^/]*");
+    return { text: text.trim(), method: "POST", path: new RegExp(`^${escapeRegExp(INVOKE_PATH)}${command}$`) };
+  }
   const source = m[2]!
     .replace(/\/+$/, "")
     .split("/")

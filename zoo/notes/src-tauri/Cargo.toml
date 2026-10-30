@@ -1,0 +1,18 @@
+[package]
+name = "notes"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[build-dependencies]
+tauri-build = "2.7"
+
+[dependencies]
+tauri = "2.12"
+serde = { version = "1", features = ["derive"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
+windtunnel-tauri = { path = "../../../crates/windtunnel-tauri", optional = true }
+
+[features]
+# Dev builds for Wind Tunnel: the app runs in the background, its calls served over HTTP.
+windtunnel = ["dep:windtunnel-tauri"]

@@ -142,5 +142,15 @@ perturb:
       await (await send("/", { headers: { "sec-fetch-dest": "document" }, tab: "alice" })).text();
       assert.deepEqual(network.log.slice(before).map((r) => `${r.type} ${r.url}`), ["document /"]);
     });
+
+    it("logs a Tauri page's command calls by name, and leaves its event stream and own script out", async () => {
+      const before = network.log.length;
+      await (await send("/__windtunnel/invoke/save_note", { method: "POST", body: "{}", tab: "alice" })).text();
+      await (await send("/__windtunnel/invoke/plugin%3Aevent%7Cemit", { method: "POST", body: "{}", tab: "alice" })).text();
+      await (await send("/__windtunnel/listen", { method: "POST", body: "{}", tab: "alice" })).text();
+      await (await send("/events", { headers: { accept: "text/event-stream" }, tab: "alice" })).text();
+      assert.deepEqual(network.log.slice(before).map((r) => `${r.method} ${r.url}`), ["INVOKE save_note", "INVOKE plugin:event|emit"]);
+      assert.equal(alice.group.busy, 0);
+    });
   });
 });

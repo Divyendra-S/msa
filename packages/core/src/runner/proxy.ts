@@ -1,6 +1,16 @@
 import http from "node:http";
 import net from "node:net";
-import { type Answer, type Call, type Group, isPrefetch, type Network, type NetworkTab, type RequestRecord } from "./network.ts";
+import {
+  type Answer,
+  type Call,
+  callName,
+  type Group,
+  isHarnessCall,
+  isPrefetch,
+  type Network,
+  type NetworkTab,
+  type RequestRecord,
+} from "./network.ts";
 
 /** Header a client sets to say which tab a call comes from; the app never sees it. */
 export const TAB_HEADER = "x-windtunnel-tab";
@@ -98,6 +108,7 @@ export class HttpProxy {
 
     const { network } = attached;
     const url = new URL(req.url ?? "/", this.url);
+    if (isHarnessCall(url)) return call.pass();
     const type = resourceType(headers);
     const tracked = (type === "document" || type === "fetch") && !isPrefetch(headers);
     if (!tracked && !network.wants(url)) return call.pass();
@@ -106,8 +117,7 @@ export class HttpProxy {
     const record = network.record({
       tab: tab?.label ?? label ?? "?",
       step: tab?.stepName,
-      method: call.method,
-      url: url.pathname + url.search,
+      ...callName(call.method, url),
       type,
     });
     call.track(network, record, tracked);
@@ -321,8 +331,12 @@ function flatHeaders(headers: http.IncomingHttpHeaders): Record<string, string> 
   return out;
 }
 
-/** What the client asked for, from `sec-fetch-dest`: a page, an API call, or a script, image… Clients that don't say make API calls. */
+/**
+ * What the client asked for, from `sec-fetch-dest`: a page, an API call, or a script, image… An
+ * event stream stays open, so it isn't an API call steps wait for. Clients that don't say make API calls.
+ */
 function resourceType(headers: Record<string, string>): string {
+  if (headers.accept?.includes("text/event-stream")) return "eventsource";
   const dest = headers["sec-fetch-dest"];
   if (dest === "document" || dest === "iframe" || dest === "frame") return "document";
   if (!dest || dest === "empty") return "fetch";

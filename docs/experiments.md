@@ -78,6 +78,10 @@ The id is the file name. Unknown fields, steps, users, tabs and rules are errors
 `"METHOD /path"`: `POST /api/orders`, `GET /api/orders/:id`, `* /api/*/items`, `* /api/**`.
 The query string is ignored.
 
+A Tauri app's command calls are `"invoke <command>"`: `invoke save_note`, `invoke *_note`
+(`*` matches any part of the name), `invoke plugin:event|emit`. They show in the request log
+and in `windtunnel_requests` as method `INVOKE`, path `save_note`.
+
 ### Network perturbations
 
 Applied to requests from the browser that match `request` (optionally only during `step` or
@@ -202,6 +206,17 @@ read-only, with the seed snapshot attached as `windtunnel_seed` (so `windtunnel_
 works the same). Write them in SQLite's dialect. An app with no `db` in its config can still
 have SQL rules on `windtunnel_requests` and `windtunnel_pages`: they run in an empty
 in-memory SQLite database.
+
+### Tauri apps
+
+With `app.kind: tauri` the app runs in the background with
+[`windtunnel-tauri`](../crates/windtunnel-tauri/README.md) built in. Its window is hidden and
+it never comes to the front. Its frontend is loaded in headless WebKit, and each `invoke` reaches
+the real Rust command through a request the seam can hold, delay, repeat or reorder. Flows are
+the same Playwright flows. Two tabs (`users: [guest, guest]`) are two windows on the same app.
+`$HOME` is each run's data folder (`app.isolateHome` is on by default), so the app's
+`app_data_dir()` starts from the seed snapshot. Rules are SQL on its SQLite file, at the path
+given in `db.file`. `zoo/notes` is the example: a notes app with three planted bugs.
 
 ### Check rules: files, media, anything SQL can't read
 

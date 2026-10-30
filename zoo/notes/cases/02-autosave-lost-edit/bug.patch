@@ -1,0 +1,11 @@
+--- a/zoo/notes/src/main.js
++++ b/zoo/notes/src/main.js
+@@ -83,8 +83,6 @@
+ }
+ 
+ async function save() {
+-  // One save at a time: another waits for it, then saves the newest text on top of the revision it made.
+-  while (saving) await saving;
+   const note = current;
+   const body = editor.value;
+   if (!note || body === note.body) return;

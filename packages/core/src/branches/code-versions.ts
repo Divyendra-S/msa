@@ -126,10 +126,16 @@ export class CodeVersions {
 
       const log = this.logFile(version.id);
       const timings: Record<string, number> = {};
+      const env: Record<string, string> = { CI: "1" };
+      // Rust builds share one target folder, so a new version only recompiles the app's own crates.
+      // Each version copies its binary out of it ($CARGO_TARGET_DIR/debug/<name>).
+      if (this.project.config.app.kind === "tauri") {
+        env.CARGO_TARGET_DIR = process.env.CARGO_TARGET_DIR ?? join(this.project.cacheDir, "cargo-target");
+      }
       const step = async (name: string, command: string | undefined) => {
         if (!command) return;
         const started = Date.now();
-        await sh(command, { cwd: prepared.appDir, logFile: log, env: { CI: "1" } });
+        await sh(command, { cwd: prepared.appDir, logFile: log, env });
         timings[name] = Date.now() - started;
       };
 

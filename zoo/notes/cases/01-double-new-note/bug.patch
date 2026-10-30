@@ -1,0 +1,29 @@
+--- a/zoo/notes/src-tauri/src/commands.rs
++++ b/zoo/notes/src-tauri/src/commands.rs
+@@ -1,6 +1,6 @@
+ use std::sync::Mutex;
+ 
+-use rusqlite::{params, Connection, OptionalExtension, Row};
++use rusqlite::{params, Connection, Row};
+ use serde::Serialize;
+ use tauri::{AppHandle, Emitter, State};
+ 
+@@ -63,18 +63,6 @@
+ #[tauri::command]
+ pub fn create_note(app: AppHandle, db: State<Db>) -> Result<Note> {
+     let db = db.0.lock().unwrap();
+-    // The empty note there is, if any: New note never leaves blank notes behind.
+-    let blank = db
+-        .query_row(
+-            &format!("SELECT {COLUMNS} FROM notes WHERE body = '' LIMIT 1"),
+-            [],
+-            note,
+-        )
+-        .optional()
+-        .map_err(failed)?;
+-    if let Some(blank) = blank {
+-        return Ok(blank);
+-    }
+     db.execute("INSERT INTO notes (body) VALUES ('')", [])
+         .map_err(failed)?;
+     let created = get(&db, db.last_insert_rowid()).map_err(failed)?;

@@ -1,7 +1,8 @@
-// Verifies the Bug Zoo end to end: the shop's experiments (zoo/shop/.windtunnel)
-// run against the clean shop, every case variant and every clean control, each run in its own branch.
+// Verifies the Bug Zoo end to end: an app's experiments (zoo/shop/.windtunnel) run against the
+// clean app, every case variant and every clean control, each run in its own branch.
 //
 //   pnpm zoo:verify [--repeat 3] [--case 02-lost-response-retry] [--experiment checkout-double-submit]
+//   pnpm zoo:verify --app notes      the Tauri notes app (zoo/notes), its cases in zoo/notes/cases
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -70,13 +71,17 @@ async function main(): Promise<number> {
       repeat: { type: "string", default: "3" },
       case: { type: "string" },
       experiment: { type: "string", multiple: true },
+      app: { type: "string", default: "shop" },
     },
   });
   const repeat = Number(values.repeat);
-  const casesDir = import.meta.dirname;
+  const app = values.app;
+  if (app !== "shop" && app !== "notes") throw new Error(`--app must be shop or notes, not ${app}`);
+  const appDir = join(import.meta.dirname, "..", app);
+  const casesDir = app === "shop" ? import.meta.dirname : join(appDir, "cases");
   const cases = await loadCases(casesDir, values.case);
 
-  const runner = await Runner.open(join(casesDir, "..", "shop"));
+  const runner = await Runner.open(appDir);
   stopOnSignals(() => runner.close());
   try {
     const experiments: Experiment[] = await loadExperiments(runner.project, values.experiment ?? []);
@@ -107,7 +112,7 @@ async function main(): Promise<number> {
       const outcomes = experiments.map((experiment) => {
         const result = results[i]!.find((r) => r.experiment === experiment.id)!;
         if (variant.clean && result.outcome !== "pass") {
-          failures.push(`${variant.id === "clean" ? "clean shop" : `${variant.id} (control)`}: ${experiment.id} is ${cell(result)} (run ${result.runId})`);
+          failures.push(`${variant.id === "clean" ? `clean ${app}` : `${variant.id} (control)`}: ${experiment.id} is ${cell(result)} (run ${result.runId})`);
         }
         if (expected?.experiment === experiment.id) {
           const reps = result.reps.filter((r) => !expected.variant || r.variant === expected.variant);
@@ -141,7 +146,8 @@ async function main(): Promise<number> {
       console.log(`\nFAIL\n${failures.map((f) => `  - ${f}`).join("\n")}`);
       return 1;
     }
-    console.log("\nPASS: the clean shop and the controls pass every experiment; each case breaks its rules in every run.");
+    const clean = cases.some((c) => c.control) ? `the clean ${app} and the controls pass` : `the clean ${app} app passes`;
+    console.log(`\nPASS: ${clean} every experiment; each case breaks its rules in every run.`);
     return 0;
   } finally {
     await runner.close();

@@ -5,7 +5,7 @@ description: "Set up Wind Tunnel for this app: write windtunnel.config.yaml and 
 
 # Set up Wind Tunnel
 
-Wind Tunnel runs the app in isolated copies (git worktree + its own Postgres database copy + app process) and drives it with Playwright. It needs one config file at the app's root: `windtunnel.config.yaml`. Supported today: Next.js + Postgres.
+Wind Tunnel runs the app in isolated copies (git worktree + its own Postgres database copy + app process) and drives it with Playwright. It needs one config file at the app's root: `windtunnel.config.yaml`. Supported today: Next.js web apps (Postgres, SQLite or no database) and Tauri v2 desktop apps.
 
 ## 1. Read the repo (don't ask what you can find)
 
@@ -40,6 +40,7 @@ Rules for a good config:
 - The seed must be deterministic: same data every time, no random ids or dates that matter.
 - Two users at least, so experiments can test two buyers or another user's data. If the seed has none, propose adding test users to it.
 - Never point `db.url` at a shared or production database. Wind Tunnel creates and drops databases on that server.
+- A Tauri v2 app (a `src-tauri/` folder): `app.kind: tauri`. Add `crates/windtunnel-tauri` from the Wind Tunnel repo behind a `windtunnel` cargo feature, and replace `builder.run(context)` with `windtunnel_tauri::run(builder, context)` under that feature (its README has the lines; propose them, they are the only change to the app). `build` runs `cargo build --features windtunnel` and copies `$CARGO_TARGET_DIR/debug/<binary>` into the app folder; `start` runs that copy. The database is usually SQLite under `app_data_dir()`: `db.file: Library/Application Support/<identifier>/<file>.db`, since each run's `$HOME` is its own folder. Flows are the same Playwright flows; request patterns are `invoke <command>`.
 - An app on SQLite: `db: { kind: sqlite, file: app.db, seed: <command> }`. Each run gets its own copy of the seeded file inside its data folder; point the app at `$DATABASE_PATH` (or `$DATABASE_URL`, `file:<path>`) in `app.env`. An app with no database leaves `db` out.
 - If the app calls a payment provider, point its base URL at `$MOCK_PAY_URL` and its webhook secret at `$MOCK_PAY_SECRET` in `app.env`. The mock speaks a Stripe-like API (`POST /v1/charges` with `idempotency-key`, signed webhooks in a `mockpay-signature: t=…,v1=<hmac-sha256 of "t.body">` header). If the app's client can't talk to it, leave `mockPay` out and say so.
 

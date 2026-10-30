@@ -27,7 +27,7 @@ export interface ScanResult {
 }
 
 /**
- * `windtunnel scan`: the static half of the app map for any Next.js folder, no config needed and
+ * `windtunnel scan`: the static half of the app map for any Next.js or Tauri folder, no config needed and
  * no model, build or database involved. The Mac app shows it as soon as a folder is picked, before
  * anything is set up.
  */
@@ -93,6 +93,9 @@ export function plain(flag: string): string {
   if ((m = /^external (\w+) (\S+)/.exec(flag))) {
     return `Calls \`${m[2]}\` with no idempotency key: a retry can charge or send twice.`;
   }
+  if ((m = /^upsert (\S+): writes the row whether or not it still exists/.exec(flag))) {
+    return `Writes \`${m[1]}\` with an upsert: a late call can bring back a row that was deleted in the meantime.`;
+  }
   if (flag.startsWith("no auth or signature check")) return "Changes data with no login or signature check.";
   if ((m = /^\w+ (\S+) by .* with no owner/.exec(flag))) {
     return `Looks up \`${m[1]}\` by its id alone: another signed-in user may be able to reach it.`;
@@ -104,16 +107,19 @@ export function plain(flag: string): string {
   return flag;
 }
 
-/** The Next.js app in `dir`: the folder itself, or the one below it (two levels at most) that has it. */
+/** The app in `dir`: the folder itself, or the one below it (two levels at most) with a Next.js app, else a Tauri app. */
 async function nextApp(dir: string): Promise<string> {
   const hasNext = async (d: string) => {
     const pkg = JSON.parse((await readFile(join(d, "package.json"), "utf8").catch(() => "{}")) || "{}") as Record<string, Record<string, string> | undefined>;
     return !!(pkg.dependencies?.next ?? pkg.devDependencies?.next);
   };
-  if (await hasNext(dir)) return dir;
-  for (const a of await subdirs(dir)) {
-    if (await hasNext(a)) return a;
-    for (const b of await subdirs(a)) if (await hasNext(b)) return b;
+  const hasTauri = (d: string) => readFile(join(d, "src-tauri", "tauri.conf.json")).then(() => true, () => false);
+  for (const has of [hasNext, hasTauri]) {
+    if (await has(dir)) return dir;
+    for (const a of await subdirs(dir)) {
+      if (await has(a)) return a;
+      for (const b of await subdirs(a)) if (await has(b)) return b;
+    }
   }
   return dir;
 }

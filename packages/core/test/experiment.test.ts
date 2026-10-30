@@ -24,6 +24,18 @@ describe("request patterns", () => {
   it("rejects malformed patterns", () => {
     assert.throws(() => parseRequestPattern("/api/orders"), /METHOD \/path/);
   });
+
+  it("names a Tauri command call with invoke, * matching any part of the name", () => {
+    const save = parseRequestPattern("invoke save_note");
+    assert.ok(matchesRequest(save, "POST", "http://x/__windtunnel/invoke/save_note"));
+    assert.ok(!matchesRequest(save, "POST", "http://x/__windtunnel/invoke/save_notes"));
+    assert.ok(!matchesRequest(save, "POST", "http://x/save_note"));
+    const notes = parseRequestPattern("INVOKE *_note");
+    assert.ok(matchesRequest(notes, "POST", "http://x/__windtunnel/invoke/delete_note"));
+    assert.ok(!matchesRequest(notes, "POST", "http://x/__windtunnel/invoke/list_notes"));
+    // Plugin commands are percent-encoded in the path, as the page sends them.
+    assert.ok(matchesRequest(parseRequestPattern("invoke plugin:event|emit"), "POST", "http://x/__windtunnel/invoke/plugin%3Aevent%7Cemit"));
+  });
 });
 
 describe("durations", () => {

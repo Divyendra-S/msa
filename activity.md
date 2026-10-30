@@ -9,16 +9,45 @@ file says what happened recently, why, and what to know before changing things.
 ## Where things stand (2026-10-30)
 
 - `main` has Phases 1–7 done; Phase 8 (submission) is partly done.
-- **[`platforms-plan.md`](platforms-plan.md) Phase 1 (groundwork) is done and pushed**:
-  typecheck, 133 tests, and `zoo:verify` through the route and through the proxy (identical
-  tables) all pass. Phase 2 (Tauri) is in progress. Five phases, one at a time: groundwork,
-  Tauri, Android, iOS, Swift Mac apps.
+- **[`platforms-plan.md`](platforms-plan.md)**: Phases 1 (groundwork) and 2 (Tauri) are done
+  and pushed. `zoo:verify:notes` passes through both seams, no window appears during runs,
+  Replay shows the Tauri runs, and there are 138 tests. Phase 3 (Android) is next. Five phases,
+  one at a time: groundwork, Tauri, Android, iOS, Swift Mac apps.
 - Waiting on the project owner, not on code: the Muse Code install and `pnpm bench check --paid`,
   the npm publish of `windtunnel-cli`, the demo video.
 - Open after that: verify a headless Claude hunt with a real API key; an "Explain with Claude"
   panel; a test-database leak to fix; stretch items S1, S3, S5–S7 in `execution-plan.md`.
 
 ## Recent work, newest first
+
+### Platforms Phase 2: Tauri apps, in the background
+
+- **`crates/windtunnel-tauri`**: a Rust crate the app builds in behind a `windtunnel` cargo
+  feature. Its one call replaces `builder.run(context)`. With `WINDTUNNEL_PORT` set:
+  - The app's windows are created hidden on `about:blank`, and it runs with the `Prohibited`
+    activation policy. That has to be set before `run()`, because Tauri's window library brings
+    the app forward at launch, before plugins or `setup` run.
+  - It serves the app's embedded frontend plus a stand-in for Tauri's page scripts
+    (`src/tauri.js`, mirroring what `@tauri-apps/api` expects).
+  - Each `invoke` arrives as `POST /__windtunnel/invoke/<command>` and goes to
+    `Webview::on_message` on the main thread, with the app's invoke key.
+  - Events go back as server-sent events.
+- **Runner**:
+  - `app.kind: tauri` drives headless WebKit and sets `WINDTUNNEL_PORT`.
+  - `isolateHome` is on by default.
+  - Builds share `$CARGO_TARGET_DIR` in the project cache.
+  - Patterns read `invoke save_note`; calls are logged as `INVOKE save_note`.
+  - The proxy treats `text/event-stream` as an event stream, so steps never wait on one.
+- **`zoo/notes`**: a Tauri notes app (plain JS, no build step; SQLite seeded by `sqlite3`) with
+  three bug patches and six experiments. `pnpm zoo:verify:notes` (`verify.ts --app notes`).
+- **Map and scan** read `#[tauri::command]` functions (`explorer/src/tauri.ts`): SQL through
+  helpers, async or main thread, events, and who invokes them.
+- Evidence packets keep a value's line breaks as `\n`.
+- Things to know:
+  - Config commands run with the `node` on PATH, which on this Mac is nvm's Node 20 unless
+    `nvm use` ran. Run the test suite with Node 24 first on PATH.
+  - Headless WebKit on macOS parks a window at (-10000, -10000). It is off every display, so
+    window checks have to look at bounds, not only the window list.
 
 ### Platforms Phase 1: the seam, driver, fresh state and rules work beyond the browser
 

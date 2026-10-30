@@ -1,7 +1,8 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { chromium, type Browser } from "playwright";
+import type { Browser } from "playwright";
 import { type Branch, Branches } from "../branches/branches.ts";
+import { browserFor } from "../browser.ts";
 import type { CodeVersion, CodeVersionSpec } from "../branches/code-versions.ts";
 import { ConfigError } from "../config.ts";
 import type { Database } from "../database.ts";
@@ -132,8 +133,8 @@ export class Runner {
   /** Validates experiments against the project; throws a ConfigError listing every problem. */
   async validate(experiments: Experiment[]): Promise<{ rules: Rule[]; warnings: string[] }> {
     const { kind } = this.project.config.app;
-    if (kind !== "web") {
-      throw new ConfigError(`app.kind ${kind}: only web apps can run experiments so far (the plan for ${kind} apps is in platforms-plan.md)`);
+    if (kind !== "web" && kind !== "tauri") {
+      throw new ConfigError(`app.kind ${kind}: only web and Tauri apps can run experiments so far (the plan for ${kind} apps is in platforms-plan.md)`);
     }
     const rules = await loadRules(this.project);
     const problems: string[] = [];
@@ -441,7 +442,7 @@ export class Runner {
   }
 
   private launch(): Promise<Browser> {
-    this.browser ??= chromium.launch({ headless: !this.headed });
+    this.browser ??= browserFor(this.project.config.app.kind).type.launch({ headless: !this.headed });
     return this.browser;
   }
 }
