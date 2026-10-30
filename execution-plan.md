@@ -113,5 +113,6 @@
 - [ ] Community experiment packs
 - [ ] CI mode (GitHub Action)
 - [ ] Reproduce a Sentry issue as an experiment
-- [ ] Channels; Codex app-server; mobile apps
+- [ ] Channels; Codex app-server
+- [ ] Tauri, Android, iOS and Swift Mac apps: [`platforms-plan.md`](platforms-plan.md)
 - [x] Fully native Swift views in the Mac app (done with S8)

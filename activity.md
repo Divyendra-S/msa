@@ -1,21 +1,42 @@
 # Activity log
 
 A handoff for whoever picks up this repo next, human or coding agent. Newest first. Read
-[`README.md`](README.md) for what the project is, [`plan.md`](plan.md) for the product plan and
-[`execution-plan.md`](execution-plan.md) for the phases and what's still open. This file says what
-happened recently, why, and what to know before changing things.
+[`README.md`](README.md) for what the project is, [`plan.md`](plan.md) for the product plan,
+[`execution-plan.md`](execution-plan.md) for the phases and what's still open, and
+[`platforms-plan.md`](platforms-plan.md) for testing Tauri, Android, iOS and Swift Mac apps. This
+file says what happened recently, why, and what to know before changing things.
 
-## Where things stand (2026-10-29)
+## Where things stand (2026-10-30)
 
-- `main` is at `7fde8f2`, pushed. Phases 1–7 are done; Phase 8 (submission) is partly done.
-- The latest work was on the **Mac app** (`apps/mac`, SwiftUI) and two small CLI additions it
-  uses. Everything below is committed. Nothing is in progress.
+- `main` is at `1e2dc2e` (Replay), pushed. Phases 1–7 are done; Phase 8 (submission) is partly
+  done.
+- **Next: [`platforms-plan.md`](platforms-plan.md), Phase 1 (groundwork).** Five phases, one at
+  a time: groundwork, Tauri, Android, iOS, Swift Mac apps. Each phase is checked, shown in a
+  Replay screenshot and pushed before the next starts.
 - Waiting on the project owner, not on code: the Muse Code install and `pnpm bench check --paid`,
   the npm publish of `windtunnel-cli`, the demo video.
 - Open after that: verify a headless Claude hunt with a real API key; an "Explain with Claude"
   panel; a test-database leak to fix; stretch items S1, S3, S5–S7 in `execution-plan.md`.
 
 ## Recent work, newest first
+
+### `1e2dc2e` Mac app: Replay, each experiment's newest run as pages on a board
+
+- **Replay pane** (`Views/ReplayView.swift`): a row per experiment, a lane per tab, a column per
+  step; each cell is the page when the step ended, what the user did and the requests it sent.
+  Bands mark where the experiment pushed; the rules it broke end the row. Click a page for the
+  inspector; ←/→ step through, Esc closes, pinch resizes. Launch at it with
+  `--pane replay [--frame <experiment>:<n>] [--size 220]`.
+- **Step screenshots** (`runner/rep.ts`): `screens/step-NN-<tab>.jpg`, JPEG quality 50, taken
+  after the step's end time is set so its timing doesn't change. Runs from before this have
+  none; the board shows the page text instead.
+- **`GET /api/replay`** (`packages/viewer/src/replay.ts`): each experiment's newest run laid out
+  as lanes, columns and frames, with its pressure placed on the columns it touched.
+
+### `223d249` Mac app: a map of the app, and each experiment's way through it
+
+- **Map pane**: the app's pages, the routes they call and the tables and services those reach,
+  from the code, with each experiment's newest run drawn over it. Data from `GET /api/map`.
 
 ### `7fde8f2` Mac app: first run that reads your code, light mode, an overview with a chart
 
