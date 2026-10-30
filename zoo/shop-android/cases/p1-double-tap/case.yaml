@@ -1,0 +1,12 @@
+id: p1-double-tap
+title: Double tap
+summary: >-
+  "Pay now" stays enabled while the checkout is on its way, and the server no longer makes one
+  order per cart (the shop's case 01), so a double tap turns one cart into two orders.
+experiment: checkout-double-tap
+perturbation: Double tap "Pay now"
+breaks: [one-order-per-cart]
+handler: app/api/orders/route.ts
+fix: >-
+  Create the order atomically (unique cart_id + INSERT … ON CONFLICT) and disable the button while
+  paying (`enabled = !model.paying`).

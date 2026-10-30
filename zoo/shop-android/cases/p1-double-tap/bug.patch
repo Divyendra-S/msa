@@ -1,0 +1,57 @@
+--- a/zoo/shop/app/api/orders/route.ts
++++ b/zoo/shop/app/api/orders/route.ts
+@@ -31,20 +31,12 @@
+       await db.query("SELECT id FROM carts WHERE id = $1 FOR UPDATE", [cart.id]);
+       const items = await getCartItems(cart.id, db);
+       if (items.length === 0) throw new EmptyCartError();
+-      // One order per cart: a repeated or concurrent checkout gets the existing order back.
+       const created = await db.query<Order>(
+         `INSERT INTO orders (user_id, cart_id, total_cents) VALUES ($1, $2, $3)
+-         ON CONFLICT (cart_id) DO NOTHING
+          RETURNING id, status, total_cents`,
+         [user.id, cart.id, cartTotal(items)],
+       );
+-      const newOrder = created.rows[0];
+-      if (!newOrder) {
+-        const existing = await db.query<Order>("SELECT id, status, total_cents FROM orders WHERE cart_id = $1", [
+-          cart.id,
+-        ]);
+-        return existing.rows[0]!;
+-      }
++      const newOrder = created.rows[0]!;
+       for (const item of items) {
+         const reserved = await db.query("UPDATE products SET stock = stock - $1 WHERE id = $2 AND stock >= $1", [
+           item.quantity,
+@@ -68,10 +60,6 @@
+     throw err;
+   }
+ 
+-  if (order.status === "paid" || order.status === "failed") {
+-    return Response.json({ orderId: order.id, status: order.status });
+-  }
+-
+   // Keyed by order, so a retried checkout gets the first charge back instead of a second one.
+   const charge = await createCharge(
+     { amountCents: order.total_cents, orderId: order.id },
+--- a/zoo/shop/db/schema.sql
++++ b/zoo/shop/db/schema.sql
+@@ -55,7 +55,7 @@
+ CREATE TABLE orders (
+   id          serial PRIMARY KEY,
+   user_id     integer NOT NULL REFERENCES users (id),
+-  cart_id     integer NOT NULL UNIQUE REFERENCES carts (id),
++  cart_id     integer NOT NULL REFERENCES carts (id),
+   total_cents integer NOT NULL,
+   status      text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'processing', 'paid', 'failed')),
+   charge_id   text,
+--- a/zoo/shop-android/app/src/main/java/dev/windtunnel/shop/Screens.kt
++++ b/zoo/shop-android/app/src/main/java/dev/windtunnel/shop/Screens.kt
+@@ -125,7 +125,7 @@
+             }
+             HorizontalDivider()
+             Text("Total: ${price(cart.totalCents)}", style = MaterialTheme.typography.titleMedium)
+-            Button(onClick = model::pay, enabled = !model.paying) { Text(if (model.paying) "Paying…" else "Pay now") }
++            Button(onClick = model::pay) { Text(if (model.paying) "Paying…" else "Pay now") }
+         }
+     }
+     model.payError?.let { Alert(it) }

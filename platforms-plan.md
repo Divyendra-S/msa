@@ -1,7 +1,7 @@
 # Wind Tunnel beyond web apps — Plan
 
-Last updated 2026-10-30. **Status: Phases 1 (groundwork) and 2 (Tauri) done and pushed. Phase 3
-(Android) is next.**
+Last updated 2026-10-30. **Status: Phases 1 (groundwork), 2 (Tauri) and 3 (Android) done and
+pushed. Phase 4 (iOS) is in progress.**
 
 Today Wind Tunnel tests Next.js + Postgres web apps. This plan adds Tauri apps, Android and iOS
 apps on an emulator or simulator, and native Swift Mac apps, all running in the background: no
@@ -13,8 +13,8 @@ window on screen, no mouse or keyboard taken.
 |---|---|
 | 1 Groundwork | Done, pushed |
 | 2 Tauri | Done, pushed |
-| 3 Android | Not started |
-| 4 iOS | Not started |
+| 3 Android | Done, pushed |
+| 4 iOS | In progress |
 | 5 Swift Mac apps | Not started |
 
 What Phase 1 changed, for anyone using Wind Tunnel today:
@@ -36,6 +36,16 @@ What Phase 2 adds:
   save_note`). The app adds `crates/windtunnel-tauri` behind a cargo feature.
 - `zoo/notes`, a Tauri notes app with three planted bugs; `pnpm zoo:verify:notes`.
 - The Map and `windtunnel scan` read `#[tauri::command]` functions.
+
+What Phase 3 adds:
+
+- `app.kind: android`: the app runs on headless emulators (`windtunnel devices create` once),
+  its server as for the web in `app.dir`. Flows are `phoneFlow`s (`ui.tap("Pay now")`), every
+  call goes through the proxy under the phone's tab, and two users are two phones.
+- Phone pressures: `kill-app`, `background`, `rotate`, `offline`.
+- `zoo/shop-android`, the shop's Android app: the shop's bugs caught from the phone, and a
+  phone bug; `pnpm zoo:verify:android`.
+- The Map lists the phone's screens and which server routes its calls reach.
 
 ## The idea
 
@@ -224,24 +234,72 @@ Found on the way:
 Most phone apps talk to a server. That half stays as it is (worktree, Postgres copy, own server,
 SQL rules); only the client changes.
 
-- [ ] **Test app `zoo/shop-android`:** a small Kotlin + Compose client of the zoo shop's API
+- [x] **Test app `zoo/shop-android`:** a small Kotlin + Compose client of the zoo shop's API
   (log in, products, cart, pay). It reads the API address from a launch extra, and its debug
   build allows plain HTTP to localhost. The shop's own bugs and rules apply unchanged.
-- [ ] **Device:** an emulator made from the installed `android-34/google_atd/arm64-v8a` image
+  Done: the app (ViewModel state, `HttpURLConnection` with streamed bodies so a dropped
+  connection is never resent on its own), `GET /api/products` and `GET /api/cart` added to the
+  shop. `.windtunnel/rules.yaml` links to the shop's rules. Its cases reuse the shop's (`from:` in
+  `case.yaml`: 01, 02, 05, c1) and add `p1-double-tap`.
+- [x] **Device:** an emulator made from the installed `android-34/google_atd/arm64-v8a` image
   (made for headless tests; ask before creating it), started with `-no-window -no-audio`, kept
   running between runs. App data is cleared per run (`pm clear`). `adb reverse` lets the phone
   reach its proxy port. At most 2 emulators at once (16 GB of RAM).
-- [ ] **Driver:** Appium with the UiAutomator2 driver, through webdriverio. Phone flows use a small
+  Done: the image turned out to be an empty folder; with the owner's OK it was downloaded
+  (679 MB, checksum checked, `system.img` made sparse: 1.3 GB on disk). `windtunnel devices
+  create` writes the `windtunnel-34` AVD; the first run makes a `windtunnel` snapshot, later boots
+  are read-only from it (two phones in about 25 s). Ports 5570–5584; `windtunnel devices stop`.
+- [x] **Driver:** Appium with the UiAutomator2 driver, through webdriverio. Phone flows use a small
   API by accessibility label: `ui.tap("Pay now")`, `ui.fill("Email", …)`, `ui.see("Order
   placed")`, `ui.back()`, inside the same `step(name, …)`.
-- [ ] **Phone pressures:** the app killed mid-request and reopened; sent to the background and
+  Done: `phoneFlow` with `ui.tap`, `fill`, `see`, `shows`, `back`, `text`. The screen is read
+  from UiAutomator's page source (about 20 ms) and matched in `android/screen.ts`: a tap goes to
+  the control holding the label, never to a heading with the same words. Appium 3.8, its
+  UiAutomator2 driver 8.7 and webdriverio 9.32 are dev dependencies; `APPIUM_HOME` is the
+  repository, so nothing is installed in `~/.appium`.
+- [x] **Phone pressures:** the app killed mid-request and reopened; sent to the background and
   back; rotated; offline during a step and back online. Network perturbations and races work
   as on the web, through the proxy; two users are two emulators.
-- [ ] **Screenshots:** `adb exec-out screencap`, saved like web steps, so Replay works unchanged.
+  Done: `kill-app`, `background` (`for`), `rotate` (during the step's first request, or after
+  the step) and `offline` (airplane mode, and the proxy refuses the phone's calls). Each phone has
+  its own proxy port, so its calls are its tab's.
+- [x] **Screenshots:** `adb exec-out screencap`, saved like web steps, so Replay works unchanged.
+  Done: made JPEG with `sips`. Android's test images turn app drawing off, which left them
+  black; runs turn it back on.
 
 **Done when:** from the phone, double tap and lose-response break one-order-per-cart, two phones
 racing break stock-non-negative, the fixes pass, no emulator window appears, and Replay shows
 phone screenshots.
+
+- [x] `pnpm zoo:verify:android`: PASS, 180 runs in 515 s. The clean app and the control (c1) pass
+  all 8 experiments. From the phone, a lost response breaks `one-order-per-cart` with the shop's
+  case 01 (3/3) and `one-charge-per-order` with case 02 (3/3). Two phones released together break
+  `stock-non-negative` with case 05 (3/9 runs: every "together" run, as on the web). The double
+  tap breaks `one-order-per-cart` with `p1-double-tap` (3/3).
+- [x] No emulator window: a window watcher ran through both full verifies (330 runs). It saw no
+  window from the emulators or qemu on any display; the only new windows were the owner's own
+  (Raycast, the screenshot tool, Notification Centre).
+- [x] Replay shows phone screenshots: the Mac app's Replay on `zoo/shop-android`, every step
+  with the phone's screen (pressure labels "double tap", "backgrounded 2s", "offline", "response
+  lost"). Board cards show the top of a phone's screen; the detail shows the whole phone in its
+  own shape. Web Replay is unchanged.
+- [x] `pnpm typecheck` and `pnpm test` pass: 153 tests, 0 failing. The shop's `zoo:verify` gives
+  the same table as before (PASS, 840 runs in 646 s, with the 3 expected errors in case 04), and
+  `zoo:verify:notes` passes (72 runs in 34.9 s).
+- [x] Docs: README (Android apps, layout), `docs/experiments.md` (phone flows, phone pressures,
+  Android apps), the init skill, `zoo/shop-android/README.md`, `zoo/cases/README.md`,
+  `activity.md`.
+- [x] The owner says "push".
+
+Found on the way:
+- With "Pay now" disabled while paying, a double tap on a phone sends one checkout: Compose
+  disables the button within a frame, and the second tap comes about 25 ms later. The web's
+  case 01 removes the button's guard as well as the server's; the phone case does the same.
+- A killed app's request ends the moment it dies; the step now waits for the app to open again.
+- Replay's board centred a tall screenshot in its card, which showed the blank middle of a phone
+  screen; cards now show the top of the shot, and the detail keeps a phone's own shape.
+- Not yet: phone-side SQL rules (an app's own database on the phone), `expire-session`,
+  `advance-clock` and `replay-as` on phones, and Appium's scrolling to a control below the fold.
 
 ## Phase 4 — iOS
 

@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, it } from "node:test";
 import { ConfigError } from "../src/config.ts";
+import type { Project } from "../src/project.ts";
 import { diffSnapshots } from "../src/runner/db-diff.ts";
-import { parseExperiment, tabLabels, variantsOf } from "../src/runner/experiment.ts";
+import { checkExperiment, parseExperiment, tabLabels, variantsOf } from "../src/runner/experiment.ts";
 import { matchesRequest, parseDuration, parseRequestPattern } from "../src/runner/match.ts";
 
 describe("request patterns", () => {
@@ -92,6 +96,48 @@ race: { request: POST /api/orders, order: [bob, alice], timeout: 500ms }`);
     );
     assert.throws(() => parse("flow: f\nperturb: [{ do: delay, request: /api, ms: 1s }]"), /METHOD \/path/);
     assert.throws(() => parseExperiment("id: other\nflow: f", "x.yaml", "x"), /must match the file name/);
+  });
+});
+
+describe("phone experiments", () => {
+  const parse = (text: string) => parseExperiment(text, "test.yaml", "test");
+
+  it("parses the phone pressures with their defaults", () => {
+    const e = parse(`flow: f
+perturb:
+  - { do: kill-app, step: pay }
+  - { do: background, step: pay, for: 2s, when: after }
+  - { do: rotate, step: pay }
+  - { do: offline, step: pay }`);
+    assert.deepEqual(e.perturb, [
+      { do: "kill-app", step: "pay", when: "during" },
+      { do: "background", step: "pay", when: "after", for: 2000 },
+      { do: "rotate", step: "pay", when: "during" },
+      { do: "offline", step: "pay" },
+    ]);
+  });
+
+  it("refuses phone pressures for web apps, browser-only perturbations and page flows for phone apps", async () => {
+    const root = await mkdtemp(join(tmpdir(), "wt-phone-"));
+    try {
+      await mkdir(join(root, ".windtunnel", "flows"), { recursive: true });
+      await writeFile(join(root, ".windtunnel", "flows", "tap.ts"), 'import { phoneFlow } from "windtunnel";\nexport default phoneFlow(async ({ ui, step }) => { await step("pay", () => ui.tap("Pay now")); });\n');
+      await writeFile(join(root, ".windtunnel", "flows", "click.ts"), 'import { flow } from "windtunnel";\nexport default flow(async ({ page, step }) => { await step("pay", () => page.click("button")); });\n');
+      const project = (kind: string) =>
+        ({ root, stateDir: join(root, ".windtunnel"), config: { app: { kind }, users: {} } }) as unknown as Project;
+      const check = (kind: string, yaml: string) => checkExperiment(parse(yaml), project(kind), []).then((r) => r.errors);
+
+      assert.deepEqual(await check("android", "flow: tap\nperturb: [{ do: kill-app, step: pay }, { do: lose-response, request: POST /api/orders }]"), []);
+      assert.deepEqual(await check("android", "flow: tap\nperturb: [{ do: refresh, step: pay }, { do: second-tab, step: pay }]"), [
+        "refresh: not for phone apps (use kill-app or background)",
+        "second-tab: not for phone apps (it needs a browser)",
+      ]);
+      assert.deepEqual(await check("web", "flow: click\nperturb: [{ do: offline, step: pay }]"), ["offline: only for phone apps (app.kind: android)"]);
+      assert.match((await check("android", "flow: click"))[0]!, /flow "click" drives a page; a phone app's flows are `export default phoneFlow/);
+      assert.match((await check("web", "flow: tap"))[0]!, /flow "tap" is a phoneFlow, but app.kind is web/);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

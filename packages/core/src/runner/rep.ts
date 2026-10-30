@@ -3,12 +3,13 @@ import { join } from "node:path";
 import type { MockEvent, Tenant } from "@windtunnel/mock-pay";
 import { type Database, runStatement } from "../database.ts";
 import type { FlowContext, TestUser } from "../flow-api.ts";
+import type { PhoneTab } from "./android-driver.ts";
 import type { Driver, DriverSession, DriverTab, ScreenState } from "./driver.ts";
 import type { BrowserPerturbation, Experiment, RaceOrder, Variant, WebhookSpec } from "./experiment.ts";
 import { isNetworkPerturbation } from "./experiment.ts";
 import type { LoadedFlow } from "./flows.ts";
 import { type ActionCall, describeAction } from "./instrument.ts";
-import { type Call, type Group, Network, newGroup, type RaceRecord, type RequestRecord } from "./network.ts";
+import { type Call, type Group, type Interruption, Network, newGroup, type RaceRecord, type RequestRecord } from "./network.ts";
 import { pathOf } from "./playwright-driver.ts";
 import type { HttpProxy } from "./proxy.ts";
 import { type LocatorFailure, locatorFailure } from "./snapshot.ts";
@@ -89,6 +90,8 @@ export interface RepInput {
   tabs: { label: string; user: string }[];
   dir: string;
   trace: TraceMode;
+  /** Who gets the app's answers, in harness notes: `browser` (default) or `phone`. */
+  client?: string;
 }
 
 interface Session {
@@ -111,11 +114,18 @@ interface Tab {
   skipUntil?: string;
   isFork: boolean;
   arrive?: () => Promise<void>;
-  current?: { name: string; record: StepRecord; doubleSubmit: boolean; refreshPending: boolean };
+  current?: { name: string; record: StepRecord; doubleSubmit: boolean; interruption?: ArmedInterruption };
   lastStep?: string;
   readonly stepName: string | undefined;
-  takeRefresh(): boolean;
-  reload(): Promise<void>;
+  takeInterruption(): Interruption | undefined;
+  interrupt(what: Interruption, phase: "start" | "end"): Promise<void>;
+}
+
+/** A step's interruption, until its first request takes it. */
+interface ArmedInterruption {
+  what: Interruption;
+  perturbation: BrowserPerturbation;
+  taken: boolean;
 }
 
 /** One run of a step in one tab; `started` is ms since the run started. */
@@ -158,6 +168,7 @@ export class Rep {
         order: (input.variant.order ?? race.order) as RaceOrder,
       },
       replay: (user, call, original) => this.replayAs(user, call, original),
+      ...(input.client ? { client: input.client } : {}),
     });
     this.webhooks = new WebhookControl(input.tenant, experiment.webhooks, this.active, () => {
       // When the earliest request that could have made the charge (not a GET, still waiting) was sent.
@@ -278,7 +289,7 @@ export class Rep {
     const tab = await session.open(`${name} (replay)`, { onAction: (call) => call.invoke(), onConsole: () => undefined });
     try {
       await login.flow.run({
-        ...tab.surface,
+        ...(tab.surface as FlowContext),
         step: (_name, action) => action(),
         login: () => Promise.reject(new Error("login() inside the login flow")),
         user,
@@ -340,13 +351,13 @@ export class Rep {
       get stepName() {
         return this.current?.name;
       },
-      takeRefresh() {
-        if (!this.current?.refreshPending) return false;
-        this.current.refreshPending = false;
-        this.current.record.harness = [...(this.current.record.harness ?? []), "page refreshed while a request was in flight"];
-        return true;
+      takeInterruption() {
+        const armed = this.current?.interruption;
+        if (!armed || armed.taken) return undefined;
+        armed.taken = true;
+        return armed.what;
       },
-      reload: () => tab.driver.reload(),
+      interrupt: (what: Interruption, phase: "start" | "end") => this.interrupt(tab, what, phase),
     } as Tab;
     this.tabByLabel.set(label, tab);
     tab.driver = await session.driver.open(label, {
@@ -366,6 +377,10 @@ export class Rep {
   private async onAction(tab: Tab, call: ActionCall): Promise<unknown> {
     const current = tab.current;
     current?.record.actions.push({ at: this.now(), action: describeAction(call) });
+    if (current?.doubleSubmit && call.double) {
+      current.record.harness = [...(current.record.harness ?? []), "double-tapped"];
+      return call.double();
+    }
     if (current?.doubleSubmit) {
       if (call.method === "click") {
         const args = [...call.args];
@@ -382,10 +397,11 @@ export class Rep {
     return call.invoke();
   }
 
+  /** A web tab's page, or a phone's `ui`, with the rest of the flow's context. */
   private contextFor(tab: Tab): FlowContext {
     const { experiment, users, baseUrl } = this.input;
     return {
-      ...tab.driver.surface,
+      ...(tab.driver.surface as FlowContext),
       step: (name, action) => this.step(tab, name, action),
       login: (user) => this.login(tab, user),
       user: tab.user,
@@ -514,10 +530,29 @@ export class Rep {
         notes.push(`opened a second tab (${fork.label}) at ${pathOf(tab.driver.url())}`);
       }
     }
+    // A step's first request can carry one interruption: a refresh, or a phone pressure.
+    const during = perturbations.find(
+      (p): p is Extract<BrowserPerturbation, { when: "during" | "after" }> =>
+        (p.do === "refresh" || p.do === "kill-app" || p.do === "background" || p.do === "rotate") && p.when === "during",
+    );
+    const offline = perturbations.some((p) => p.do === "offline");
+    if (offline) notes.push("phone offline during the step (airplane mode), online again after it");
     let result = await this.attempt(tab, name, undefined, action, {
       notes,
       doubleSubmit: perturbations.some((p) => p.do === "double-submit"),
-      refreshDuring: perturbations.some((p) => p.do === "refresh" && p.when === "during"),
+      ...(during ? { interruption: { what: during.do, perturbation: during, taken: false } } : {}),
+      ...(offline
+        ? {
+            before: async () => {
+              this.network.offline.add(tab.label);
+              await this.phone(tab).online(false);
+            },
+            after: async () => {
+              this.network.offline.delete(tab.label);
+              await this.phone(tab).online(true);
+            },
+          }
+        : {}),
     });
     for (const p of perturbations) {
       if (p.do === "repeat") {
@@ -535,11 +570,71 @@ export class Rep {
       } else if (p.do === "refresh" && p.when === "after") {
         await tab.driver.reload();
         await this.network.quiet(tab.group);
-        const last = this.steps.findLast((s) => s.tab === tab.label && s.step === name);
-        if (last) last.harness = [...(last.harness ?? []), "page refreshed after the step"];
+        this.noteLast(tab, name, "page refreshed after the step");
+      } else if ((p.do === "kill-app" || p.do === "background" || p.do === "rotate") && p.when === "after") {
+        const phone = this.phone(tab);
+        if (p.do === "kill-app") {
+          await phone.kill();
+          await phone.reopen();
+          this.noteLast(tab, name, "app killed after the step, then opened again");
+        } else if (p.do === "background") {
+          await phone.background();
+          await sleep(p.for);
+          await phone.reopen();
+          this.noteLast(tab, name, `app sent to the background after the step, back after ${p.for} ms`);
+        } else {
+          await phone.rotate(true);
+          await this.network.quiet(tab.group);
+          await phone.rotate(false);
+          this.noteLast(tab, name, "phone turned to landscape and back after the step");
+        }
+        await this.network.quiet(tab.group);
       }
     }
     return result;
+  }
+
+  private noteLast(tab: Tab, step: string, note: string): void {
+    const last = this.steps.findLast((s) => s.tab === tab.label && s.step === step);
+    if (last) last.harness = [...(last.harness ?? []), note];
+  }
+
+  /** A phone pressure on a tab that isn't a phone is a bug in the experiment's checks. */
+  private phone(tab: Tab): PhoneTab {
+    if (!("kill" in tab.driver)) throw new Error("phone pressures need an app on a phone");
+    return tab.driver as PhoneTab;
+  }
+
+  /** Carries out a step's interruption when its first request arrives (`start`) and after the app answered (`end`). */
+  private async interrupt(tab: Tab, what: Interruption, phase: "start" | "end"): Promise<void> {
+    const armed = tab.current?.interruption;
+    const record = tab.current?.record;
+    const note = (text: string) => record && (record.harness = [...(record.harness ?? []), text]);
+    if (what === "refresh") {
+      note("page refreshed while a request was in flight");
+      return tab.driver.reload();
+    }
+    const phone = this.phone(tab);
+    if (what === "kill-app") {
+      if (phase === "start") {
+        note("app killed while a request was in flight");
+        return phone.kill();
+      }
+      note("app opened again");
+      return phone.reopen();
+    }
+    if (what === "background") {
+      if (phase === "start") {
+        note("app sent to the background while a request was in flight");
+        return phone.background();
+      }
+      const ms = armed?.perturbation.do === "background" ? armed.perturbation.for : 1_000;
+      await sleep(ms);
+      note(`app brought back after ${ms} ms`);
+      return phone.reopen();
+    }
+    note("phone turned to landscape while a request was in flight");
+    return phone.rotate(true);
   }
 
   private async attempt<T>(
@@ -547,7 +642,14 @@ export class Rep {
     name: string,
     attempt: string | undefined,
     action: () => Promise<T>,
-    options: { notes?: string[]; doubleSubmit?: boolean; refreshDuring?: boolean; before?: () => Promise<void> },
+    options: {
+      notes?: string[];
+      doubleSubmit?: boolean;
+      interruption?: ArmedInterruption;
+      before?: () => Promise<void>;
+      /** Undoes `before` once the step is quiet, even when it failed. */
+      after?: () => Promise<void>;
+    },
   ): Promise<T> {
     const record: StepRecord = {
       tab: tab.label,
@@ -559,9 +661,10 @@ export class Rep {
       ...(options.notes?.length ? { harness: [...options.notes] } : {}),
       quiet: true,
     };
-    tab.current = { name, record, doubleSubmit: !!options.doubleSubmit, refreshPending: !!options.refreshDuring };
+    const interruption = options.interruption;
+    tab.current = { name, record, doubleSubmit: !!options.doubleSubmit, ...(interruption ? { interruption } : {}) };
     tab.lastStep = name;
-    if (options.refreshDuring) this.network.refreshArmed = true;
+    if (interruption) this.network.interruptArmed = true;
     try {
       await options.before?.();
       return await action();
@@ -570,17 +673,23 @@ export class Rep {
       throw err;
     } finally {
       record.quiet = await this.network.quiet(tab.group);
+      await options.after?.().catch(() => undefined);
       const seen = await tab.driver.seen();
       if (seen) record.seen = seen;
-      if (tab.current.refreshPending) {
-        record.harness = [...(record.harness ?? []), "refresh: the step sent no request to interrupt"];
+      if (interruption && !interruption.taken) {
+        record.harness = [...(record.harness ?? []), `${interruption.what}: the step sent no request to interrupt`];
       }
       tab.current = undefined;
-      this.network.refreshArmed = this.tabs.some((t) => t.current?.refreshPending);
+      this.network.interruptArmed = this.tabs.some((t) => t.current?.interruption && !t.current.interruption.taken);
       if (tab.session.loggedInAs && tab.session.loggedInAs !== tab.user.name) record.as = tab.session.loggedInAs;
       record.end = this.now();
       const shot = await this.shoot(tab);
       if (shot) record.shot = shot;
+      // A phone turned while the step ran is turned back once its screenshot shows it turned.
+      if (interruption?.what === "rotate" && interruption.taken) {
+        await this.phone(tab).rotate(false).catch(() => undefined);
+        record.harness = [...(record.harness ?? []), "turned back to portrait"];
+      }
       this.steps.push(record);
     }
   }

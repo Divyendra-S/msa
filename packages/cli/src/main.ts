@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
   Branches,
@@ -9,6 +9,17 @@ import {
   type CodeVersionSpec,
   clean,
   ConfigError,
+  createAvd,
+  DEFAULT_AVD,
+  DEFAULT_IMAGE,
+  findAndroidSdk,
+  findAppium,
+  listAvds,
+  listSystemImages,
+  runningEmulators,
+  stopEmulator,
+  systemImageDir,
+  avdHome,
   describeDatabase,
   formatProof,
   formatResults,
@@ -80,6 +91,7 @@ export interface Flags {
   yes?: boolean;
   "dry-run"?: boolean;
   hosts?: string;
+  image?: string;
   help?: boolean;
 }
 
@@ -112,7 +124,10 @@ Commands
                       database changes, rules, usage; Run hunt (Muse Code) and Open in Claude Code
   mcp                 MCP server on stdin/stdout for coding agents (Claude Code, Codex, Muse Code)
   skills --out <dir>  Copy the agent skills (init, hunt, prove, test) into <dir>, e.g. .agents/skills
-  doctor              Check Node, git, the config file and the database
+  doctor              Check Node, git, the config file and the database (and the Android tools, for phone apps)
+  devices [create|stop]
+                      The Android emulators phone apps run on: list them, create the AVD (windtunnel-34,
+                      from Android's image for automated tests), or stop the ones still running
   prepare             Check out, install and build a code version, and seed its snapshot
   branch              Start an isolated branch (app + database copy + data folder) and keep it running
   clean               Stop leftover app processes, drop run databases and remove data folders
@@ -127,7 +142,7 @@ Options
   --trace <mode>      (run) Playwright traces: failures (default: runs that broke a rule or errored), on, off
   --headed            (run) show the browser
   --seam <where>      (run) where the browser's calls are caught: route (default: Playwright's routes) or
-                      proxy (an HTTP proxy in front of the app, as for phones and desktop apps)
+                      proxy (an HTTP proxy in front of the app, as phone apps always use)
   --keep-db           (run, branch) keep run databases after stopping
   --limit <n>         (runs) how many to list (default 20)
   --focus <text>      (map) only routes and pages whose path or file contains this
@@ -150,6 +165,7 @@ Options
   --yes, -y           (install) don't ask before making changes
   --dry-run           (install) only show what would be done
   --hosts <a,b>       (install) only these agents: claude, codex, muse (default: every one found)
+  --image <id>        (devices create) system image, e.g. system-images;android-34;google_atd;arm64-v8a
   --json              Machine-readable output
 `;
 
@@ -203,6 +219,8 @@ export async function main(args: string[], flags: Flags): Promise<number> {
         return await branch(flags);
       case "clean":
         return await cleanCommand(flags);
+      case "devices":
+        return await devices(args[1], flags);
       default:
         process.stderr.write(`unknown command: ${command}\n\n${HELP}`);
         return 1;
@@ -286,6 +304,7 @@ async function doctor(flags: Flags): Promise<number> {
     const project = await openProject(flags.cwd);
     checks.push({ name: "config", ok: true, detail: project.configPath });
     checks.push({ name: "git", ok: true, detail: project.repoRoot });
+    if (project.config.android) checks.push(...(await androidChecks(project.root, project.config.android.avd)));
     if (project.config.app.kind === "tauri") {
       const webkit = browserStatus("tauri");
       checks.push({ name: "webkit", ok: webkit.installed, detail: webkit.installed ? webkit.path : "not downloaded: npx playwright install webkit" });
@@ -304,6 +323,74 @@ async function doctor(flags: Flags): Promise<number> {
 
   print(flags, checks, checks.map((c) => `${c.ok ? "ok  " : "FAIL"}  ${c.name.padEnd(9)} ${c.detail}`).join("\n"));
   return checks.every((c) => c.ok) ? 0 : 1;
+}
+
+/** What phone apps need: the SDK, the AVD, Java for Gradle, and Appium with its Android driver. */
+async function androidChecks(root: string, avd: string): Promise<{ name: string; ok: boolean; detail: string }[]> {
+  const checks: { name: string; ok: boolean; detail: string }[] = [];
+  const sdk = await findAndroidSdk();
+  checks.push({ name: "android", ok: !!sdk, detail: sdk ? sdk.root : "no SDK: install Android Studio, or set ANDROID_HOME" });
+  if (sdk) {
+    const avds = await listAvds();
+    const image = await systemImageDir(sdk, DEFAULT_IMAGE);
+    checks.push({
+      name: "avd",
+      ok: avds.includes(avd),
+      detail: avds.includes(avd)
+        ? `${avd} (${avdHome()})`
+        : `${avd} missing: windtunnel devices create${image ? "" : ` (after installing ${DEFAULT_IMAGE} with Android Studio's SDK Manager)`}`,
+    });
+    const running = await runningEmulators(sdk, avd);
+    checks.push({ name: "phones", ok: true, detail: running.length ? `running: ${running.join(", ")}` : "none running (the first run starts them)" });
+  }
+  const java = await runScript("java -version 2>&1 | head -1", { cwd: root, timeoutMs: 15_000 }).catch(() => undefined);
+  checks.push({ name: "java", ok: java?.code === 0 && /version/.test(java.stdout), detail: java?.code === 0 ? java.stdout.trim() : "not found: Gradle needs a JDK (17 or newer)" });
+  const appium = await findAppium(root);
+  const driver = appium && (await stat(resolve(appium.home, "node_modules", "appium-uiautomator2-driver")).then(() => true, () => false));
+  checks.push({
+    name: "appium",
+    ok: !!driver,
+    detail: driver ? `${appium.home}/node_modules (UiAutomator2 driver)` : "not installed: npm i -D appium appium-uiautomator2-driver webdriverio",
+  });
+  return checks;
+}
+
+/** `windtunnel devices`: the emulators Wind Tunnel runs phones on. */
+async function devices(action: string | undefined, flags: Flags): Promise<number> {
+  const sdk = await findAndroidSdk();
+  if (!sdk) throw new ConfigError("no Android SDK found: install Android Studio, or set ANDROID_HOME");
+  const project = await openProject(flags.cwd).catch(() => undefined);
+  const avd = project?.config.android?.avd ?? DEFAULT_AVD;
+  if (action === "create") {
+    const image = flags.image ?? DEFAULT_IMAGE;
+    if (!(await systemImageDir(sdk, image))) {
+      const installed = await listSystemImages(sdk);
+      throw new ConfigError(`${image} is not installed (installed: ${installed.join(", ") || "none"}); add it with Android Studio's SDK Manager, or pass --image`);
+    }
+    const dir = await createAvd(sdk, avd, image);
+    print(flags, { avd, image, dir }, `created ${avd} from ${image}\n  ${dir}\nThe first run boots it once to make the snapshot runs start from.`);
+    return 0;
+  }
+  if (action === "stop") {
+    const running = await runningEmulators(sdk);
+    for (const serial of running) await stopEmulator(sdk, serial);
+    print(flags, { stopped: running }, running.length ? `stopped ${running.join(", ")}` : "no emulators running");
+    return 0;
+  }
+  if (action) throw new ConfigError(`devices ${action}: use create or stop, or nothing to list`);
+  const avds = await listAvds();
+  const running = await runningEmulators(sdk);
+  const data = { sdk: sdk.root, avd, created: avds.includes(avd), avds, running };
+  print(
+    flags,
+    data,
+    [
+      `sdk      ${sdk.root}`,
+      `avd      ${avd}${avds.includes(avd) ? "" : " (not created: windtunnel devices create)"}`,
+      `running  ${running.length ? running.join(", ") : "none"}`,
+    ].join("\n"),
+  );
+  return 0;
 }
 
 async function prepare(flags: Flags): Promise<number> {

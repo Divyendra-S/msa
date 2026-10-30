@@ -14,6 +14,7 @@
     "zoo:install": "pnpm --dir zoo/shop install --frozen-lockfile --ignore-workspace",
     "zoo:verify": "node zoo/cases/verify.ts",
     "zoo:verify:notes": "node zoo/cases/verify.ts --app notes",
+    "zoo:verify:android": "node zoo/cases/verify.ts --app shop-android",
     "zoo:prove": "node zoo/cases/prove.ts",
     "zoo:heal": "node zoo/cases/heal.ts",
     "demo:setup": "node zoo/demo/setup.ts",
@@ -26,6 +27,9 @@
   },
   "devDependencies": {
     "@types/node": "^24.10.0",
-    "typescript": "~6.0.3"
+    "appium": "3.8.0",
+    "appium-uiautomator2-driver": "8.7.0",
+    "typescript": "~6.0.3",
+    "webdriverio": "9.32.0"
   }
 }

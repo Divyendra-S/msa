@@ -1,3 +1,15 @@
+export { findAppium } from "./android/appium.ts";
+export { connectedSerials, runningEmulators, stopEmulator } from "./android/emulators.ts";
+export {
+  avdHome,
+  createAvd,
+  DEFAULT_AVD,
+  DEFAULT_IMAGE,
+  findAndroidSdk,
+  listAvds,
+  listSystemImages,
+  systemImageDir,
+} from "./android/sdk.ts";
 export { Branch, Branches, type BranchInfo, type CreateBranchOptions, type SeedCopy } from "./branches/branches.ts";
 export { browserFor, browserStatus, chromiumStatus, playwrightCli } from "./browser.ts";
 export { type CodeVersion, type CodeVersionSpec, CodeVersions, type PreparedVersion } from "./branches/code-versions.ts";
@@ -34,7 +46,7 @@ export {
   type RunFacts,
 } from "./rules.ts";
 export { runFacts } from "./runner/facts.ts";
-export { flow, type Flow, type FlowContext, type TestUser } from "./flow-api.ts";
+export { flow, type Flow, type FlowContext, type PhoneFlowContext, type PhoneUi, phoneFlow, type TestUser } from "./flow-api.ts";
 export {
   checkExperiment,
   EXPERIMENTS_DIR,

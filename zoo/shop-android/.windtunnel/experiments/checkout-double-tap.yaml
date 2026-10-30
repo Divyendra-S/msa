@@ -1,0 +1,9 @@
+description: Alice double-taps "Pay now" on her phone; any checkout requests that get through reach the server together.
+flow: checkout
+perturb:
+  - do: double-submit
+    step: pay
+race:
+  request: POST /api/orders
+  count: 2
+  timeout: 1s

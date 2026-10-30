@@ -47,7 +47,7 @@ class FakeCall implements Call {
 }
 
 function tab(label: string, stepName = "pay"): NetworkTab {
-  return { label, group: newGroup(), stepName, takeRefresh: () => false, reload: async () => undefined };
+  return { label, group: newGroup(), stepName, takeInterruption: () => undefined, interrupt: async () => undefined };
 }
 
 /** A Network for an experiment written as YAML. */
@@ -154,5 +154,41 @@ describe("network seam", () => {
     assert.equal(net.settle(record), false, "settled once");
     assert.equal(record.failure, "gone");
     assert.equal(await net.quiet(alice.group, 20, 100), true);
+  });
+  it("an offline phone's calls fail without reaching the app", async () => {
+    events.length = 0;
+    const net = new Network({ t0: Date.now(), perturbations: [], client: "phone" });
+    net.offline.add("alice");
+    const record = await handle(net, new FakeCall("a", "POST", "/api/orders"), tab("alice"));
+    await handle(net, new FakeCall("b", "POST", "/api/orders"), tab("bob"));
+    assert.deepEqual(events, ["a drop", "b pass"]);
+    assert.equal(record.sent, null);
+    assert.match(record.harness!.join(), /the phone was offline/);
+  });
+
+  it("kill-app: the app dies while the server answers, and is opened again; the step waits for both", async () => {
+    events.length = 0;
+    const net = new Network({ t0: Date.now(), perturbations: [], client: "phone" });
+    let armed = true;
+    const alice: NetworkTab = {
+      label: "alice",
+      group: newGroup(),
+      stepName: "pay",
+      takeInterruption: () => (armed ? ((armed = false), "kill-app") : undefined),
+      interrupt: async (what, phase) => {
+        events.push(`${what} ${phase}`);
+        if (phase === "end") await new Promise((r) => setTimeout(r, 40));
+      },
+    };
+    const record = net.record({ tab: "alice", step: "pay", method: "POST", url: "/api/orders", type: "fetch" });
+    net.opened(record, alice.group);
+    const handled = net.handle(new FakeCall("a", "POST", "/api/orders", { appMs: 10 }), alice, record);
+    net.settle(record, "canceled by the client");
+    assert.equal(await net.quiet(alice.group, 10, 20), false, "busy until the app is open again");
+    await handled;
+    assert.deepEqual(events, ["a send", "kill-app start", "a drop", "kill-app end"]);
+    assert.equal(await net.quiet(alice.group, 10, 100), true);
+    await handle(net, new FakeCall("b", "POST", "/api/orders"), alice);
+    assert.equal(events.at(-1), "b pass", "only the step's first call is interrupted");
   });
 });

@@ -1,0 +1,5 @@
+description: Android kills the app while the checkout is on its way; Alice opens it again and looks in her cart.
+flow: checkout
+perturb:
+  - do: kill-app
+    step: pay

@@ -33,6 +33,7 @@ const { values, positionals } = parseArgs({
     yes: { type: "boolean", short: "y", default: false },
     "dry-run": { type: "boolean", default: false },
     hosts: { type: "string" },
+    image: { type: "string" },
     help: { type: "boolean", short: "h", default: false },
   },
 });

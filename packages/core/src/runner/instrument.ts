@@ -9,6 +9,8 @@ export interface ActionCall {
   /** Index of the options argument for click-like methods. */
   optionsIndex: number;
   invoke(args?: unknown[]): Promise<unknown>;
+  /** The action done twice before the app can react (a phone's double tap), where the client has its own way. */
+  double?(): Promise<unknown>;
 }
 
 export type ActionHook = (call: ActionCall) => Promise<unknown>;
@@ -118,6 +120,7 @@ export function describeAction(call: ActionCall): string {
   // keyboard.type / insertText take the typed text, which may be a password.
   const showArg = typeof first === "string" && (call.target !== "keyboard" || call.method === "press");
   const arg = showArg ? ` ${JSON.stringify(first.length > 60 ? `${first.slice(0, 57)}…` : first)}` : "";
+  if (call.target === "phone") return call.method;
   if (call.target === "page" || call.target === "keyboard" || call.target === "mouse") {
     return `${call.target === "page" ? "" : `${call.target}.`}${call.method}${arg}`;
   }

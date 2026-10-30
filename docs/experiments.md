@@ -50,6 +50,39 @@ flow files are always loaded as ES modules.
 Keep page actions inside steps. Each run uses a fresh browser context per user (1280×800,
 `en-US`, UTC, reduced motion, service workers blocked).
 
+### Phone flows
+
+An Android app's flows are `phoneFlow`s: the same context, with the app's screen (`ui`) in place
+of `page`. Controls and fields are found by what the user reads: a control's text or accessibility
+label (`contentDescription`), a field's label.
+
+```ts
+import { phoneFlow } from "windtunnel";
+
+export default phoneFlow(async ({ ui, step, login, params }) => {
+  await login();
+  await step("add-item", async () => {
+    await ui.tap(`Add ${params.product ?? "Ceramic Mug"} to cart`);
+    await ui.see("Added");
+  });
+  await step("pay", () => ui.tap("Pay now"));
+  await step("confirmation", () => ui.see(/Order confirmed|out of stock/));
+});
+```
+
+| `ui` | |
+|---|---|
+| `tap(label)` | Taps the control labelled `label` (text or accessibility label, ignoring case), once it is on screen and enabled. A text that isn't inside a control doesn't count; two controls with the same label is an error, so give repeated ones their own labels (`Add Ceramic Mug to cart`) |
+| `fill(label, value)` | Replaces what the text field labelled `label` holds (its own label, hint or the label drawn inside it) |
+| `see(text)` | Waits until text containing `text` (ignoring case), or matching a RegExp, is on screen; returns it |
+| `shows(text)` | Whether matching text is on screen now |
+| `back()` | The system Back button |
+| `text()` | Everything on screen, top to bottom |
+
+Each waits up to 10 s (`{ timeout }` to change it). A run starts with the app's data cleared
+(`pm clear`), the phone in portrait and online, and the app opened with the config's launch
+extras. Each user is a phone of their own, so `users: [alice, bob]` takes two.
+
 ## Experiments
 
 ```yaml
@@ -113,6 +146,23 @@ Applied to a `step` (optionally only in `tab`).
 | `advance-clock` (`by`) | The browser clock jumps forward before the step |
 | `second-tab` | A second tab of the same session opens on the current page and runs the flow from this step on |
 | `sql` (`sql`) | One SQL statement runs against the run's database before the first tab reaches the step, e.g. to expire sessions on the server: `UPDATE sessions SET expires_at = now()` |
+
+On a phone, `double-submit` is a double tap: both taps land before the app can react, as on a
+phone busy for a moment. `refresh`, `expire-session`, `advance-clock`, `second-tab` and
+`replay-as` need a browser.
+
+### Phone pressures
+
+Applied to a `step` (optionally only in `tab`), for Android apps. `during`: while the step's
+first request is with the server (the step waits for the whole pressure); `after`: once the step
+has finished.
+
+| `do` | What happens |
+|---|---|
+| `kill-app` (`when`) | The app's process is stopped, as Android does to an app it needs the memory from; the server's answer goes nowhere; then the app is opened again |
+| `background` (`when`, `for`, default 1s) | Home, then back to the app after `for` |
+| `rotate` (`when`) | The phone turns to landscape (the screen is recreated), and back to portrait after the step |
+| `offline` | Airplane mode for the step; its requests fail without reaching the server. Online again after it (add `repeat` for the user's retry) |
 
 ### Ordered races
 
@@ -217,6 +267,16 @@ the same Playwright flows. Two tabs (`users: [guest, guest]`) are two windows on
 `$HOME` is each run's data folder (`app.isolateHome` is on by default), so the app's
 `app_data_dir()` starts from the seed snapshot. Rules are SQL on its SQLite file, at the path
 given in `db.file`. `zoo/notes` is the example: a notes app with three planted bugs.
+
+### Android apps
+
+With `app.kind: android` the app runs on headless emulators (`android.avd`, default
+`windtunnel-34`; at most `android.devices` at once, default 2). Its server is configured in `app`
+as for a web app, in `app.dir`, and every run gets its own copy. Each phone reaches the server
+through `adb reverse` and a proxy port of its own, so every call is caught at the seam and logged
+under the phone's tab; patterns, races and webhooks work as for the web. Rules are the server's
+SQL rules, plus `windtunnel_requests` and `windtunnel_pages` (each step's screen text).
+`zoo/shop-android` is the example: the shop's own bugs caught from the phone, and a phone one.
 
 ### Check rules: files, media, anything SQL can't read
 

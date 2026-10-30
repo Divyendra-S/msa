@@ -206,7 +206,7 @@ export async function mapView(workspace: Workspace, runner: Runner): Promise<Map
       id: e.id,
       ...(e.description ? { description: e.description } : {}),
       users: e.users ?? [],
-      pressure: pressureOf(e, steps, routes.filter((r) => r.webhook).map((r) => r.key)),
+      pressure: pressureOf(e, steps, routes.filter((r) => r.webhook).map((r) => r.key), !!project.config.android),
       ...(entry && result && focus
         ? {
             run: {
@@ -303,7 +303,7 @@ function callOf(route: string, list: { tab: string; start: number; end: number; 
 }
 
 /** Where an experiment pushes, in a few words, and the routes that lands on in its newest run. */
-function pressureOf(e: Experiment, steps: MapExperiment["steps"], webhookRoutes: string[]): MapExperiment["pressure"] {
+function pressureOf(e: Experiment, steps: MapExperiment["steps"], webhookRoutes: string[], phone: boolean): MapExperiment["pressure"] {
   const called = (step?: string) => unique(steps.filter((s) => !step || s.name === step).flatMap((s) => s.calls.map((c) => c.route)));
   // The routes a request pattern (`POST /api/**`) caught, in the step if it names one.
   const caught = (request: string, step?: string) => {
@@ -333,13 +333,17 @@ function pressureOf(e: Experiment, steps: MapExperiment["steps"], webhookRoutes:
       : p.do === "lose-response" ? "response lost"
       : p.do === "duplicate" ? "sent twice"
       : p.do === "replay-as" ? `replayed as ${p.user}`
-      : p.do === "double-submit" ? "double submit"
+      : p.do === "double-submit" ? (phone ? "double tap" : "double submit")
       : p.do === "repeat" ? (p.times > 1 ? `repeated ×${p.times}` : "repeated")
       : p.do === "refresh" ? `refreshed ${p.when}`
       : p.do === "back-resubmit" ? "back and resubmit"
       : p.do === "expire-session" ? "session expired"
       : p.do === "advance-clock" ? `clock +${duration(p.by)}`
       : p.do === "second-tab" ? "second tab"
+      : p.do === "kill-app" ? (p.when === "during" ? "app killed mid-request" : "app killed")
+      : p.do === "background" ? `backgrounded ${duration(p.for)}`
+      : p.do === "rotate" ? "phone turned"
+      : p.do === "offline" ? "offline"
       : "database edited";
     out.push({ what, routes: "request" in p ? caught(p.request, p.step) : inStep(p.step), ...(p.step ? { step: p.step } : {}) });
   }

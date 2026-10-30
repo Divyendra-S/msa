@@ -4,6 +4,7 @@ import { FLOWS_DIR, loadExperiments, loadRules, type Project, stepNames } from "
 import { findNextRoutes, HTTP_METHODS } from "./routes.ts";
 import { formatTable, naturalKeys, type TableInfo } from "./schema.ts";
 import { type Effect, type FetchEffect, SourceIndex, type SqlEffect, type UiFacts, unique } from "./source.ts";
+import { findAndroidApp } from "./android.ts";
 import { findTauriApp } from "./tauri.ts";
 
 export interface RouteInfo {
@@ -44,8 +45,10 @@ export interface AppMap {
 
 /** Builds the app map from source files (and the seed database's schema when given): no model involved. */
 export async function buildAppMap(project: Project, options: { schema?: TableInfo[] } = {}): Promise<AppMap> {
-  const index = new SourceIndex(project.root);
-  const { framework, routes: files } = await findNextRoutes(project.root);
+  // A phone app's server can live in another folder (`app.dir`).
+  const serverRoot = join(project.root, project.config.app?.dir ?? ".");
+  const index = new SourceIndex(serverRoot);
+  const { framework, routes: files } = await findNextRoutes(serverRoot);
   const routes: RouteInfo[] = [];
   const pages: PageInfo[] = [];
   const helperFlags = new Set<string>();
@@ -84,9 +87,28 @@ export async function buildAppMap(project: Project, options: { schema?: TableInf
     routes.push({ method: "INVOKE", path: c.name, file: c.file, ...(c.comment ? { comment: c.comment } : {}), effects: c.effects, flags, notes });
   }
   if (tauri && pages.length === 0) pages.push(...tauri.pages.map((p) => ({ ...p, kind: "page" as const })));
-  const name = tauri ? (framework === "unknown" ? tauri.framework : `${tauri.framework} + ${framework}`) : framework;
+
+  // An Android app: its screens are the pages, and each route says where the phone calls it.
+  const androidRoot = join(project.root, project.config.android?.dir ?? ".");
+  const android = await findAndroidApp(androidRoot);
+  if (android) {
+    const prefix = relative(project.root, androidRoot);
+    for (const r of routes) {
+      const callers = android.calls.filter((c) => c.method === r.method && samePath(c.path, r.path));
+      if (callers.length) r.notes.push(`called by the phone app: ${callers.map((c) => `${c.fn ?? "?"} (${join(prefix, c.file)}:${c.line})`).join(", ")}`);
+    }
+    pages.unshift(...android.screens.map((sc) => ({ path: sc.name, file: `${join(prefix, sc.file)}:${sc.line}`, kind: "page" as const, ui: sc.ui })));
+  }
+  const client = tauri?.framework ?? android?.framework;
+  const name = client ? (framework === "unknown" ? client : `${client} + ${framework}`) : framework;
 
   return { root: project.root, framework: name, routes, pages, helperFlags: [...helperFlags], schema: options.schema, windtunnel: await windtunnelFiles(project) };
+}
+
+/** `/api/orders/{orderId}` (a phone's call) is `/api/orders/:id` (a route). */
+function samePath(call: string, route: string): boolean {
+  const norm = (p: string) => p.split("?")[0]!.replace(/\{[^}]*\}|\[[^\]]*\]|:\w+/g, "*").replace(/\/$/, "");
+  return norm(call) === norm(route);
 }
 
 async function windtunnelFiles(project: Project): Promise<AppMap["windtunnel"]> {
@@ -321,18 +343,17 @@ export function formatAppMap(map: AppMap, options: { focus?: string; maxChars?: 
     for (const f of map.helperFlags) lines.push(`  ! ${f}`);
   }
 
-  lines.push("", `Pages (${pages.length}): buttons, form labels, texts it can show, requests its components send`);
-  for (const p of pages) {
-    const ui = p.ui;
-    const bits = [
-      ui.redirects.some((r) => /login|signin/i.test(r)) ? "login required" : "",
-      ui.fields.length ? `fields ${ui.fields.map((f) => `"${f}"`).join(", ")}` : "",
-      ui.buttons.length ? `buttons ${ui.buttons.map((b) => `"${b}"`).join(", ")}` : "",
-      ui.texts.length ? `shows ${ui.texts.slice(0, 8).map((t) => `"${t}"`).join(", ")}` : "",
-      ui.requests.length ? `→ ${ui.requests.map((q) => `${q.method} ${q.url}`).join(", ")}` : "",
-      p.kind === "layout" && ui.links.length ? `links ${ui.links.map((l) => `${l.text || "?"}→${l.href}`).join(", ")}` : "",
-    ].filter(Boolean);
-    lines.push(`${p.kind === "layout" ? "layout " : ""}${p.path}  ${p.file}${bits.length ? `  ${bits.join(" · ")}` : ""}`);
+  // A phone app's screens are named for their code (`CartScreen`); web pages by their path.
+  const screens = pages.filter((p) => !p.path.startsWith("/"));
+  const webPages = pages.filter((p) => p.path.startsWith("/"));
+  const sections: [string, PageInfo[]][] = [
+    [`Screens (${screens.length}): buttons, field labels, texts it can show, server calls its actions lead to`, screens],
+    [`Pages (${webPages.length}): buttons, form labels, texts it can show, requests its components send`, webPages],
+  ];
+  for (const [title, list] of sections) {
+    if (list.length === 0 && title.startsWith("Screens")) continue;
+    lines.push("", title);
+    formatPages(lines, list);
   }
 
   if (map.schema) {
@@ -352,4 +373,20 @@ export function formatAppMap(map: AppMap, options: { focus?: string; maxChars?: 
   const text = lines.join("\n");
   const max = options.maxChars ?? 12_000;
   return text.length > max ? `${text.slice(0, max)}\n… (cut at ${max} characters; pass focus to narrow it)` : text;
+}
+
+/** One line per page or screen: what it shows and what it sends. */
+function formatPages(lines: string[], pages: PageInfo[]): void {
+  for (const p of pages) {
+    const ui = p.ui;
+    const bits = [
+      ui.redirects.some((r) => /login|signin/i.test(r)) ? "login required" : "",
+      ui.fields.length ? `fields ${ui.fields.map((f) => `"${f}"`).join(", ")}` : "",
+      ui.buttons.length ? `buttons ${ui.buttons.map((b) => `"${b}"`).join(", ")}` : "",
+      ui.texts.length ? `shows ${ui.texts.slice(0, 8).map((t) => `"${t}"`).join(", ")}` : "",
+      ui.requests.length ? `→ ${ui.requests.map((q) => `${q.method} ${q.url}`).join(", ")}` : "",
+      p.kind === "layout" && ui.links.length ? `links ${ui.links.map((l) => `${l.text || "?"}→${l.href}`).join(", ")}` : "",
+    ].filter(Boolean);
+    lines.push(`${p.kind === "layout" ? "layout " : ""}${p.path}  ${p.file}${bits.length ? `  ${bits.join(" · ")}` : ""}`);
+  }
 }

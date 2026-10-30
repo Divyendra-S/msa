@@ -4,12 +4,20 @@ import { z } from "zod";
 
 export const CONFIG_FILE = "windtunnel.config.yaml";
 
-/** What kind of app this is. `web` and `tauri` run today; the others are planned (platforms-plan.md). */
+/** What kind of app this is. `web`, `tauri` and `android` run today; the others are planned (platforms-plan.md). */
 export const APP_KINDS = ["web", "tauri", "android", "ios", "mac"] as const;
 export type AppKind = (typeof APP_KINDS)[number];
 
 const AppSchema = z.object({
   kind: z.enum(APP_KINDS).default("web"),
+  /**
+   * The server's folder, relative to this file: where install, build, start, test and the seed
+   * run. For a phone app whose server lives elsewhere in the repository (`../server`).
+   */
+  dir: z
+    .string()
+    .default(".")
+    .refine((d) => !d.startsWith("/"), "a path relative to windtunnel.config.yaml"),
   /** Installs dependencies in a fresh worktree. Detected from the lockfile when omitted. */
   install: z.string().optional(),
   build: z.string().optional(),
@@ -62,6 +70,29 @@ const MockPaySchema = z.object({
   chargeLatencyMs: z.number().int().nonnegative().default(20),
 });
 
+/** The app on an Android phone (app.kind: android); `app` is then the server it talks to. */
+const AndroidSchema = z.object({
+  /** The Android project's folder, relative to this file. */
+  dir: z
+    .string()
+    .default(".")
+    .refine((d) => !d.startsWith("/"), "a path relative to windtunnel.config.yaml"),
+  /** Builds the APK, in `dir` of each code version. A build is reused while that folder's code is unchanged. */
+  build: z.string().default("./gradlew --quiet assembleDebug"),
+  /** The built APK, relative to `dir`. */
+  apk: z.string().default("app/build/outputs/apk/debug/app-debug.apk"),
+  /** The application id. */
+  package: z.string(),
+  /** The activity to launch (`.MainActivity` is in the app's package). */
+  activity: z.string().default(".MainActivity"),
+  /** Launch extras (`am start --es`). `$BASE_URL` is where the phone reaches the server: http://127.0.0.1:<port>. */
+  extras: z.record(z.string(), z.string()).default({}),
+  /** The emulator's AVD; `windtunnel devices create` makes `windtunnel-34`. */
+  avd: z.string().default("windtunnel-34"),
+  /** Emulators running at once, at most: each takes about 2 GB of memory. A run takes one per user. */
+  devices: z.number().int().min(1).max(4).default(2),
+});
+
 const UserSchema = z.object({ email: z.string(), password: z.string() });
 
 const CrawlSchema = z.object({
@@ -109,6 +140,7 @@ const HuntSchema = z.object({
 
 export const ConfigSchema = z.object({
   app: AppSchema,
+  android: AndroidSchema.optional(),
   /** Optional: an app without a database is checked by `check:` rules and what users saw. */
   db: DbSchema.optional(),
   mockPay: MockPaySchema.optional(),
@@ -121,6 +153,7 @@ export const ConfigSchema = z.object({
 });
 
 export type WindtunnelConfig = z.infer<typeof ConfigSchema>;
+export type AndroidConfig = z.infer<typeof AndroidSchema>;
 
 export class ConfigError extends Error {
   override name = "ConfigError";
@@ -148,6 +181,11 @@ export function parseConfig(text: string, source = CONFIG_FILE): WindtunnelConfi
     const issues = result.error.issues.map((i) => `  ${i.path.join(".") || "(root)"}: ${i.message}`);
     throw new ConfigError(`${source}: invalid config\n${issues.join("\n")}`);
   }
+  const { app, android } = result.data;
+  if (app.kind === "android" && !android) {
+    throw new ConfigError(`${source}: app.kind android needs an \`android:\` section (at least \`package:\`, the application id)`);
+  }
+  if (android && app.kind !== "android") throw new ConfigError(`${source}: \`android:\` is for app.kind android`);
   return result.data;
 }
 

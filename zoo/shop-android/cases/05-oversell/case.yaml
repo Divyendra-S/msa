@@ -1,0 +1,5 @@
+# The shop's own case (zoo/cases/05-oversell), caught with two phones.
+from: ../../../cases/05-oversell
+experiment: checkout-two-buyers
+variant: together
+breaks: [stock-non-negative]

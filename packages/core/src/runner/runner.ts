@@ -1,6 +1,9 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Browser } from "playwright";
+import { Appium } from "../android/appium.ts";
+import { Emulators } from "../android/emulators.ts";
+import { type AndroidSdk, findAndroidSdk } from "../android/sdk.ts";
 import { type Branch, Branches } from "../branches/branches.ts";
 import { browserFor } from "../browser.ts";
 import type { CodeVersion, CodeVersionSpec } from "../branches/code-versions.ts";
@@ -21,6 +24,8 @@ import {
 } from "./experiment.ts";
 import { findFlowFile, LOGIN_FLOW, type LoadedFlow, loadFlow } from "./flows.ts";
 import { experimentInputs } from "./inputs.ts";
+import { AndroidDriver } from "./android-driver.ts";
+import type { Driver } from "./driver.ts";
 import { PlaywrightDriver } from "./playwright-driver.ts";
 import { Rep, type TraceMode } from "./rep.ts";
 import { RunStore, writeJson } from "./store.ts";
@@ -107,11 +112,19 @@ export interface TestRun {
   tail: string[];
 }
 
+/** What runs on Android phones need, started with the first one: the emulators and Appium. */
+interface AndroidRuntime {
+  sdk: AndroidSdk;
+  emulators: Emulators;
+  appium: Appium;
+}
+
 /** Runs experiments: each repetition in its own branch, all at once up to `parallel`. */
 export class Runner {
   readonly branches: Branches;
   readonly store: RunStore;
   private browser?: Promise<Browser>;
+  private android?: Promise<AndroidRuntime>;
   private headed = false;
   private readonly baselines = new Map<string, Promise<DbSnapshot>>();
   /** Old runs are pruned once per runner, before its first run. */
@@ -133,8 +146,8 @@ export class Runner {
   /** Validates experiments against the project; throws a ConfigError listing every problem. */
   async validate(experiments: Experiment[]): Promise<{ rules: Rule[]; warnings: string[] }> {
     const { kind } = this.project.config.app;
-    if (kind !== "web" && kind !== "tauri") {
-      throw new ConfigError(`app.kind ${kind}: only web and Tauri apps can run experiments so far (the plan for ${kind} apps is in platforms-plan.md)`);
+    if (kind !== "web" && kind !== "tauri" && kind !== "android") {
+      throw new ConfigError(`app.kind ${kind}: only web, Tauri and Android apps can run experiments so far (the plan for ${kind} apps is in platforms-plan.md)`);
     }
     const rules = await loadRules(this.project);
     const problems: string[] = [];
@@ -196,7 +209,8 @@ export class Runner {
 
   async run(experiments: Experiment[], options: RunOptions = {}): Promise<ExperimentResult[]> {
     const { rules } = await this.validate(experiments);
-    options = { ...options, seam: options.seam ?? seamFromEnv() };
+    // A phone's calls can only be caught at the proxy in front of its server.
+    options = { ...options, seam: this.project.config.app.kind === "android" ? "proxy" : (options.seam ?? seamFromEnv()) };
     const spec = options.version ?? {};
     const version = "tree" in spec ? spec : await this.branches.versions.resolve(spec);
     await this.branches.prepare(version);
@@ -208,6 +222,8 @@ export class Runner {
 
   async close(): Promise<void> {
     if (this.browser) await (await this.browser).close().catch(() => undefined);
+    // The emulators keep running for the next runs; `windtunnel devices stop` shuts them down.
+    if (this.android) await (await this.android.catch(() => undefined))?.appium.close();
     await this.branches.close();
   }
 
@@ -289,7 +305,10 @@ export class Runner {
     const trace = job.options.trace ?? "failures";
     const seam = job.options.seam ?? "route";
     let branch: Branch;
+    let phones: string[] = [];
     try {
+      // Phones first: a run waiting for one shouldn't hold a server meanwhile.
+      if (this.project.config.android) phones = await (await this.androidRuntime()).emulators.acquire(job.users.length);
       branch = await this.branches.create(job.version, {
         logDir: dir,
         keepDatabase: job.options.keepDatabase,
@@ -297,13 +316,14 @@ export class Runner {
         beforeStart: async (db) => void (db && (await this.baseline(job.version.id, db))),
       });
     } catch (err) {
+      if (phones.length) (await this.androidRuntime()).emulators.release(phones);
       // One run that can't start must not take the others down with it.
       const summary: RepSummary = {
         rep: job.rep,
         variant: job.variant.name,
         outcome: "error",
         broken: [],
-        error: `could not start the branch: ${(err as Error).message.split("\n")[0]}`,
+        error: `could not start the ${this.project.config.android ? "run" : "branch"}: ${(err as Error).message.split("\n")[0]}`,
         durationMs: Date.now() - started,
         diff: "",
       };
@@ -320,7 +340,7 @@ export class Runner {
       rep = new Rep({
         experiment: job.experiment,
         variant: job.variant,
-        driver: new PlaywrightDriver(await this.launch()),
+        driver: await this.driver(job.version, phones, branch),
         baseUrl: branch.baseUrl,
         appUrl: branch.appUrl,
         proxy: branch.proxy,
@@ -332,6 +352,7 @@ export class Runner {
         tabs: tabLabels(job.users),
         dir,
         trace,
+        ...(this.project.config.android ? { client: "phone" } : {}),
       });
       await rep.execute();
 
@@ -367,6 +388,7 @@ export class Runner {
     const keepTraces = trace === "on" || (trace === "failures" && outcome !== "ok");
     const traces = rep ? await rep.close(keepTraces).catch(() => []) : [];
     await branch.stop().catch(() => undefined);
+    if (phones.length) (await this.androidRuntime()).emulators.release(phones);
 
     const warnings = rep?.warnings() ?? [];
     const summary: RepSummary = {
@@ -439,6 +461,35 @@ export class Runner {
       this.baselines.set(versionId, snapshot);
     }
     return snapshot;
+  }
+
+  /** A browser for web and Tauri apps; the run's phones for Android apps. */
+  private async driver(version: CodeVersion, phones: string[], branch: Branch): Promise<Driver> {
+    const android = this.project.config.android;
+    if (!android) return new PlaywrightDriver(await this.launch());
+    const { sdk, emulators, appium } = await this.androidRuntime();
+    const { apk } = await this.branches.prepare(version);
+    for (const phone of phones) await emulators.install(phone, apk!, android.package);
+    return new AndroidDriver({
+      sdk,
+      appium,
+      phones,
+      app: { package: android.package, activity: android.activity, apk: apk!, extras: android.extras },
+      proxy: branch.proxy!,
+    });
+  }
+
+  private androidRuntime(): Promise<AndroidRuntime> {
+    this.android ??= (async () => {
+      const sdk = await findAndroidSdk();
+      if (!sdk) throw new ConfigError("no Android SDK found: set ANDROID_HOME, or install Android Studio");
+      const { avd, devices } = this.project.config.android!;
+      const logs = join(this.project.stateDir, "logs", "devices");
+      const emulators = new Emulators(sdk, { avd, max: devices, logDir: logs });
+      const appium = await Appium.start({ from: this.project.root, sdk, logFile: join(logs, "appium.log") });
+      return { sdk, emulators, appium };
+    })();
+    return this.android;
   }
 
   private launch(): Promise<Browser> {

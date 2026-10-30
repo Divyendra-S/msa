@@ -1,0 +1,2 @@
+# The shop's own control (zoo/cases/c1-stock-row-lock): every phone experiment must pass.
+from: ../../../cases/c1-stock-row-lock

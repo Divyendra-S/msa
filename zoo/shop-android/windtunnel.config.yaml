@@ -1,0 +1,36 @@
+# Wind Tunnel config for the Bug Zoo shop's Android app. The phone talks to the zoo shop
+# (../shop), which runs as it does for the web: per run, its own worktree, Postgres copy and server.
+# $PORT, $BASE_URL, $DATABASE_URL, $MOCK_PAY_URL and $MOCK_PAY_SECRET are filled in per branch.
+app:
+  kind: android
+  dir: ../shop
+  install: pnpm install --frozen-lockfile --prefer-offline --ignore-workspace
+  build: pnpm build
+  start: node_modules/.bin/next start --port $PORT
+  baseUrl: http://127.0.0.1:$PORT
+  ready: /api/health
+  env:
+    DATABASE_URL: $DATABASE_URL
+    PAYMENT_API_URL: $MOCK_PAY_URL
+    PAYMENT_WEBHOOK_SECRET: $MOCK_PAY_SECRET
+
+android:
+  package: dev.windtunnel.shop
+  # The app reads its server's address from this launch extra.
+  extras:
+    apiUrl: $BASE_URL
+
+db:
+  kind: postgres
+  url: postgres://postgres:postgres@127.0.0.1:55432/postgres
+  seed: pnpm -s db:setup
+
+mockPay:
+  webhookPath: /api/webhooks/payment
+  webhookDelayMs: 250
+
+users:
+  alice: { email: alice@example.test, password: test }
+  bob: { email: bob@example.test, password: test }
+
+parallel: 4

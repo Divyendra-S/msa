@@ -74,7 +74,7 @@ describe("HTTP proxy", () => {
   });
 
   describe("attached to a run", () => {
-    const alice: NetworkTab = { label: "alice", group: newGroup(), stepName: "pay", takeRefresh: () => false, reload: async () => undefined };
+    const alice: NetworkTab = { label: "alice", group: newGroup(), stepName: "pay", takeInterruption: () => undefined, interrupt: async () => undefined };
     const unknown = newGroup();
     let network: Network;
 
@@ -92,6 +92,22 @@ perturb:
       proxy.attach({ network, tabOf: (label) => (label === "alice" ? alice : undefined), group: unknown });
     });
     after(() => proxy.detach());
+
+    it("logs every call on a tab's own port under that tab (a phone can't name it), with redirects to that port", async () => {
+      const port = await allocatePort();
+      const url = await proxy.listenFor("alice", port);
+      try {
+        const res = await fetch(`${url}/api/phone`, { method: "POST", body: "x" });
+        assert.equal(res.status, 201);
+        await res.text();
+        assert.equal(network.log.at(-1)!.tab, "alice");
+        const redirect = await fetch(`${url}/redirect`, { redirect: "manual" });
+        assert.equal(redirect.headers.get("location"), `${url}/landing?x=1`);
+      } finally {
+        assert.equal(await proxy.stopListening("alice"), port);
+      }
+      await assert.rejects(fetch(`${url}/api/phone`), TypeError);
+    });
 
     it("logs each call under the tab its header names, and the app never sees the header", async () => {
       seen.length = 0;

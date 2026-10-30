@@ -56,30 +56,45 @@ export class HttpProxy {
   readonly url: string;
   private readonly target: URL;
   private readonly server: http.Server;
+  private readonly host: string;
   private readonly agent = new http.Agent({ keepAlive: true });
   private readonly sockets = new Set<net.Socket>();
+  /** Ports of their own for clients that can't name their tab (a phone): every call on one is that tab's. */
+  private readonly tabPorts = new Map<string, { server: http.Server; port: number }>();
   private attached?: Attached;
 
-  private constructor(server: http.Server, url: string, target: URL) {
+  private constructor(server: http.Server, url: string, target: URL, host: string) {
     this.server = server;
     this.url = url;
     this.target = target;
-    server.on("request", (req, res) => void this.onRequest(req, res).catch(() => res.destroy()));
-    server.on("upgrade", (req, socket, head) => this.onUpgrade(req, socket as net.Socket, head));
-    server.on("connection", (socket) => {
-      this.sockets.add(socket);
-      socket.once("close", () => this.sockets.delete(socket));
-    });
+    this.host = host;
+    this.serve(server, url);
   }
 
   static async start(options: { port: number; target: string; host?: string }): Promise<HttpProxy> {
     const host = options.host ?? "127.0.0.1";
     const server = http.createServer();
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(options.port, host, () => resolve());
-    });
-    return new HttpProxy(server, `http://${host}:${options.port}`, new URL(options.target));
+    await listen(server, options.port, host);
+    return new HttpProxy(server, `http://${host}:${options.port}`, new URL(options.target), host);
+  }
+
+  /** Opens `port` for one tab's calls; returns its address. */
+  async listenFor(label: string, port: number): Promise<string> {
+    const server = http.createServer();
+    await listen(server, port, this.host);
+    const url = `http://${this.host}:${port}`;
+    this.serve(server, url, label);
+    this.tabPorts.set(label, { server, port });
+    return url;
+  }
+
+  /** Closes a tab's own port. */
+  async stopListening(label: string): Promise<number | undefined> {
+    const entry = this.tabPorts.get(label);
+    if (!entry) return undefined;
+    this.tabPorts.delete(label);
+    await new Promise<void>((resolve) => entry.server.close(() => resolve()));
+    return entry.port;
   }
 
   /** From now on calls go through `network`: logged, perturbed, held for races. */
@@ -95,29 +110,39 @@ export class HttpProxy {
     this.detach();
     for (const socket of this.sockets) socket.destroy();
     this.agent.destroy();
+    for (const label of [...this.tabPorts.keys()]) await this.stopListening(label);
     await new Promise<void>((resolve) => this.server.close(() => resolve()));
   }
 
-  private async onRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  private serve(server: http.Server, url: string, label?: string): void {
+    server.on("request", (req, res) => void this.onRequest(req, res, url, label).catch(() => res.destroy()));
+    server.on("upgrade", (req, socket, head) => this.onUpgrade(req, socket as net.Socket, head));
+    server.on("connection", (socket) => {
+      this.sockets.add(socket);
+      socket.once("close", () => this.sockets.delete(socket));
+    });
+  }
+
+  private async onRequest(req: http.IncomingMessage, res: http.ServerResponse, url: string, portLabel?: string): Promise<void> {
     const body = await readBody(req);
     const headers = flatHeaders(req.headers);
-    const label = headers[TAB_HEADER];
+    const label = portLabel ?? headers[TAB_HEADER];
     const attached = this.attached;
-    const call = new ProxyCall(this, req, res, body, headers);
+    const call = new ProxyCall(this, url, req, res, body, headers);
     if (!attached) return call.pass();
 
     const { network } = attached;
-    const url = new URL(req.url ?? "/", this.url);
-    if (isHarnessCall(url)) return call.pass();
+    const target = new URL(req.url ?? "/", url);
+    if (isHarnessCall(target)) return call.pass();
     const type = resourceType(headers);
     const tracked = (type === "document" || type === "fetch") && !isPrefetch(headers);
-    if (!tracked && !network.wants(url)) return call.pass();
+    if (!tracked && !network.wants(target)) return call.pass();
 
     const tab = label ? attached.tabOf(label) : undefined;
     const record = network.record({
       tab: tab?.label ?? label ?? "?",
       step: tab?.stepName,
-      ...callName(call.method, url),
+      ...callName(call.method, target),
       type,
     });
     call.track(network, record, tracked);
@@ -171,14 +196,14 @@ export class HttpProxy {
     return request;
   }
 
-  /** The app's headers as the client should get them: hop-by-hop ones dropped, its own address rewritten to the proxy's. */
-  clientHeaders(raw: string[]): string[] {
+  /** The app's headers as the client should get them: hop-by-hop ones dropped, its own address rewritten to the one the client used. */
+  clientHeaders(raw: string[], url: string): string[] {
     const out: string[] = [];
     for (let i = 0; i < raw.length; i += 2) {
       const name = raw[i]!;
       let value = raw[i + 1]!;
       if (HOP_BY_HOP.has(name.toLowerCase())) continue;
-      if (name.toLowerCase() === "location" && value.startsWith(this.target.origin)) value = this.url + value.slice(this.target.origin.length);
+      if (name.toLowerCase() === "location" && value.startsWith(this.target.origin)) value = url + value.slice(this.target.origin.length);
       out.push(name, value);
     }
     out.push("connection", "close");
@@ -194,6 +219,8 @@ class ProxyCall implements Call {
   readonly body?: Buffer;
   tracked = false;
   private readonly proxy: HttpProxy;
+  /** The proxy address the client called. */
+  private readonly base: string;
   private readonly req: http.IncomingMessage;
   private readonly res: http.ServerResponse;
   private readonly raw: Buffer;
@@ -203,13 +230,14 @@ class ProxyCall implements Call {
   /** The client went away while the call was held: settled once the harness lets go of it. */
   private gone = false;
 
-  constructor(proxy: HttpProxy, req: http.IncomingMessage, res: http.ServerResponse, body: Buffer, headers: Record<string, string>) {
+  constructor(proxy: HttpProxy, base: string, req: http.IncomingMessage, res: http.ServerResponse, body: Buffer, headers: Record<string, string>) {
     this.proxy = proxy;
+    this.base = base;
     this.req = req;
     this.res = res;
     this.raw = body;
     this.method = req.method ?? "GET";
-    this.url = new URL(req.url ?? "/", proxy.url).href;
+    this.url = new URL(req.url ?? "/", base).href;
     this.headers = headers;
     this.body = body.length > 0 ? body : undefined;
   }
@@ -246,7 +274,7 @@ class ProxyCall implements Call {
 
   async answer(answer: Answer): Promise<void> {
     const a = answer as ProxyAnswer;
-    this.respond(a.status, this.proxy.clientHeaders(a.headers), a.body);
+    this.respond(a.status, this.proxy.clientHeaders(a.headers, this.base), a.body);
   }
 
   async fulfill(status: number, body: string): Promise<void> {
@@ -270,7 +298,7 @@ class ProxyCall implements Call {
             res.resume();
             return resolve();
           }
-          this.head(res.statusCode ?? 502, this.proxy.clientHeaders(res.rawHeaders));
+          this.head(res.statusCode ?? 502, this.proxy.clientHeaders(res.rawHeaders, this.base));
           res.pipe(this.res);
           res.on("end", () => resolve());
           res.on("error", () => {
@@ -312,6 +340,13 @@ class ProxyCall implements Call {
   private closed(): boolean {
     return this.res.destroyed || this.res.writableEnded;
   }
+}
+
+function listen(server: http.Server, port: number, host: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, host, () => resolve());
+  });
 }
 
 function readBody(req: http.IncomingMessage): Promise<Buffer> {

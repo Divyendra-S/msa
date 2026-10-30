@@ -53,6 +53,18 @@ const Perturbation = z.discriminatedUnion("do", [
   z.strictObject({ do: z.literal("expire-session"), step: Step, cookie: z.string().optional(), tab: Tab }),
   z.strictObject({ do: z.literal("advance-clock"), step: Step, by: Duration, tab: Tab }),
   z.strictObject({ do: z.literal("second-tab"), step: Step, tab: Tab }),
+  // Phone: applied to a step. `during`: while the step's first request is in flight; `after`: once it has finished.
+  z.strictObject({ do: z.literal("kill-app"), step: Step, when: z.enum(["during", "after"]).default("during"), tab: Tab }),
+  z.strictObject({
+    do: z.literal("background"),
+    step: Step,
+    when: z.enum(["during", "after"]).default("during"),
+    /** How long the app stays in the background. */
+    for: Duration.default(1_000),
+    tab: Tab,
+  }),
+  z.strictObject({ do: z.literal("rotate"), step: Step, when: z.enum(["during", "after"]).default("during"), tab: Tab }),
+  z.strictObject({ do: z.literal("offline"), step: Step, tab: Tab }),
   // App state: runs once, before the first tab reaches the step.
   z.strictObject({ do: z.literal("sql"), step: Step, sql: z.string().min(1), tab: Tab }),
 ]);
@@ -137,6 +149,11 @@ export interface Variant {
 export function isNetworkPerturbation(p: Perturbation): p is NetworkPerturbation {
   return "request" in p;
 }
+
+/** Perturbations only a phone has: its app can be killed, sent away, turned, cut off. */
+export const PHONE_PERTURBATIONS = new Set(["kill-app", "background", "rotate", "offline"]);
+/** Perturbations that need a browser: a page to reload or open twice, cookies, a fake clock, another user's session. */
+export const BROWSER_PERTURBATIONS = new Set(["refresh", "second-tab", "expire-session", "advance-clock", "replay-as"]);
 
 export function parseExperiment(text: string, source: string, fallbackId: string): Experiment {
   let raw: unknown;
@@ -227,6 +244,15 @@ export async function checkExperiment(experiment: Experiment, project: Project, 
       errors.push(`unknown user "${user}" (config users: ${configured.join(", ") || "none"})`);
     }
   }
+  const phone = project.config.app.kind === "android";
+  for (const p of experiment.perturb) {
+    if (phone && BROWSER_PERTURBATIONS.has(p.do)) {
+      errors.push(`${p.do}: not for phone apps (${p.do === "refresh" ? "use kill-app or background" : "it needs a browser"})`);
+    } else if (!phone && PHONE_PERTURBATIONS.has(p.do)) {
+      errors.push(`${p.do}: only for phone apps (app.kind: android)`);
+    }
+  }
+  if (phone && experiment.clock) errors.push("clock: phone apps run on the phone's own clock");
   for (const p of experiment.perturb) {
     if (p.do !== "replay-as") continue;
     if (!project.config.users[p.user]) {
@@ -241,6 +267,14 @@ export async function checkExperiment(experiment: Experiment, project: Project, 
     const loaded = await loadFlow(project.stateDir, experiment.flow);
     steps = loaded.steps;
     const login = await loadFlow(project.stateDir, LOGIN_FLOW).catch(() => undefined);
+    for (const f of [loaded, ...(login ? [login] : [])]) {
+      const surface = f.flow.surface ?? "page";
+      if (phone && surface !== "phone") {
+        errors.push(`flow "${f.name}" drives a page; a phone app's flows are \`export default phoneFlow(async ({ ui, step }) => …)\``);
+      } else if (!phone && surface === "phone") {
+        errors.push(`flow "${f.name}" is a phoneFlow, but app.kind is ${project.config.app.kind}`);
+      }
+    }
     if (login) steps.push(...login.steps);
     else if (experiment.perturb.some((p) => p.do === "replay-as")) {
       errors.push("replay-as: add .windtunnel/flows/login.ts to log the other user in");

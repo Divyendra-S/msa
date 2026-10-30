@@ -7,5 +7,5 @@
     "moduleResolution": "bundler",
     "paths": { "windtunnel": ["./packages/core/src/flow-api.ts"] }
   },
-  "include": ["zoo/shop/.windtunnel/flows/*.ts", "zoo/notes/.windtunnel/flows/*.ts"]
+  "include": ["zoo/shop/.windtunnel/flows/*.ts", "zoo/notes/.windtunnel/flows/*.ts", "zoo/shop-android/.windtunnel/flows/*.ts"]
 }

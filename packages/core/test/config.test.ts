@@ -47,6 +47,25 @@ db:
     assert.throws(() => parseConfig("app:\n  kind: flutter\n  start: x\n"), /app\.kind/);
   });
 
+  it("reads an Android app: the phone app, and the server it talks to in another folder", () => {
+    const config = parseConfig("app:\n  kind: android\n  dir: ../shop\n  start: next start\nandroid:\n  package: dev.windtunnel.shop\n  extras: { apiUrl: $BASE_URL }\n");
+    assert.equal(config.app.dir, "../shop");
+    assert.equal(config.app.isolateHome, false);
+    assert.deepEqual(config.android, {
+      dir: ".",
+      build: "./gradlew --quiet assembleDebug",
+      apk: "app/build/outputs/apk/debug/app-debug.apk",
+      package: "dev.windtunnel.shop",
+      activity: ".MainActivity",
+      extras: { apiUrl: "$BASE_URL" },
+      avd: "windtunnel-34",
+      devices: 2,
+    });
+    assert.equal(parseConfig("app:\n  start: x\n").app.dir, ".");
+    assert.throws(() => parseConfig("app:\n  kind: android\n  start: x\n"), /android:/);
+    assert.throws(() => parseConfig("app:\n  start: x\nandroid:\n  package: p\n"), /app\.kind android/);
+  });
+
   it("reads a SQLite database inside the run's data folder", () => {
     const config = parseConfig("app:\n  start: x\n  isolateHome: true\ndb:\n  kind: sqlite\n  seed: node seed.js\n");
     assert.deepEqual(config.db, { kind: "sqlite", file: "app.db", seed: "node seed.js" });

@@ -700,9 +700,13 @@ private struct ShotView: View {
     ZStack(alignment: .topLeading) {
       Rectangle().fill(Theme.fill)
       if let image {
-        Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
-          .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-          .transition(.opacity)
+        // Pinned to the top: a phone's tall screen shows its header and first rows, not its middle.
+        GeometryReader { box in
+          Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
+            .frame(width: box.size.width, height: box.size.height, alignment: .top)
+            .clipped()
+        }
+        .transition(.opacity)
       } else if frame.shot == nil {
         Text(frame.text ?? "")
           .font(Theme.sans(9)).foregroundStyle(Theme.ghost).lineSpacing(1)
@@ -856,6 +860,12 @@ private struct FrameInspector: View {
     }
   }
 
+  /// Width over height of a screenshot taller than it is wide.
+  private var portrait: CGFloat? {
+    guard let size = image?.size, size.height > size.width, size.height > 0 else { return nil }
+    return size.width / size.height
+  }
+
   private func page(_ f: Replay.Frame) -> some View {
     VStack(alignment: .leading, spacing: 6) {
       ZStack {
@@ -866,9 +876,11 @@ private struct FrameInspector: View {
           Text("No screenshot for this run: it's older than step screenshots.").font(Theme.sans(11)).foregroundStyle(Theme.ghost).padding(12)
         }
       }
-      .aspectRatio(16 / 10, contentMode: .fit)
+      // A phone's screen keeps its own shape, not a browser's.
+      .aspectRatio(portrait ?? 16 / 10, contentMode: .fit)
       .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
       .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Theme.line, lineWidth: 1))
+      .frame(maxHeight: portrait == nil ? nil : 420, alignment: .leading)
       if let path = f.path { Text(path).font(Theme.mono(11)).foregroundStyle(Theme.faint) }
     }
   }

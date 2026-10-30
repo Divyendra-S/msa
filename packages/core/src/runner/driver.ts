@@ -1,4 +1,5 @@
 import type { Clock, Page } from "playwright";
+import type { PhoneUi } from "../flow-api.ts";
 import type { ActionHook } from "./instrument.ts";
 import type { Group, Network, NetworkTab } from "./network.ts";
 import type { PageSnapshot } from "./snapshot.ts";
@@ -18,11 +19,8 @@ export interface ScreenState {
   text: string;
 }
 
-/** What a flow drives in one tab: a page and its clock, for web apps. */
-export interface FlowSurface {
-  page: Page;
-  clock: Clock;
-}
+/** What a flow drives in one tab: a page and its clock (web and Tauri apps), or the app on a phone. */
+export type FlowSurface = { page: Page; clock: Clock } | { ui: PhoneUi };
 
 export interface SessionOptions {
   /** Where the session's calls go: the app, or the proxy in front of it. */

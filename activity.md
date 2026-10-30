@@ -9,16 +9,59 @@ file says what happened recently, why, and what to know before changing things.
 ## Where things stand (2026-10-30)
 
 - `main` has Phases 1–7 done; Phase 8 (submission) is partly done.
-- **[`platforms-plan.md`](platforms-plan.md)**: Phases 1 (groundwork) and 2 (Tauri) are done
-  and pushed. `zoo:verify:notes` passes through both seams, no window appears during runs,
-  Replay shows the Tauri runs, and there are 138 tests. Phase 3 (Android) is next. Five phases,
-  one at a time: groundwork, Tauri, Android, iOS, Swift Mac apps.
+- **[`platforms-plan.md`](platforms-plan.md)**: Phases 1 (groundwork), 2 (Tauri) and 3
+  (Android) are done and pushed. `zoo:verify:android` passes (180 runs on two headless
+  emulators), no emulator window appears, Replay shows the phone's screens, and there are 153
+  tests. Phase 4 (iOS) is in progress. Five phases, one at a time: groundwork, Tauri, Android, iOS, Swift Mac apps.
 - Waiting on the project owner, not on code: the Muse Code install and `pnpm bench check --paid`,
   the npm publish of `windtunnel-cli`, the demo video.
 - Open after that: verify a headless Claude hunt with a real API key; an "Explain with Claude"
   panel; a test-database leak to fix; stretch items S1, S3, S5–S7 in `execution-plan.md`.
 
 ## Recent work, newest first
+
+### Platforms Phase 3: Android apps on headless emulators
+
+- **Devices** (`core/src/android/`):
+  - `sdk.ts` finds the SDK, runs adb, and writes AVDs without `avdmanager`.
+    `windtunnel devices create` makes `windtunnel-34` from `system-images;android-34;google_atd;arm64-v8a`.
+  - `emulators.ts` boots it headless (`-no-window -no-audio`, read-only) on ports 5570–5584 from a
+    `windtunnel` snapshot made on first use, keeps the emulators running between runs
+    (`windtunnel devices stop`), and leases them to runs, one per user, first come first served.
+  - `appium.ts` starts one Appium server per runner from the project's `node_modules`
+    (`APPIUM_HOME` is that folder), with one UiAutomator2 session per phone.
+- **Driver** (`runner/android-driver.ts`): each user's phone gets its own proxy port, reached
+  through `adb reverse`, so every call is logged under its tab. A run clears the app's data,
+  puts the phone in portrait and online, and starts the app with the config's launch extras.
+  Flows are `phoneFlow`s with a `ui` (`tap`, `fill`, `see`, `shows`, `back`, `text`) that reads
+  UiAutomator's page source (`android/screen.ts`, about 20 ms) and taps by coordinates.
+  Screenshots are `screencap` made JPEG by `sips`.
+- **Phone pressures**: `kill-app`, `background`, `rotate` (during the step's first request, or
+  after the step) and `offline` (airplane mode, and the proxy refuses the phone's calls). "Refresh
+  during" became a general interruption in `network.ts`; the step waits for all of it. A double
+  tap is two taps in one gesture.
+- **Config**: `app.kind: android` with an `android:` section (package, launch extras, AVD,
+  devices); `app.dir` puts the server in another folder. The APK is built per version of the app's
+  own folder (its git tree) and cached, so server patches reuse it.
+- **`zoo/shop-android`**: Kotlin + Compose client of the zoo shop (which got `GET /api/products`
+  and `GET /api/cart`). Its cases reuse the shop's (`from:` in `case.yaml`) and add `p1-double-tap`.
+  The rules link to the shop's. `pnpm zoo:verify:android`.
+- **Map**: the server is read from `app.dir`, and `explorer/src/android.ts` reads the phone's
+  Compose screens and its server calls (helpers like `call("POST", "/api/orders")`, Retrofit
+  annotations); each route says where the phone calls it.
+- Things to know:
+  - Android's test images (ATD) turn app drawing off (`debug.hwui.drawing_enabled=0`), which
+    leaves every screenshot black. Runs set it back on; the snapshot has it.
+  - The SDK's `system-images/android-34/google_atd` had been an empty folder from an old
+    download. The image was downloaded (679 MB, checksum checked) and its `system.img` rewritten
+    sparse: 1.3 GB on disk instead of 8.2 GB.
+  - With the button disabled while paying, a phone's double tap sends one checkout: Compose
+    disables it within a frame, and injected taps come about 25 ms apart. The phone case needs the
+    button's guard gone too, as the web case 01 does.
+  - The emulators stay up between runs (about 1.5 GB of memory each): `windtunnel devices stop`.
+    Gradle's daemon also stays up after a build until it times out (`./gradlew --stop`).
+  - Mac app: Replay's board pins a screenshot to the top of its card (a phone's screen showed its
+    blank middle), and the detail keeps a phone shot's own shape.
 
 ### Platforms Phase 2: Tauri apps, in the background
 

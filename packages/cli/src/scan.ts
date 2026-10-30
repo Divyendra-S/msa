@@ -1,6 +1,6 @@
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { Project } from "@windtunnel/core";
+import { CONFIG_FILE, openProject, type Project } from "@windtunnel/core";
 import { buildAppMap, formatEffects } from "@windtunnel/explorer";
 
 /** One handler and what in its code is worth an experiment. */
@@ -32,9 +32,13 @@ export interface ScanResult {
  * anything is set up.
  */
 export async function scan(dir: string): Promise<ScanResult> {
-  const root = await nextApp(resolve(dir));
+  // A folder set up for Wind Tunnel says where its server is (a phone app's is in `app.dir`).
+  const configured = (await stat(join(resolve(dir), CONFIG_FILE)).then(() => true, () => false))
+    ? await openProject(resolve(dir)).catch(() => undefined)
+    : undefined;
+  const root = configured?.root ?? (await nextApp(resolve(dir)));
   // The map reads only the source tree; the project's other parts are for runs.
-  const project = { root, repoRoot: root, appSubdir: "", stateDir: join(root, ".windtunnel"), config: { users: {} } } as unknown as Project;
+  const project = configured ?? ({ root, repoRoot: root, appSubdir: "", stateDir: join(root, ".windtunnel"), config: { users: {} } } as unknown as Project);
   const map = await buildAppMap(project);
   return {
     root,

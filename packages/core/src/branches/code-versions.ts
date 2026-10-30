@@ -1,7 +1,8 @@
-import { mkdir, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
-import { join, sep } from "node:path";
+import { copyFile, mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { join, posix, sep } from "node:path";
+import { findAndroidSdk } from "../android/sdk.ts";
 import { sh } from "../exec.ts";
-import { addWorktree, commitPatch, removeWorktree, resolveRef, snapshotWorkingTree, withoutPaths } from "../git.ts";
+import { addWorktree, commitPatch, git, removeWorktree, resolveRef, snapshotWorkingTree, withoutPaths } from "../git.ts";
 import { withLock } from "../lock.ts";
 import { exists, type Project } from "../project.ts";
 
@@ -29,8 +30,10 @@ export interface PreparedVersion {
   version: CodeVersion;
   /** Worktree root (a checkout of the whole repository). */
   worktree: string;
-  /** The app folder inside the worktree. */
+  /** The server's folder inside the worktree (the app's, unless `app.dir` points elsewhere). */
   appDir: string;
+  /** For a phone app: its built APK, shared by every version with the same app code. */
+  apk?: string;
 }
 
 const READY_MARKER = ".windtunnel-ready.json";
@@ -39,6 +42,7 @@ const READY_MARKER = ".windtunnel-ready.json";
 export class CodeVersions {
   private readonly project: Project;
   private readonly inflight = new Map<string, Promise<PreparedVersion>>();
+  private readonly apks = new Map<string, Promise<string>>();
 
   constructor(project: Project) {
     this.project = project;
@@ -67,10 +71,52 @@ export class CodeVersions {
   prepare(version: CodeVersion): Promise<PreparedVersion> {
     let pending = this.inflight.get(version.id);
     if (!pending) {
-      pending = this.prepareOnce(version).finally(() => this.inflight.delete(version.id));
+      pending = this.prepareOnce(version)
+        .then(async (prepared) => (this.project.config.android ? { ...prepared, apk: await this.apk(prepared) } : prepared))
+        .finally(() => this.inflight.delete(version.id));
       this.inflight.set(version.id, pending);
     }
     return pending;
+  }
+
+  get apksDir(): string {
+    return join(this.project.cacheDir, "apks");
+  }
+
+  /**
+   * Builds the phone app of a version, unless a version with the same app code (its folder's
+   * git tree) already did: a patch to the server reuses the APK.
+   */
+  private apk(prepared: PreparedVersion): Promise<string> {
+    const android = this.project.config.android!;
+    const rel = posix.normalize([this.project.appSubdir.split(sep).join("/"), android.dir].filter(Boolean).join("/"));
+    return (async () => {
+      const tree = (await git(["rev-parse", `${prepared.version.commit}:${rel === "." ? "" : rel}`], this.project.repoRoot)).trim();
+      const apk = join(this.apksDir, `${tree.slice(0, 12)}.apk`);
+      let pending = this.apks.get(apk);
+      if (!pending) {
+        pending = this.buildApk(prepared, apk);
+        this.apks.set(apk, pending);
+        pending.catch(() => this.apks.delete(apk));
+      }
+      return pending;
+    })();
+  }
+
+  private async buildApk(prepared: PreparedVersion, apk: string): Promise<string> {
+    if (await exists(apk)) return apk;
+    const android = this.project.config.android!;
+    await mkdir(this.apksDir, { recursive: true });
+    return withLock(`${apk}.lock`, async () => {
+      if (await exists(apk)) return apk;
+      const dir = join(prepared.worktree, this.project.appSubdir, android.dir);
+      const sdk = await findAndroidSdk();
+      const env: Record<string, string> = { CI: "1", ...(sdk ? { ANDROID_HOME: sdk.root, ANDROID_SDK_ROOT: sdk.root } : {}) };
+      await sh(android.build, { cwd: dir, logFile: this.logFile(prepared.version.id), env });
+      await copyFile(join(dir, android.apk), `${apk}.tmp`);
+      await rename(`${apk}.tmp`, apk);
+      return apk;
+    });
   }
 
   /** Checked-out versions, most recently used first. One still being built counts from when it started. */
@@ -115,7 +161,7 @@ export class CodeVersions {
 
   private async prepareOnce(version: CodeVersion): Promise<PreparedVersion> {
     const worktree = join(this.worktreesDir, version.id);
-    const prepared: PreparedVersion = { version, worktree, appDir: join(worktree, this.project.appSubdir) };
+    const prepared: PreparedVersion = { version, worktree, appDir: join(worktree, this.project.appSubdir, this.project.config.app.dir) };
     if (await this.touch(version.id)) return prepared;
 
     await mkdir(this.worktreesDir, { recursive: true });

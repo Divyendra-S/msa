@@ -42,3 +42,6 @@ Checkout: the cart page's **Pay now** sends `POST /api/orders`, which turns the 
 order and charges it. The payment provider then calls `POST /api/webhooks/payment`, which
 records the payment and marks the order paid. The order page polls `GET /api/orders/[id]`
 until then.
+
+The Android app in [`../shop-android`](../shop-android/README.md) uses the same API, plus two
+read-only routes for what the web pages read directly: `GET /api/products` and `GET /api/cart`.

@@ -65,6 +65,8 @@ zoo/
   shop/       Bug Zoo demo shop: Next.js + Postgres, standalone app with its own lockfile;
               its .windtunnel/ holds the reference flows, experiments and rules
   notes/      Bug Zoo notes app: Tauri v2 + SQLite, three planted bugs in cases/
+  shop-android/  the shop's Android app (Kotlin + Compose), a client of zoo/shop's API; its cases/
+              reuse the shop's bugs and add a phone one
   mock-pay/   mock payment provider: idempotent charges, signed webhooks, harness control
   cases/      one bug patch per case (or decoy patch per control) + expected results + verifier;
               prover and healing checks
@@ -100,6 +102,8 @@ pnpm typecheck               # packages, tests and the shop's flow files
 pnpm test                    # unit + integration tests (branches, runner; need pnpm db:up)
 pnpm zoo:verify              # every shop experiment against the clean shop, each bug and each control
 pnpm zoo:verify:notes        # the same for the Tauri notes app (needs cargo and Playwright's WebKit)
+pnpm zoo:verify:android      # the shop's Android app on headless emulators (needs the Android SDK, a JDK
+                             # and an AVD: windtunnel devices create)
 pnpm zoo:prove               # the prover: proves each case's real fix, rejects the wrong fixes
 pnpm zoo:heal                # failure sorting and selector repair on a copy of the shop, rules only
 ```
@@ -143,7 +147,7 @@ db:
   seed: node scripts/seed.js
 ```
 
-`app.kind` is `web` (the default) or `tauri`; `android`, `ios` and `mac` are planned (see
+`app.kind` is `web` (the default), `tauri` or `android`; `ios` and `mac` are planned (see
 [`platforms-plan.md`](platforms-plan.md)).
 
 ## Tauri apps
@@ -160,6 +164,49 @@ so its data folder starts from the seed. The Map and `windtunnel scan` read its
 pnpm zoo:verify:notes                                  # zoo/notes: the clean app and its three bugs
 pnpm wt --cwd zoo/notes run autosave-and-save --patch zoo/notes/cases/02-autosave-lost-edit/bug.patch
 ```
+
+## Android apps
+
+An Android app runs on headless emulators: no window, no sound, nothing taking the keyboard.
+Its server runs as for a web app (worktree, Postgres copy, its own process per run); `app.dir`
+says where it lives. Each phone reaches it through `adb reverse` and a proxy port of its own, so
+every call is caught and named by the phone it came from: races, lost answers and delays work as
+on the web, and two users are two phones. Flows tap and read by what the user sees:
+
+```ts
+import { phoneFlow } from "windtunnel";
+
+export default phoneFlow(async ({ ui, step, login }) => {
+  await login();
+  await step("pay", () => ui.tap("Pay now"));
+  await step("confirmation", () => ui.see("Order confirmed"));
+});
+```
+
+Phone experiments add the pressures a phone has: the app killed mid-request and opened again,
+sent to the background, the phone turned, or offline. Each run starts with the app's data
+cleared, and every step's screenshot goes to Replay like a web step's.
+
+```yaml
+app:
+  kind: android
+  dir: ../server                 # the server's folder: install, build, start and seed run there
+  start: npm start
+android:
+  package: com.example.shop      # the application id; the APK is built with ./gradlew assembleDebug
+  extras: { apiUrl: $BASE_URL }  # launch extras: $BASE_URL is the phone's address for its server
+```
+
+```sh
+windtunnel devices create        # once: the windtunnel-34 AVD, from Android's image for automated tests
+windtunnel doctor                # the SDK, the AVD, Java, Appium (npm i -D appium appium-uiautomator2-driver webdriverio)
+pnpm zoo:verify:android          # zoo/shop-android: the clean app, the shop's bugs, a phone bug
+windtunnel devices stop          # the emulators keep running between runs until this
+```
+
+The APK is built once per version of the app's code: patches to the server reuse it. Appium's
+UiAutomator2 driver does the taps and reads the screen. The Map lists the phone's screens next to
+the server's routes, and which route each of its calls reaches.
 
 ## Experiments
 

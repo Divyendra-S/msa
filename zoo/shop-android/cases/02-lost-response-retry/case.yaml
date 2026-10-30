@@ -1,0 +1,4 @@
+# The shop's own case (zoo/cases/02-lost-response-retry), caught from the phone.
+from: ../../../cases/02-lost-response-retry
+experiment: checkout-lost-response
+breaks: [one-charge-per-order]

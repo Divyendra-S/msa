@@ -12,6 +12,12 @@ export function newGroup(): Group {
   return { busy: 0, parked: 0 };
 }
 
+/**
+ * What a step does to the client while its first request is in flight: reload the page, or (on a
+ * phone) kill the app, send it to the background, turn the phone.
+ */
+export type Interruption = "refresh" | "kill-app" | "background" | "rotate";
+
 /** What a tab exposes to the network layer. */
 export interface NetworkTab {
   label: string;
@@ -19,9 +25,10 @@ export interface NetworkTab {
   readonly group: Group;
   /** The step running in this tab, if any. Requests are attributed to it. */
   readonly stepName: string | undefined;
-  /** True once when the current step has "refresh during" armed. */
-  takeRefresh(): boolean;
-  reload(): Promise<void>;
+  /** The interruption the current step has armed, once. */
+  takeInterruption(): Interruption | undefined;
+  /** Carries out one part of an interruption: `start` before the app answers, `end` after. */
+  interrupt(what: Interruption, phase: "start" | "end"): Promise<void>;
 }
 
 export interface RequestRecord {
@@ -113,8 +120,10 @@ interface Parked {
 export class Network {
   readonly log: RequestRecord[] = [];
   race?: RaceRecord;
-  /** Set while a step has "refresh during" armed, so every request is routed. */
-  refreshArmed = false;
+  /** Set while a step has an interruption armed, so every request is routed. */
+  interruptArmed = false;
+  /** Tabs whose device is offline: their calls fail without reaching the app. */
+  readonly offline = new Set<string>();
   private readonly t0: number;
   /** Who gets answers, in harness notes: `browser`, `app`. */
   private readonly client: string;
@@ -152,7 +161,8 @@ export class Network {
   /** Whether calls to this URL may need the harness (a transport can let the rest through unseen). */
   wants(url: URL): boolean {
     return (
-      this.refreshArmed ||
+      this.interruptArmed ||
+      this.offline.size > 0 ||
       this.perturbations.some((p) => p.pattern.path.test(url.pathname)) ||
       (!!this.raceSpec && this.raceSpec.pattern.path.test(url.pathname))
     );
@@ -220,15 +230,13 @@ export class Network {
   }
 
   private async decide(call: Call, tab: NetworkTab, record: RequestRecord): Promise<void> {
-    if (call.tracked && tab.takeRefresh()) {
-      // The server gets the request; the user reloads before the answer arrives.
-      note(record, "page refreshed while the app handled this request");
-      const answer = call.send();
-      void tab.reload();
-      await answer.catch(() => undefined);
-      await call.drop({ abandoned: true });
-      return;
+    if (this.offline.has(tab.label)) {
+      note(record, `the ${this.client} was offline: it never reached the app`);
+      record.sent = null;
+      return call.drop();
     }
+    const interruption = call.tracked ? tab.takeInterruption() : undefined;
+    if (interruption) return this.interrupt(interruption, call, tab, record);
 
     const race = this.raceSpec;
     if (
@@ -243,6 +251,49 @@ export class Network {
     const perturbation = this.takePerturbation(call.method, call.url, tab);
     if (perturbation) return this.apply(perturbation, call, record);
     return call.pass();
+  }
+
+  /** Steps wait for the whole interruption: a killed app's request ends at once, its reopening later. */
+  private async interrupt(what: Interruption, call: Call, tab: NetworkTab, record: RequestRecord): Promise<void> {
+    tab.group.busy += 1;
+    try {
+      await this.interruptCall(what, call, tab, record);
+    } finally {
+      tab.group.busy -= 1;
+    }
+  }
+
+  private async interruptCall(what: Interruption, call: Call, tab: NetworkTab, record: RequestRecord): Promise<void> {
+    switch (what) {
+      case "refresh": {
+        // The server gets the request; the user reloads before the answer arrives.
+        note(record, "page refreshed while the app handled this request");
+        const answer = call.send();
+        void tab.interrupt(what, "start");
+        await answer.catch(() => undefined);
+        return call.drop({ abandoned: true });
+      }
+      case "kill-app": {
+        // The server gets the request; the app dies before the answer arrives, then is opened again.
+        note(record, "app killed while the server handled this request; its answer went nowhere");
+        const answer = call.send();
+        await tab.interrupt(what, "start");
+        await answer.catch(() => undefined);
+        await call.drop({ abandoned: true });
+        return tab.interrupt(what, "end");
+      }
+      case "background": {
+        note(record, "app sent to the background while the server handled this request");
+        await tab.interrupt(what, "start");
+        await this.forward(call);
+        return tab.interrupt(what, "end");
+      }
+      case "rotate": {
+        note(record, "phone turned to landscape while the server handled this request");
+        await tab.interrupt(what, "start");
+        return this.forward(call);
+      }
+    }
   }
 
   /** Network perturbations that never matched a request. */

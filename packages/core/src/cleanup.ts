@@ -60,6 +60,7 @@ export async function clean(branches: Branches, options: { all?: boolean } = {})
   if (options.all) {
     await rm(join(project.cacheDir, "sqlite"), { recursive: true, force: true });
     await rm(join(project.cacheDir, "cargo-target"), { recursive: true, force: true });
+    await rm(join(project.cacheDir, "apks"), { recursive: true, force: true });
   }
 
   if (options.all) result.worktrees = await branches.versions.removeAll();

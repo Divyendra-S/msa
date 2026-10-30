@@ -3,6 +3,8 @@
 //
 //   pnpm zoo:verify [--repeat 3] [--case 02-lost-response-retry] [--experiment checkout-double-submit]
 //   pnpm zoo:verify --app notes      the Tauri notes app (zoo/notes), its cases in zoo/notes/cases
+//   pnpm zoo:verify --app shop-android   the shop's Android app (zoo/shop-android) on emulators: its
+//                                        own cases, and shop cases it names with `from:`
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -40,13 +42,17 @@ interface Variant {
 async function loadCases(dir: string, only?: string): Promise<Case[]> {
   const cases: Case[] = [];
   const caseDirs = (await readdir(dir, { withFileTypes: true }))
-    .filter((e) => e.isDirectory() && /^(\d{2}|c\d)-/.test(e.name))
+    .filter((e) => e.isDirectory() && /^(\d{2}|[a-z]\d)-/.test(e.name))
     .map((e) => e.name)
     .sort();
   for (const name of caseDirs) {
     if (only && name !== only) continue;
-    const meta = parseYaml(await readFile(join(dir, name, "case.yaml"), "utf8")) as Omit<Case, "patch">;
-    const patch = await readFile(join(dir, name, meta.control ? "control.patch" : "bug.patch"), "utf8");
+    const own = parseYaml(await readFile(join(dir, name, "case.yaml"), "utf8")) as Omit<Case, "patch"> & { from?: string };
+    // `from:` reuses another app's case (its patch and description) with this app's experiment.
+    const source = own.from ? join(dir, name, own.from) : join(dir, name);
+    const base = own.from ? (parseYaml(await readFile(join(source, "case.yaml"), "utf8")) as Omit<Case, "patch">) : {};
+    const meta = { ...base, ...own, id: name } as Omit<Case, "patch">;
+    const patch = await readFile(join(source, meta.control ? "control.patch" : "bug.patch"), "utf8");
     cases.push({ ...meta, breaks: meta.breaks ?? [], patch });
   }
   if (only && cases.length === 0) throw new Error(`no case named ${only}`);
@@ -76,7 +82,7 @@ async function main(): Promise<number> {
   });
   const repeat = Number(values.repeat);
   const app = values.app;
-  if (app !== "shop" && app !== "notes") throw new Error(`--app must be shop or notes, not ${app}`);
+  if (app !== "shop" && app !== "notes" && app !== "shop-android") throw new Error(`--app must be shop, notes or shop-android, not ${app}`);
   const appDir = join(import.meta.dirname, "..", app);
   const casesDir = app === "shop" ? import.meta.dirname : join(appDir, "cases");
   const cases = await loadCases(casesDir, values.case);

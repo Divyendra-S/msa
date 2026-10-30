@@ -1,0 +1,5 @@
+description: Alice turns her phone while the checkout is on its way, which recreates the screen.
+flow: checkout
+perturb:
+  - do: rotate
+    step: pay

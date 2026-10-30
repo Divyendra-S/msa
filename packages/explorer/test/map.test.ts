@@ -50,8 +50,10 @@ describe("app map of the Bug Zoo shop", () => {
       map.routes.map((r) => `${r.method} ${r.path}`).sort(),
       [
         "DELETE /api/session",
+        "GET /api/cart",
         "GET /api/health",
         "GET /api/orders/:id",
+        "GET /api/products",
         "POST /api/cart/items",
         "POST /api/orders",
         "POST /api/session",

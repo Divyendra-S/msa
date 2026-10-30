@@ -1,0 +1,5 @@
+# The shop's own case (zoo/cases/01-double-submit), caught from the phone: the user taps "Pay now"
+# again after the answer to the first tap was lost, and the server makes a second order.
+from: ../../../cases/01-double-submit
+experiment: checkout-lost-response
+breaks: [one-order-per-cart]

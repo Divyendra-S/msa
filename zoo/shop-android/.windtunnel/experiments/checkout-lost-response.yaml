@@ -1,0 +1,10 @@
+description: The server saves the order but the phone never gets the answer, so Alice taps "Pay now" again.
+flow: checkout
+perturb:
+  - do: lose-response
+    request: POST /api/orders
+    step: pay
+  - do: repeat
+    step: pay
+# The payment webhook arrives after the retry, as it would with a slow provider.
+webhooks: late
