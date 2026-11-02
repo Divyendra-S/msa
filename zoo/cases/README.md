@@ -68,10 +68,12 @@ It prints one line per variant: what didn't pass (the case's own experiment firs
 `*`), then how many others passed.
 
 Options: `--repeat <n>` (default 3), `--case <id>`, `--experiment <id>` (repeatable), `--app
-notes`, `--app shop-android` or `--app shop-ios` for the other zoo apps, whose cases are in
-their own `cases/`. A `case.yaml` there with `from: <folder>` reuses that case's patch and
-description with its own experiment: `zoo/shop-android` and `zoo/shop-ios` catch the shop's bugs
-from the phone that way.
+notes`, `--app shop-android`, `--app shop-ios` or `--app recorder` for the other zoo apps,
+whose cases are in their own `cases/`. A `case.yaml` there with `from: <folder>` reuses that
+case's patch and description with its own experiment: `zoo/shop-android` and `zoo/shop-ios`
+catch the shop's bugs from the phone that way. A case with `sanitizer: thread` (the recorder's
+data race) needs ThreadSanitizer: where it can't run, the verify says why, skips that case and
+runs the rest without it.
 
 ## Prove
 

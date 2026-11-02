@@ -1,0 +1,10 @@
+id: 04-unlocked-capture-count
+title: The capture queue counts frames without the lock
+summary: didCapture skips the lock because only the capture queue calls it, but the recorder's actor reads the count (under the lock) for its backlog at the same time.
+experiment: record-and-stop
+perturbation: None; ThreadSanitizer sees the capture queue's write and the actor's read
+breaks: [no-data-races]
+handler: Sources/Recorder/Frame.swift
+fix: Take the lock in didCapture too (or keep the counts in the recorder's actor).
+# Only ThreadSanitizer sees this one.
+sanitizer: thread

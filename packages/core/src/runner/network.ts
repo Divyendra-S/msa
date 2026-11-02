@@ -1,5 +1,5 @@
 import type { NetworkPerturbation, RaceOrder, RaceSpec } from "./experiment.ts";
-import { INVOKE_PATH, matchesRequest, parseRequestPattern, type RequestPattern } from "./match.ts";
+import { INVOKE_PATH, matchesRequest, parseRequestPattern, POINT_PATH, type RequestPattern } from "./match.ts";
 import { sleep, within } from "./time.ts";
 
 /** Clients whose calls count together when a step waits for quiet: a browser context, a phone. */
@@ -69,8 +69,8 @@ export interface Answer {
 
 /**
  * One call caught at the seam, carried by its transport: a browser route, a proxied HTTP
- * request, an `invoke` in a Tauri page. The network layer decides what happens to it; the
- * transport knows how.
+ * request, an `invoke` in a Tauri page, a probe point in a Swift app. The network layer decides
+ * what happens to it; the transport knows how.
  */
 export interface Call {
   readonly method: string;
@@ -91,6 +91,8 @@ export interface Call {
   drop(options?: { abandoned?: boolean }): Promise<void>;
   /** Lets the call through untouched. */
   pass(): Promise<void>;
+  /** A probe point only: the task is cancelled there and goes on; resolves when its section has finished. */
+  cancel?(): Promise<void>;
 }
 
 /** Sends a call again with `user`'s session after the app answered `original`. */
@@ -328,7 +330,12 @@ export class Network {
         record.sent = this.now();
         return this.forward(call);
       case "fail":
-        note(record, `answered ${p.status}${p.after ? ` after ${p.after} ms` : ""} by the harness; the app never saw it`);
+        note(
+          record,
+          call.method === "POINT"
+            ? `the code threw here${p.after ? ` after ${p.after} ms` : ""}: failed by the harness`
+            : `answered ${p.status}${p.after ? ` after ${p.after} ms` : ""} by the harness; the app never saw it`,
+        );
         record.sent = null;
         if (p.after) await sleep(p.after);
         return call.fulfill(p.status, "Service unavailable (injected)");
@@ -344,6 +351,10 @@ export class Network {
         note(record, `sent to the app twice (${first.status}, ${second.status}); the ${this.client} got the first answer`);
         return call.answer(first);
       }
+      case "cancel":
+        note(record, "cancelled here by the harness; the task went on");
+        record.sent = this.now();
+        return call.cancel ? call.cancel() : call.drop();
       case "replay-as": {
         const answer = await call.send();
         record.response ??= this.now();
@@ -450,14 +461,19 @@ function ordinal(n: number): string {
   return n === 1 ? "first" : n === 2 ? "second" : n === 3 ? "third" : `#${n}`;
 }
 
-/** How a call shows in the request log: a Tauri command call as `INVOKE save_note`, anything else as its method and path. */
+/**
+ * How a call shows in the request log: a Tauri command call as `INVOKE save_note`, a probe
+ * point as `POINT writer.append`, anything else as its method and path.
+ */
 export function callName(method: string, url: URL): { method: string; url: string } {
-  if (method === "POST" && url.pathname.startsWith(INVOKE_PATH)) {
-    const command = url.pathname.slice(INVOKE_PATH.length);
-    try {
-      return { method: "INVOKE", url: decodeURIComponent(command) };
-    } catch {
-      return { method: "INVOKE", url: command };
+  for (const [prefix, name] of [[INVOKE_PATH, "INVOKE"], [POINT_PATH, "POINT"]] as const) {
+    if ((method === "POST" || method === "POINT") && url.pathname.startsWith(prefix)) {
+      const rest = url.pathname.slice(prefix.length);
+      try {
+        return { method: name, url: decodeURIComponent(rest) };
+      } catch {
+        return { method: name, url: rest };
+      }
     }
   }
   return { method, url: url.pathname + url.search };

@@ -253,7 +253,7 @@ export async function drillDown(store: RunStore, handle: string, options: Eviden
     else {
       text = [
         `Rule ${id}: ${result.ok ? "held" : result.error ? `error: ${result.error}` : "broken"}${rule?.description ? ` — ${rule.description}` : ""}`,
-        rule && (rule.sql !== undefined ? `SQL: ${rule.sql.replace(/\s+/g, " ").trim()}` : `Check: ${rule.check}`),
+        rule && (rule.sql !== undefined ? `SQL: ${rule.sql.replace(/\s+/g, " ").trim()}` : rule.check !== undefined ? `Check: ${rule.check}` : "ThreadSanitizer: any data race it reports"),
         ...result.rows.map((r) => `  ${inline(r)}`),
       ].filter(Boolean).join("\n");
     }
@@ -337,8 +337,11 @@ export function requestLine(
   // React Server Component fetches (client navigation, refresh, prefetch) look like page paths.
   const rsc = /[?&]_rsc=/.test(r.url);
   const path = r.url.replace(/([?&])_rsc=[^&]*/, "$1").replace(/[?&]$/, "") + (rsc ? " (RSC)" : "");
+  // A probe point has no answer: what the run did there is in its harness notes.
   const outcome =
-    r.failure && r.status !== undefined
+    r.method === "POINT" && !r.failure
+      ? r.sent === null ? "stopped there" : "went on"
+      : r.failure && r.status !== undefined
       ? `${r.status}, then ✗ ${r.failure}`
       : r.failure
         ? `✗ ${r.failure}`
@@ -356,10 +359,16 @@ function timeline(rep: LoadedRep, options: EvidenceOptions): string[] {
   const lines: string[] = [];
   const counts = rep.sql ? sqlCounts(rep.sql) : undefined;
   for (const s of rep.detail.steps) {
-    const reqs = rep.requests.filter((r) => r.tab === s.tab && r.start >= s.start && r.start < (s.end || Infinity) && interesting(r));
+    const all = rep.requests.filter((r) => r.tab === s.tab && r.start >= s.start && r.start < (s.end || Infinity) && interesting(r));
+    // Probe points the run let straight through are counted, not listed: a scenario reaches many.
+    const passed = all.filter((r) => r.method === "POINT" && !r.harness?.length && !r.failure);
+    const reqs = all.filter((r) => !passed.includes(r));
+    const tally = new Map<string, number>();
+    for (const r of passed) tally.set(r.url, (tally.get(r.url) ?? 0) + 1);
     lines.push(
       `  ${s.tab}${s.as ? ` (as ${s.as})` : ""} ${s.step}${s.attempt ? ` (${s.attempt})` : ""} ${s.start}–${s.end}${(s.harness ?? []).map((h) => ` [harness] ${h}`).join("")}${s.error ? ` ERROR ${s.error}` : ""}`,
       ...reqs.map((r) => `    ${requestLine(r, options, false, counts)}`),
+      ...(tally.size ? [`    went on: ${[...tally].map(([name, n]) => `POINT ${name}${n > 1 ? ` ×${n}` : ""}`).join(", ")}`] : []),
     );
   }
   return lines;

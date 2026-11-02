@@ -6,6 +6,7 @@ import { formatTable, naturalKeys, type TableInfo } from "./schema.ts";
 import { type Effect, type FetchEffect, SourceIndex, type SqlEffect, type UiFacts, unique } from "./source.ts";
 import { findAndroidApp } from "./android.ts";
 import { findIosApp } from "./ios.ts";
+import { type ConcurrencySite, findMacApp, type MacApp } from "./mac.ts";
 import { findTauriApp } from "./tauri.ts";
 
 export interface RouteInfo {
@@ -36,6 +37,8 @@ export interface AppMap {
   /** Patterns in shared helpers (e.g. a session lookup with no expiry check). */
   helperFlags: string[];
   schema?: TableInfo[];
+  /** A Swift Mac app: where more probe points could go, and the scenarios experiments run. */
+  mac?: { sites: ConcurrencySite[]; scenarios: MacApp["scenarios"] };
   windtunnel: {
     users: string[];
     flows: { id: string; steps: string[]; params: string[] }[];
@@ -100,10 +103,28 @@ export async function buildAppMap(project: Project, options: { schema?: TableInf
     }
     pages.unshift(...phone.screens.map((sc) => ({ path: sc.name, file: `${join(prefix, sc.file)}:${sc.line}`, kind: "page" as const, ui: sc.ui })));
   }
-  const client = tauri?.framework ?? phone?.framework;
+  // A Swift Mac app: its probe points are its calls at the seam, as `POINT <name>`.
+  const macRoot = join(project.root, project.config.mac?.dir ?? ".");
+  const mac = project.config.mac ? await findMacApp(macRoot) : undefined;
+  for (const p of mac?.points ?? []) {
+    const notes = [p.section ? "covers a section: in a race let go one at a time, the next goes when it ends" : "a point: a run can hold, delay, fail or cancel the task here"];
+    if (p.in) notes.push(`in ${p.in}`);
+    routes.push({ method: "POINT", path: p.name, file: `${join(relative(project.root, macRoot), p.file)}:${p.line}`, ...(p.comment ? { comment: p.comment } : {}), effects: [], flags: [], notes });
+  }
+
+  const client = tauri?.framework ?? phone?.framework ?? mac?.framework;
   const name = client ? (framework === "unknown" ? client : `${client} + ${framework}`) : framework;
 
-  return { root: project.root, framework: name, routes, pages, helperFlags: [...helperFlags], schema: options.schema, windtunnel: await windtunnelFiles(project) };
+  return {
+    root: project.root,
+    framework: name,
+    routes,
+    pages,
+    helperFlags: [...helperFlags],
+    schema: options.schema,
+    ...(mac ? { mac: { sites: mac.sites, scenarios: mac.scenarios } } : {}),
+    windtunnel: await windtunnelFiles(project),
+  };
 }
 
 /** `/api/orders/{orderId}` (a phone's call) is `/api/orders/:id` (a route). */
@@ -329,13 +350,21 @@ export function formatAppMap(map: AppMap, options: { focus?: string; maxChars?: 
     ].join("\n");
   }
 
-  const heading = map.routes.length > 0 && map.routes.every((r) => r.method === "INVOKE") ? "Commands" : "API routes and server actions";
-  lines.push("", `${heading} (${routes.length}): what each handler does, in order; ! = pattern worth an experiment`);
+  const heading =
+    map.routes.length > 0 && map.routes.every((r) => r.method === "INVOKE")
+      ? "Commands"
+      : map.mac
+        ? "Probe points"
+        : "API routes and server actions";
+  lines.push(
+    "",
+    map.mac
+      ? `${heading} (${routes.length}): where a run steps into the code (point: <name> in an experiment)`
+      : `${heading} (${routes.length}): what each handler does, in order; ! = pattern worth an experiment`,
+  );
   for (const r of routes) {
-    lines.push(
-      `${r.method} ${r.path}  ${r.file}${r.comment ? `  // ${r.comment}` : ""}`,
-      `  ${formatEffects(r.effects) || "(no database or network calls found)"}`,
-    );
+    lines.push(`${r.method} ${r.path}  ${r.file}${r.comment ? `  // ${r.comment}` : ""}`);
+    if (r.method !== "POINT") lines.push(`  ${formatEffects(r.effects) || "(no database or network calls found)"}`);
     for (const f of r.flags) lines.push(`  ! ${f}`);
     for (const n of r.notes) lines.push(`  ✓ ${n}`);
   }
@@ -352,9 +381,17 @@ export function formatAppMap(map: AppMap, options: { focus?: string; maxChars?: 
     [`Pages (${webPages.length}): buttons, form labels, texts it can show, requests its components send`, webPages],
   ];
   for (const [title, list] of sections) {
-    if (list.length === 0 && title.startsWith("Screens")) continue;
+    if (list.length === 0 && (title.startsWith("Screens") || map.mac)) continue;
     lines.push("", title);
     formatPages(lines, list);
+  }
+
+  if (map.mac) {
+    const sites = map.mac.sites.filter((x) => keep(x.file, x.in, x.kind));
+    lines.push("", `Concurrency (${sites.length}): where a probe point lets a run hold, fail or cancel what matters; * = a point is there`);
+    for (const x of sites) lines.push(`${x.probed ? "* " : "  "}${x.kind}  ${x.file}:${x.lines.join(",")}${x.in ? `  in ${x.in}` : ""}  ${x.note}`);
+    lines.push("", `Scenarios (${map.mac.scenarios.length}): XCTest methods an experiment runs (scenario: Class/testMethod), and their steps`);
+    for (const x of map.mac.scenarios) lines.push(`${x.id}  ${x.file}:${x.line}  steps ${x.steps.join(", ") || "(none marked: the whole test is one step)"}`);
   }
 
   if (map.schema) {
@@ -366,8 +403,13 @@ export function formatAppMap(map: AppMap, options: { focus?: string; maxChars?: 
   lines.push(
     "",
     "Wind Tunnel",
-    `users: ${wt.users.join(", ") || "none (add test users to windtunnel.config.yaml)"}`,
-    `flows: ${wt.flows.map((f) => `${f.id}(${f.steps.join(", ")}${f.params.length ? `; params ${f.params.join(", ")}` : ""})`).join(" · ") || "none"}`,
+    // A Mac app's scenarios are its own client: no users, no flows.
+    ...(map.mac
+      ? []
+      : [
+          `users: ${wt.users.join(", ") || "none (add test users to windtunnel.config.yaml)"}`,
+          `flows: ${wt.flows.map((f) => `${f.id}(${f.steps.join(", ")}${f.params.length ? `; params ${f.params.join(", ")}` : ""})`).join(" · ") || "none"}`,
+        ]),
     `rules: ${wt.rules.map((r) => r.id).join(", ") || "none"}`,
     `experiments: ${wt.experiments.map((e) => e.id).join(", ") || "none"}`,
   );

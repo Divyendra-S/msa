@@ -24,10 +24,12 @@ export interface ScanResult {
   pages: number;
   /** Patterns in shared helpers, e.g. sessions that never expire. */
   helpers: { flag: string; says: string }[];
+  /** A Swift Mac app: concurrency in its code, where a probe point lets a run step in. */
+  concurrency?: { kind: string; file: string; lines: number[]; in?: string; says: string; probed: boolean }[];
 }
 
 /**
- * `windtunnel scan`: the static half of the app map for any Next.js or Tauri folder, no config needed and
+ * `windtunnel scan`: the static half of the app map for any Next.js, Tauri or Swift package folder, no config needed and
  * no model, build or database involved. The Mac app shows it as soon as a folder is picked, before
  * anything is set up.
  */
@@ -37,8 +39,11 @@ export async function scan(dir: string): Promise<ScanResult> {
     ? await openProject(resolve(dir)).catch(() => undefined)
     : undefined;
   const root = configured?.root ?? (await nextApp(resolve(dir)));
+  // A Swift package with no web app in it is read as a Mac app's code.
+  const swift = !configured && root === resolve(dir) && (await stat(join(root, "Package.swift")).then(() => true, () => false));
   // The map reads only the source tree; the project's other parts are for runs.
-  const project = configured ?? ({ root, repoRoot: root, appSubdir: "", stateDir: join(root, ".windtunnel"), config: { users: {} } } as unknown as Project);
+  const config = swift ? { app: { kind: "mac" }, mac: { dir: "." }, users: {} } : { users: {} };
+  const project = configured ?? ({ root, repoRoot: root, appSubdir: "", stateDir: join(root, ".windtunnel"), config } as unknown as Project);
   const map = await buildAppMap(project);
   return {
     root,
@@ -54,10 +59,20 @@ export async function scan(dir: string): Promise<ScanResult> {
     })),
     pages: map.pages.filter((p) => p.kind === "page").length,
     helpers: map.helperFlags.map((flag) => ({ flag, says: plain(flag) })),
+    ...(map.mac
+      ? { concurrency: map.mac.sites.map((x) => ({ kind: x.kind, file: x.file, lines: x.lines, ...(x.in ? { in: x.in } : {}), says: x.note, probed: x.probed })) }
+      : {}),
   };
 }
 
 export function formatScan(s: ScanResult): string {
+  if (s.concurrency) {
+    const lines = [`${s.framework} · ${s.root}`, `${s.routes.length} probe point(s); ${s.concurrency.length} place(s) with concurrency, * = a point is there`, ""];
+    for (const r of s.routes) lines.push(`${r.method} ${r.path}  ${r.file}`);
+    if (s.routes.length) lines.push("");
+    for (const x of s.concurrency) lines.push(`${x.probed ? "* " : "  "}${x.kind}  ${x.file}:${x.lines.join(",")}${x.in ? `  in ${x.in}` : ""}: ${x.says}`);
+    return lines.join("\n");
+  }
   const risky = s.routes.filter((r) => r.risks.length);
   const lines = [`${s.framework} · ${s.root}`, `${s.routes.length} handlers, ${s.pages} pages; ${risky.length} worth a look`, ""];
   for (const r of risky) {

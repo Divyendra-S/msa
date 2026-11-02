@@ -1,0 +1,20 @@
+--- a/zoo/recorder/Sources/Recorder/TakeWriter.swift
++++ b/zoo/recorder/Sources/Recorder/TakeWriter.swift
+@@ -32,13 +32,12 @@
+         try handle.write(contentsOf: Data("WTAKE 1\(header)\n".utf8))
+     }
+ 
+-    /// Compresses a frame, then writes its record in one go.
++    /// Writes a frame's record: its header at once, its pixels once they are compressed.
+     func append(_ frame: Frame) async throws {
+-        try await Probe.point("frame.compress")
+-        let payload = await compress(frame.pixels)
+         guard !closed else { throw TakeError.closed }
+-        var record = Data("F \(frame.index) \(payload.count)\n".utf8)
+-        record.append(payload)
++        try handle.write(contentsOf: Data("F \(frame.index) \(frame.pixels.count)\n".utf8))
++        try await Probe.point("frame.compress")
++        var record = await compress(frame.pixels)
+         record.append(UInt8(ascii: "\n"))
+         try handle.write(contentsOf: record)
+         count += 1

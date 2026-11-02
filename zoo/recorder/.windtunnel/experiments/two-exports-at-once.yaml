@@ -1,0 +1,6 @@
+description: Two exports of the same take at once (full and half size), each held as it hands its first frame to the encoder until the other gets there too, then released in every order.
+scenario: RecorderScenarios/testTwoExports
+race:
+  point: export.encode
+  count: 2
+  order: each

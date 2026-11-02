@@ -1,7 +1,8 @@
 /**
  * Request patterns in experiment files: `"POST /api/orders"`, `"GET /api/orders/:id"`,
  * `"* /api/**"`. The query string is ignored; `*` matches one path segment, `**` any number.
- * A Tauri app's command calls are `"invoke save_note"` (`*` matches any part of a name).
+ * A Tauri app's command calls are `"invoke save_note"`, a Swift app's probe points
+ * `"point writer.append"` (`*` matches any part of a name).
  */
 export interface RequestPattern {
   text: string;
@@ -9,17 +10,20 @@ export interface RequestPattern {
   path: RegExp;
 }
 
-export const REQUEST_PATTERN = /^(?:(\*|[A-Za-z]+)\s+(\/\S*)|invoke\s+([^\s/]+))$/i;
+export const REQUEST_PATTERN = /^(?:(\*|[A-Za-z]+)\s+(\/\S*)|invoke\s+([^\s/]+)|point\s+([^\s/]+))$/i;
 
 /** Where a Tauri page's `invoke` calls go (crates/windtunnel-tauri): `POST /__windtunnel/invoke/<command>`. */
 export const INVOKE_PATH = "/__windtunnel/invoke/";
+/** Where a Swift app's probe points go, as calls at the seam: `POINT /__windtunnel/point/<name>`. */
+export const POINT_PATH = "/__windtunnel/point/";
 
 export function parseRequestPattern(text: string): RequestPattern {
   const m = REQUEST_PATTERN.exec(text.trim());
-  if (!m) throw new Error(`bad request pattern "${text}": expected "METHOD /path", e.g. "POST /api/orders", or "invoke <command>"`);
-  if (m[3]) {
-    const command = m[3].split("*").map((part) => escapeRegExp(encodeURIComponent(part))).join("[^/]*");
-    return { text: text.trim(), method: "POST", path: new RegExp(`^${escapeRegExp(INVOKE_PATH)}${command}$`) };
+  if (!m) throw new Error(`bad request pattern "${text}": expected "METHOD /path", e.g. "POST /api/orders", "invoke <command>" or "point <name>"`);
+  if (m[3] || m[4]) {
+    const name = (m[3] ?? m[4])!.split("*").map((part) => escapeRegExp(encodeURIComponent(part))).join("[^/]*");
+    const [method, prefix] = m[3] ? ["POST", INVOKE_PATH] : ["POINT", POINT_PATH];
+    return { text: text.trim(), method, path: new RegExp(`^${escapeRegExp(prefix)}${name}$`) };
   }
   const source = m[2]!
     .replace(/\/+$/, "")
@@ -36,6 +40,17 @@ export function parseRequestPattern(text: string): RequestPattern {
 export function matchesRequest(pattern: RequestPattern, method: string, url: string | URL): boolean {
   if (pattern.method !== "*" && pattern.method !== method.toUpperCase()) return false;
   return pattern.path.test(new URL(url).pathname);
+}
+
+/**
+ * Whether a call as the request log names it matches: `POST /api/orders`, a Tauri command as
+ * `INVOKE save_note`, a probe point as `POINT writer.append`.
+ */
+export function matchesLogged(pattern: RequestPattern, method: string, path: string): boolean {
+  const upper = method.toUpperCase();
+  if (upper === "INVOKE") return matchesRequest(pattern, "POST", `http://x${INVOKE_PATH}${encodeURIComponent(path)}`);
+  if (upper === "POINT") return matchesRequest(pattern, "POINT", `http://x${POINT_PATH}${encodeURIComponent(path)}`);
+  return matchesRequest(pattern, method, `http://x${path}`);
 }
 
 function escapeRegExp(text: string): string {

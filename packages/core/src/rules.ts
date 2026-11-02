@@ -6,6 +6,7 @@ import { z } from "zod";
 import { ConfigError } from "./config.ts";
 import { type Database, databaseEnv, openSqlite, plainRow } from "./database.ts";
 import { runScript } from "./exec.ts";
+import { readSanitizerReports } from "./mac/sanitizer.ts";
 import type { Project } from "./project.ts";
 
 export const RULES_FILE = "rules.yaml";
@@ -29,9 +30,16 @@ const RuleSchema = z
      * of that phone's user. Broken rows say whose phone they're from (`user`).
      */
     phone: z.string().min(1).optional(),
+    /**
+     * `thread`: for a Swift Mac app built with ThreadSanitizer (app.kind: mac). Breaks on every
+     * data race it reports during the run; each broken row has both stacks.
+     */
+    sanitizer: z.literal("thread").optional(),
     expect: z.literal("empty").default("empty"),
   })
-  .refine((r) => (r.sql === undefined) !== (r.check === undefined), { message: "a rule has either sql or check (not both)" })
+  .refine((r) => [r.sql, r.check, r.sanitizer].filter((x) => x !== undefined).length === 1, {
+    message: "a rule has one of sql, check or sanitizer",
+  })
   .refine((r) => r.phone === undefined || r.sql !== undefined, { message: "a phone rule is SQL on the phone's file (sql, not check)" })
   .refine((r) => r.phone === undefined || (!r.phone.startsWith("/") && !r.phone.split("/").includes("..")), {
     message: "phone: a path inside the app's data folder",
@@ -40,8 +48,9 @@ const RuleSchema = z
 const RulesFileSchema = z.record(z.string().regex(/^[a-z0-9][a-z0-9-]*$/, "rule ids are lower-case-with-dashes"), RuleSchema);
 
 export type Rule = { id: string; description?: string; expect: "empty"; phone?: string } & (
-  | { sql: string; check?: undefined }
-  | { check: string; sql?: undefined }
+  | { sql: string; check?: undefined; sanitizer?: undefined }
+  | { check: string; sql?: undefined; sanitizer?: undefined }
+  | { sanitizer: "thread"; sql?: undefined; check?: undefined }
 );
 
 /**
@@ -120,9 +129,10 @@ export function parseRules(text: string, source = RULES_FILE): Rule[] {
   return Object.entries(result.data).map(([id, rule]) => ({ id, ...rule }) as Rule);
 }
 
-/** What a rule checks, in one line: its SQL or its command. */
+/** What a rule checks, in one line: its SQL, its command, or its sanitizer. */
 export function ruleSource(rule: Rule): string {
-  return rule.sql !== undefined ? rule.sql : `check: ${rule.check}`;
+  if (rule.sql !== undefined) return rule.sql;
+  return rule.check !== undefined ? `check: ${rule.check}` : "sanitizer: thread (any data race ThreadSanitizer reports)";
 }
 
 /** Loads `.windtunnel/rules.yaml`; a project without one has no rules. */
@@ -141,6 +151,8 @@ export interface RuleTarget {
   env?: Record<string, string>;
   /** The run's phones, for `phone:` rules: none outside a run, so those rules have nothing to check. */
   phones?: PhoneData[];
+  /** Where ThreadSanitizer wrote its reports in the run, for `sanitizer: thread` rules. */
+  threadSanitizer?: string;
 }
 
 /** What a phone kept, copied off it after the run. */
@@ -176,6 +188,13 @@ export async function checkRules(target: RuleTarget, rules: Rule[], facts?: RunF
   }
   for (const rule of rules) {
     if (rule.check !== undefined) results.set(rule.id, await runCheck(rule.id, rule.check, target, facts));
+  }
+  const sanitized = rules.filter((r) => r.sanitizer === "thread");
+  if (sanitized.length > 0) {
+    // Outside a run (the seed) nothing ran, so nothing raced.
+    const reports = target.threadSanitizer ? await readSanitizerReports(target.threadSanitizer) : [];
+    const rows = reports.slice(0, MAX_ROWS).map((r) => ({ ...r }) as Record<string, unknown>);
+    for (const rule of sanitized) results.set(rule.id, { id: rule.id, ok: rows.length === 0, rows });
   }
   return rules.map((r) => results.get(r.id)!);
 }

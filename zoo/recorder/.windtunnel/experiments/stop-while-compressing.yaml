@@ -1,0 +1,7 @@
+description: The first frame takes 300 ms to compress, and the user presses Stop meanwhile.
+scenario: RecorderScenarios/testRecordAndStop
+perturb:
+  - do: delay
+    point: frame.compress
+    step: record
+    ms: 300

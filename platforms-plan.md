@@ -1,7 +1,8 @@
 # Wind Tunnel beyond web apps — Plan
 
-Last updated 2026-11-02. **Status: Phases 1 (groundwork), 2 (Tauri), 3 (Android) and 4 (iOS)
-done and pushed. Phase 5 (Swift Mac apps) is in progress.**
+Last updated 2026-11-02. **Status: all five phases (groundwork, Tauri, Android, iOS, Swift Mac
+apps) done and pushed. Phase 5's ThreadSanitizer rule is built and unit-tested, but it can't run
+on this Mac until Xcode is updated to 26.4 or newer.**
 
 Today Wind Tunnel tests Next.js + Postgres web apps. This plan adds Tauri apps, Android and iOS
 apps on an emulator or simulator, and native Swift Mac apps, all running in the background: no
@@ -15,7 +16,7 @@ window on screen, no mouse or keyboard taken.
 | 2 Tauri | Done, pushed |
 | 3 Android | Done, pushed |
 | 4 iOS | Done, pushed |
-| 5 Swift Mac apps | In progress |
+| 5 Swift Mac apps | Done, pushed (ThreadSanitizer live: after Xcode 26.4+) |
 
 What Phase 1 changed, for anyone using Wind Tunnel today:
 
@@ -58,6 +59,22 @@ What Phase 4 adds:
 - `zoo/shop-ios`, the shop's SwiftUI app: the shop's bugs caught from the iPhone, a link opened
   twice, and an order lost by an actor's reentrancy; `pnpm zoo:verify:ios`.
 - The Map reads Swift: the app's screens and which server routes their actions reach.
+
+What Phase 5 adds:
+
+- `app.kind: mac`: a Swift Mac app's code, tested as a Swift package with no server. An
+  experiment names an XCTest method as its `scenario`; each run starts it alone with `xctest`, in
+  its own empty `$DATA_DIR` (and `$HOME`), with nothing on screen.
+- `swift/WindTunnelProbe`: `Probe.point("…")` in the app's code is where a run holds, delays,
+  fails or cancels it; `Probe.step` marks a scenario's steps. In release builds it's compiled out.
+- Pressure on points: `delay`, `fail`, `cancel`, and races (`race: { point: …, order: each }`),
+  through the same seam as requests.
+- Rules: `check:` commands on what the run left, and `sanitizer: thread`, where any data race
+  ThreadSanitizer reports breaks the rule with both stacks.
+- `zoo/recorder`, a screen recorder's pipeline without UI, with four planted bugs; `pnpm
+  zoo:verify:mac`.
+- The Map and `windtunnel scan` read Swift: probe points, the concurrency where more could go,
+  and the scenarios with their steps.
 
 ## The idea
 
@@ -383,25 +400,77 @@ For apps where everything happens inside the app, like a screen recorder: Stop p
 frame is being written, two exports at once. There's no network call to hold, so the seam is in
 the code.
 
-- [ ] **Swift package `WindTunnelProbe`:** the app calls `await Probe.point("writer.append")` at
+- [x] **Swift package `WindTunnelProbe`:** the app calls `await Probe.point("writer.append")` at
   the places that matter. In a run (an environment variable set) it asks the harness what to
-  do: go on, wait, throw, or cancel. Otherwise, and in release builds, it does nothing.
-- [ ] **Test app `zoo/recorder`:** a Swift package that copies a recorder's pipeline without
+  do: go on, wait, throw, or cancel. Otherwise, and in release builds, it does nothing. Done:
+  `swift/WindTunnelProbe`. A point can also cover a section (`Probe.point("…") { … }`), so a race
+  released one at a time runs each section whole. `cancel` cancels the task and lets it go on, as
+  a user's cancel would. `Probe.step` marks the scenario's steps. A release build has none of the
+  harness code; outside a run a point returns without suspending.
+- [x] **Test app `zoo/recorder`:** a Swift package that copies a recorder's pipeline without
   UI: a fake frame source, an actor, a file writer. Planted bugs: Stop during a write leaves an
   unfinished file; two exports write the same temporary file; cancel during finish leaves the
-  writer open.
-- [ ] **Runner:** `app.kind: mac`. An experiment names a Swift test as its scenario (`swift test
+  writer open. Done: those three as cases 01-03 (the export bug shares the encoder's scratch file;
+  a shared output file made one export fail with an error instead of a silent wrong file), and
+  case 04, a frame count the capture queue writes without the lock, for ThreadSanitizer.
+- [x] **Runner:** `app.kind: mac`. An experiment names a Swift test as its scenario (`swift test
   --filter`, or `xcodebuild test -only-testing` for an Xcode project). Races and perturbations
   target probe points: `race: { point: writer.append, order: each }`, `perturb: [{ do: fail,
-  point: export.finish }]`. Each run gets its own data folder.
-- [ ] **Rules:** `check:` scripts on what's left (the exported video opens and has the right
+  point: export.finish }]`. Each run gets its own data folder. Done differently: the test bundle
+  is built once per version (`swift build --build-tests`) and each run starts `xctest -XCTest
+  <Class/test> <bundle>` directly; `swift test` takes a lock on `.build`, so parallel runs would
+  queue. Points are calls at the existing seam (`POINT writer.finish`), so delays, failures, races
+  and their notes are the web's. Xcode projects aren't supported yet: their tests usually run
+  inside the app, which opens its window.
+- [x] **Rules:** `check:` scripts on what's left (the exported video opens and has the right
   length); builds with ThreadSanitizer, where any data race it reports breaks a `no-data-races`
-  rule, with both stacks as the sample.
-- [ ] **Code reader:** actors, `Task {}` and `Task.detached`, dispatch queues, AVAssetWriter and
-  file writes, listed as places to put probe points; the agent proposes them.
+  rule, with both stacks as the sample. Done: the recorder's checks read its take files (whole,
+  none left half-written, exports match their take), and `sanitizer: thread` is a rule kind. Not
+  run live: on macOS 26.4 and later, sanitizers need Xcode 26.4 or newer, and this Mac has Xcode
+  26.0.1 on macOS 26.5.2 (any program built with ThreadSanitizer crashes as it starts, from Xcode's
+  toolchain and the Command Line Tools'). The report parsing and the rule are tested with a
+  report in ThreadSanitizer's format; `windtunnel doctor` and the runner say why it can't run, and
+  `mac.sanitizer: none` (or `WINDTUNNEL_SANITIZER=none`) runs without it.
+- [x] **Code reader:** actors, `Task {}` and `Task.detached`, dispatch queues, AVAssetWriter and
+  file writes, listed as places to put probe points; the agent proposes them. Done: the Map and
+  `windtunnel scan` list them per function (plus unchecked shared state, cancellation checks and
+  continuations), mark the ones a point already covers, and list the probe points and the
+  scenarios with their steps; the init skill tells the agent to propose points and ask first.
 
 **Done when:** each planted bug fails its experiment and passes with its fix patch, tests run
 with nothing on screen, and Replay shows the scenario's steps.
+
+- [x] `pnpm zoo:verify:mac` passes: 84 runs in 20 s. The clean recorder passes all five
+  experiments; case 01 breaks `takes-are-whole` (3/3, and in `compress-fails` too), case 02
+  `exports-match-their-take` (9/9, every ordering), case 03 `no-open-takes` (3/3). Case 04 needs
+  ThreadSanitizer, so the verify says why and skips it here.
+- [x] Nothing on screen: a window watcher ran through the whole verify and saw no new window,
+  and the frontmost app never changed.
+- [x] Replay shows the scenario's steps: the Mac app's Replay for `zoo/recorder` shows a column
+  per step, the probe points each reached with what the run did there ("cancelled here", "the
+  code threw here"), the pressure on its column, and the broken rule with its row.
+- [x] `pnpm typecheck` and `pnpm test` pass (183 tests). The other zoo apps' verifies give the
+  same tables as before, after the seam, experiment format, config and runner changes: the shop
+  PASS (840 runs in 654 s, the 3 expected errors in case 04), notes PASS (72 runs in 32 s),
+  Android PASS (180 runs in 580 s), iOS PASS (252 runs in 1,825 s).
+- [x] Docs: README (Swift Mac apps, layout), `docs/experiments.md` (probe points, Mac apps,
+  `sanitizer` rules), `swift/WindTunnelProbe/README.md`, `zoo/recorder/README.md`,
+  `zoo/cases/README.md`, the init skill, `activity.md`.
+- [x] The owner says "push".
+
+Found on the way:
+- Sanitizers built with Xcode 26.3 or older crash on macOS 26.4 and later (Apple's known issue
+  171762808); the fix is Xcode 26.4. The ThreadSanitizer case waits for that update.
+- Even with a working ThreadSanitizer, `swift test --sanitize=thread` can't load it into
+  SwiftPM's test helper here ("Sanitizer load violates platform policy"). Wind Tunnel loads it
+  into `xctest`, which is ad-hoc signed, with `DYLD_INSERT_LIBRARIES`, started directly: macOS
+  drops `DYLD_` variables for anything started through `/bin/sh`. Not yet checked with a working
+  ThreadSanitizer.
+- `FileManager.createFile` replaces a file with a new one, so two writers "sharing" a path really
+  write two files, and one move fails loudly; the recorder's writer reopens and truncates instead.
+- Foundation finds the home folder through `CFFIXED_USER_HOME`, not `HOME`; runs set both.
+- Not yet: Xcode projects (and tests hosted in the app), Swift Testing (`@Test`) scenarios,
+  driving a Mac app's real UI (Later).
 
 ## Later
 

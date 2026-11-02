@@ -188,10 +188,11 @@ struct RunHeader: View {
     return parts.joined(separator: "  ·  ")
   }
 
-  /// The rest, for a tooltip: flow, version, orderings, how it was sorted, what it's compared with.
+  /// The rest, for a tooltip: flow or scenario, version, orderings, how it was sorted, what it's compared with.
   private var details: String {
     var lines: [String] = []
     if let flow = detail.experiment.flow { lines.append("Flow: \(flow)") }
+    if let scenario = detail.experiment.scenario { lines.append("Scenario: \(scenario)") }
     if let label = detail.result?.version?.label { lines.append("Code: \(label)") }
     if let variants = detail.result?.variants, !variants.isEmpty {
       lines.append("Orderings: " + variants.map { "\($0.variant) \($0.ok)/\($0.runs) held" }.joined(separator: ", "))

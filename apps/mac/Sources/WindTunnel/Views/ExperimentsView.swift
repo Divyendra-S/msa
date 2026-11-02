@@ -179,6 +179,7 @@ struct ExperimentDetail: View {
   private var meta: String {
     var parts: [String] = []
     if let flow = experiment.flow { parts.append("Flow \(flow)") }
+    if let scenario = experiment.scenario { parts.append("Scenario \(scenario)") }
     if let users = experiment.users, !users.isEmpty { parts.append("as \(users.joined(separator: ", "))") }
     if let n = experiment.repeatCount { parts.append("repeats \(n)×") }
     if let p = experiment.perturb, p > 0 { parts.append(Fmt.plural(p, "perturbation")) }

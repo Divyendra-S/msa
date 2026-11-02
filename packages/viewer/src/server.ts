@@ -304,7 +304,8 @@ async function experiments(runner: Runner) {
     .map((e) => ({
       id: e.id,
       ...(e.description ? { description: e.description } : {}),
-      flow: e.flow,
+      ...(e.flow ? { flow: e.flow } : {}),
+      ...(e.scenario ? { scenario: e.scenario } : {}),
       ...(e.users ? { users: e.users } : {}),
       repeat: e.repeat,
       file: e.file,

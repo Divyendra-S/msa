@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { listRuns, matchesRequest, parseRequestPattern, type RequestRecord, type RuleResult, type Runner, type StepRecord } from "@windtunnel/core";
+import { listRuns, matchesLogged, parseRequestPattern, type RequestRecord, type RuleResult, type Runner, type StepRecord } from "@windtunnel/core";
 import type { Workspace } from "@windtunnel/mcp";
 import { type MapExperiment, mapView } from "./map.ts";
 
@@ -21,6 +21,8 @@ export interface ReplayView {
 export interface ReplayExperiment {
   id: string;
   description?: string;
+  /** A Swift Mac app's XCTest method: its steps have no screen, only the probe points its code reached. */
+  scenario?: string;
   users: string[];
   pressure: MapExperiment["pressure"];
   /** Its runs on record, oldest first (the last 16). */
@@ -54,6 +56,8 @@ export interface ReplayFrame {
   text?: string;
   /** The screenshot, as an API path. */
   shot?: string;
+  /** A scenario's step (a Swift Mac app): the probe points its code reached, and what the run did there. */
+  points?: string[];
   actions: string[];
   /** What the harness did around the step, in full and in a few words. */
   harness: string[];
@@ -92,7 +96,14 @@ export async function replayView(workspace: Workspace, runner: Runner): Promise<
 
   const experiments: ReplayExperiment[] = [];
   for (const e of map.experiments) {
-    const base = { id: e.id, ...(e.description ? { description: e.description } : {}), users: e.users, pressure: e.pressure, history: (history.get(e.id) ?? []).slice(-HISTORY) };
+    const base = {
+      id: e.id,
+      ...(e.description ? { description: e.description } : {}),
+      ...(e.scenario ? { scenario: e.scenario } : {}),
+      users: e.users,
+      pressure: e.pressure,
+      history: (history.get(e.id) ?? []).slice(-HISTORY),
+    };
     const empty = { lanes: [], columns: [], frames: [], webhooks: [], rules: { broken: [], held: 0 }, changes: [] };
     if (!e.run) {
       experiments.push({ ...base, ...empty });
@@ -125,6 +136,12 @@ export async function replayView(workspace: Workspace, runner: Runner): Promise<
     }
     const shot = (file: string) => `/api/runs/${e.run!.id}/reps/${e.run!.rep}/screens/${file}`;
     const board = lay(detail.steps, requests, shot);
+    // A scenario's step shows its code's probe points where a page's step shows the page.
+    if (e.scenario) {
+      for (const f of board.frames) {
+        f.points = f.requests.map((r) => `${r.path}${r.count > 1 ? ` ×${r.count}` : ""}${r.tags.length ? ` · ${r.tags.join(", ")}` : ""}`);
+      }
+    }
     const t0 = Date.parse(detail.startedAt ?? "");
     const webhooks = Number.isNaN(t0)
       ? []
@@ -222,7 +239,8 @@ function lay(steps: StepRecord[], requests: RequestRecord[], shot: (file: string
         method,
         path,
         count: list.length,
-        statuses: list.map((r) => (r.failure ? null : (r.status ?? null))),
+        // A probe point has no answer to show, only what the harness did there.
+        statuses: method === "POINT" ? [] : list.map((r) => (r.failure ? null : (r.status ?? null))),
         together: list.some((r) => notable.some((o) => o.tab !== r.tab && o.method === r.method && pathOf(o.url) === pathOf(r.url) && overlaps(r, o))),
         tags: unique(notes.map(tag)),
         notes,
@@ -252,7 +270,7 @@ function place(pressure: MapExperiment["pressure"], board: ReturnType<typeof lay
           return [];
         }
       });
-      const hit = (c: number) => touched(c).some((r) => patterns.some((q) => matchesRequest(q, r.method, `http://x${r.path}`)));
+      const hit = (c: number) => touched(c).some((r) => patterns.some((q) => matchesLogged(q, r.method, r.path)));
       at = board.columns.flatMap((_, i) => (hit(i) ? [i] : []));
       if (!at.length) at = board.columns.flatMap((_, i) => (touched(i).length ? [i] : [])).slice(0, 1);
     }

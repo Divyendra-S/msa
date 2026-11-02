@@ -242,9 +242,9 @@ private struct ReplayHero: View {
     }
   }
 
-  /// Some newest runs are older than step screenshots.
+  /// Some newest runs are older than step screenshots (a Swift scenario's steps have none).
   private var stale: Bool {
-    replay.experiments.contains { e in !e.frames.isEmpty && e.frames.allSatisfy { $0.shot == nil } }
+    replay.experiments.contains { e in e.scenario == nil && !e.frames.isEmpty && e.frames.allSatisfy { $0.shot == nil } }
   }
 
   private func summary(ran: Int, broke: [Replay.Experiment]) -> String {
@@ -498,7 +498,7 @@ private struct FrameCell: View {
   private var caption: some View {
     VStack(alignment: .leading, spacing: 3) {
       HStack(spacing: 5) {
-        Text(frame.path ?? "—").font(Theme.mono(10)).foregroundStyle(Theme.faint).lineLimit(1).truncationMode(.middle)
+        Text(frame.path ?? (frame.points == nil ? "—" : "")).font(Theme.mono(10)).foregroundStyle(Theme.faint).lineLimit(1).truncationMode(.middle)
         if let who = frame.as { Text("as \(who)").font(Theme.sans(10)).foregroundStyle(Theme.ghost) }
       }
       ForEach(Array(frame.requests.prefix(frame.requests.count > 2 ? 1 : 2).enumerated()), id: \.offset) { _, r in
@@ -690,7 +690,8 @@ private struct DotGrid: View {
 
 // MARK: - Pages
 
-/// A step's screenshot, small. Runs from before screenshots show what the page said instead.
+/// A step's screenshot, small. Runs from before screenshots show what the page said instead, and
+/// a Swift scenario's step the probe points its code reached.
 private struct ShotView: View {
   let frame: Replay.Frame
   @Environment(AppModel.self) private var model
@@ -707,6 +708,22 @@ private struct ShotView: View {
             .clipped()
         }
         .transition(.opacity)
+      } else if let points = frame.points {
+        VStack(alignment: .leading, spacing: 4) {
+          // The point, then what the run did there under it.
+          ForEach(Array(points.prefix(5).enumerated()), id: \.offset) { _, point in
+            let parts = point.components(separatedBy: " · ")
+            VStack(alignment: .leading, spacing: 1) {
+              Text(parts[0]).font(Theme.mono(9.5)).foregroundStyle(parts.count > 1 ? Theme.text : Theme.dim).lineLimit(1)
+              if parts.count > 1 {
+                Text(parts.dropFirst().joined(separator: " · ")).font(Theme.sans(9)).foregroundStyle(Theme.accent).lineLimit(2)
+              }
+            }
+          }
+          if points.isEmpty { Text("no probe points").font(Theme.sans(9)).foregroundStyle(Theme.ghost) }
+        }
+        .padding(8)
+        .help((["The probe points this step's code reached"] + points).joined(separator: "\n"))
       } else if frame.shot == nil {
         Text(frame.text ?? "")
           .font(Theme.sans(9)).foregroundStyle(Theme.ghost).lineSpacing(1)

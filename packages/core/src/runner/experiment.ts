@@ -3,10 +3,11 @@ import { basename, extname, join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { ConfigError } from "../config.ts";
+import { findScenario, probePoints, swiftFiles } from "../mac/swift.ts";
 import type { Project } from "../project.ts";
 import type { Rule } from "../rules.ts";
 import { LOGIN_FLOW, loadFlow } from "./flows.ts";
-import { DURATION, parseDuration, REQUEST_PATTERN } from "./match.ts";
+import { DURATION, matchesLogged, parseDuration, parseRequestPattern, REQUEST_PATTERN } from "./match.ts";
 
 export const EXPERIMENTS_DIR = "experiments";
 const ID = /^[a-z0-9][a-z0-9-]*$/;
@@ -14,14 +15,21 @@ const ID = /^[a-z0-9][a-z0-9-]*$/;
 const Duration = z
   .union([z.number().int().nonnegative(), z.string().regex(DURATION, 'use a number of ms or e.g. "500ms", "3s", "25h"')])
   .transform(parseDuration);
-const Request = z.string().regex(REQUEST_PATTERN, 'expected "METHOD /path", e.g. "POST /api/orders", or "invoke <command>"');
+const Request = z.string().regex(REQUEST_PATTERN, 'expected "METHOD /path", e.g. "POST /api/orders", "invoke <command>" or "point <name>"');
 const Step = z.string().min(1);
 /** Limits a perturbation to one tab (`alice`, `bob`, `alice#2`); default: every tab. */
 const Tab = z.string().optional();
 /** How many matching requests to affect: the first N, or "all". */
 const Count = z.union([z.number().int().positive(), z.literal("all")]).default(1);
 
-const Perturbation = z.discriminatedUnion("do", [
+/** `point: writer.append` is short for `request: point writer.append`: a Swift app's probe point. */
+function pointAsRequest(value: unknown): unknown {
+  if (value === null || typeof value !== "object" || !("point" in value) || "request" in value) return value;
+  const { point, ...rest } = value as { point: unknown };
+  return typeof point === "string" ? { ...rest, request: `point ${point}` } : value;
+}
+
+const Perturbation = z.preprocess(pointAsRequest, z.discriminatedUnion("do", [
   // Network: applied to matching requests from the browser.
   z.strictObject({ do: z.literal("delay"), request: Request, ms: Duration, step: Step.optional(), tab: Tab, count: Count }),
   z.strictObject({
@@ -36,6 +44,8 @@ const Perturbation = z.discriminatedUnion("do", [
   }),
   z.strictObject({ do: z.literal("lose-response"), request: Request, step: Step.optional(), tab: Tab, count: Count }),
   z.strictObject({ do: z.literal("duplicate"), request: Request, step: Step.optional(), tab: Tab, count: Count }),
+  // Probe points (Swift Mac apps): the task reaching the point is cancelled there, and goes on to find out.
+  z.strictObject({ do: z.literal("cancel"), request: Request, step: Step.optional(), tab: Tab, count: Count }),
   // Sends the same request again with another user's session, after the app answered the first.
   z.strictObject({
     do: z.literal("replay-as"),
@@ -75,15 +85,15 @@ const Perturbation = z.discriminatedUnion("do", [
   }),
   // App state: runs once, before the first tab reaches the step.
   z.strictObject({ do: z.literal("sql"), step: Step, sql: z.string().min(1), tab: Tab }),
-]);
+]));
 
 const RaceOrder = z.union([
   z.enum(["together", "arrival", "reverse", "each"]),
   z.array(z.union([z.string(), z.number().int().positive()])).min(2),
 ]);
 
-const Race = z.strictObject({
-  /** Requests to hold at the barrier. */
+const Race = z.preprocess(pointAsRequest, z.strictObject({
+  /** Requests (or probe points) to hold at the barrier. */
   request: Request,
   step: Step.optional(),
   /** How many requests to gather before releasing (default: the number of tabs, at least 2). */
@@ -96,7 +106,7 @@ const Race = z.strictObject({
   order: RaceOrder.default("together"),
   /** Release whatever has arrived after this long. */
   timeout: Duration.default(2_000),
-});
+}));
 
 const WEBHOOK_SHORTHANDS: Record<string, object> = {
   duplicate: { times: 2 },
@@ -125,7 +135,13 @@ const Webhooks = z.preprocess(
 export const ExperimentSchema = z.strictObject({
   id: z.string().regex(ID).optional(),
   description: z.string().optional(),
-  flow: z.string(),
+  /** The flow that drives the app (`.windtunnel/flows/<name>.ts`). */
+  flow: z.string().optional(),
+  /**
+   * For a Swift Mac app (app.kind: mac): the XCTest method that drives its code,
+   * `RecorderScenarios/testStopWhileWriting`, instead of a flow.
+   */
+  scenario: z.string().regex(/^[A-Za-z_][\w.]*\/[A-Za-z_]\w*$/, "Class/testMethod (or Module.Class/testMethod)").optional(),
   params: z.record(z.string(), z.unknown()).default({}),
   /** One tab per entry, run at the same time. Repeating a user opens another tab in the same session. */
   users: z.array(z.string()).min(1).max(6).optional(),
@@ -138,7 +154,7 @@ export const ExperimentSchema = z.strictObject({
   repeat: z.number().int().min(1).max(100).default(3),
   /** Limit for one run of the flow. */
   timeout: Duration.default(60_000),
-});
+}).refine((e) => (e.flow === undefined) !== (e.scenario === undefined), { message: "an experiment has a flow, or (for a Swift Mac app) a scenario" });
 
 export type Experiment = z.output<typeof ExperimentSchema> & { id: string; file?: string };
 export type Perturbation = z.output<typeof Perturbation>;
@@ -164,6 +180,8 @@ export const PHONE_PERTURBATIONS = new Set(["kill-app", "background", "rotate", 
 export const IOS_PERTURBATIONS = new Set(["push"]);
 /** Perturbations that need a browser: a page to reload or open twice, cookies, a fake clock, another user's session. */
 export const BROWSER_PERTURBATIONS = new Set(["refresh", "second-tab", "expire-session", "advance-clock", "replay-as"]);
+/** What a probe point can be made to do (Swift Mac apps): wait, throw, be cancelled. */
+export const POINT_PERTURBATIONS = new Set(["delay", "fail", "cancel"]);
 
 export function parseExperiment(text: string, source: string, fallbackId: string): Experiment {
   let raw: unknown;
@@ -256,8 +274,15 @@ export async function checkExperiment(experiment: Experiment, project: Project, 
   }
   const { kind } = project.config.app;
   const phone = kind === "android" || kind === "ios";
+  const mac = kind === "mac";
+  const isPoint = (request: string) => /^point\s/i.test(request.trim());
   for (const p of experiment.perturb) {
-    if (phone && BROWSER_PERTURBATIONS.has(p.do)) {
+    if (mac) {
+      if (!POINT_PERTURBATIONS.has(p.do)) errors.push(`${p.do}: not for Mac apps (their pressures are delay, fail and cancel at a probe point)`);
+      else if ("request" in p && !isPoint(p.request)) errors.push(`${p.do} ${p.request}: a Mac app's calls are probe points (point: <name>)`);
+    } else if (p.do === "cancel" || ("request" in p && isPoint(p.request))) {
+      errors.push(`${p.do}${"request" in p ? ` ${p.request}` : ""}: probe points are for Swift Mac apps (app.kind: mac)`);
+    } else if (phone && BROWSER_PERTURBATIONS.has(p.do)) {
       errors.push(`${p.do}: not for phone apps (${p.do === "refresh" ? "use kill-app or background" : "it needs a browser"})`);
     } else if (!phone && PHONE_PERTURBATIONS.has(p.do)) {
       errors.push(`${p.do}: only for phone apps (app.kind: android or ios)`);
@@ -265,7 +290,12 @@ export async function checkExperiment(experiment: Experiment, project: Project, 
       errors.push(`${p.do}: only for iOS apps so far (app.kind: ios)`);
     }
   }
+  if (experiment.race && mac !== isPoint(experiment.race.request)) {
+    errors.push(mac ? `race on ${experiment.race.request}: a Mac app's races are on probe points (point: <name>)` : `race on ${experiment.race.request}: probe points are for Swift Mac apps (app.kind: mac)`);
+  }
   if (phone && experiment.clock) errors.push("clock: phone apps run on the phone's own clock");
+  if (mac && experiment.clock) errors.push("clock: a Mac app's scenario runs on the Mac's own clock");
+  if (mac && experiment.users) errors.push("users: a Mac app's scenario is its own client; it has no users");
   for (const p of experiment.perturb) {
     if (p.do !== "replay-as") continue;
     if (!project.config.users[p.user]) {
@@ -276,24 +306,31 @@ export async function checkExperiment(experiment: Experiment, project: Project, 
   }
 
   let steps: string[] = [];
-  try {
-    const loaded = await loadFlow(project.stateDir, experiment.flow);
-    steps = loaded.steps;
-    const login = await loadFlow(project.stateDir, LOGIN_FLOW).catch(() => undefined);
-    for (const f of [loaded, ...(login ? [login] : [])]) {
-      const surface = f.flow.surface ?? "page";
-      if (phone && surface !== "phone") {
-        errors.push(`flow "${f.name}" drives a page; a phone app's flows are \`export default phoneFlow(async ({ ui, step }) => …)\``);
-      } else if (!phone && surface === "phone") {
-        errors.push(`flow "${f.name}" is a phoneFlow, but app.kind is ${project.config.app.kind}`);
+  if (mac) {
+    if (experiment.flow !== undefined) errors.push("flow: a Swift Mac app's experiments run a scenario (scenario: Class/testMethod), not a flow");
+    else steps = await checkScenario(experiment, project, errors, warnings);
+  } else if (experiment.scenario !== undefined) {
+    errors.push(`scenario: only Swift Mac apps (app.kind: mac) run XCTest scenarios; this app's experiments have a flow`);
+  } else {
+    try {
+      const loaded = await loadFlow(project.stateDir, experiment.flow!);
+      steps = loaded.steps;
+      const login = await loadFlow(project.stateDir, LOGIN_FLOW).catch(() => undefined);
+      for (const f of [loaded, ...(login ? [login] : [])]) {
+        const surface = f.flow.surface ?? "page";
+        if (phone && surface !== "phone") {
+          errors.push(`flow "${f.name}" drives a page; a phone app's flows are \`export default phoneFlow(async ({ ui, step }) => …)\``);
+        } else if (!phone && surface === "phone") {
+          errors.push(`flow "${f.name}" is a phoneFlow, but app.kind is ${project.config.app.kind}`);
+        }
       }
+      if (login) steps.push(...login.steps);
+      else if (experiment.perturb.some((p) => p.do === "replay-as")) {
+        errors.push("replay-as: add .windtunnel/flows/login.ts to log the other user in");
+      }
+    } catch (err) {
+      errors.push((err as Error).message);
     }
-    if (login) steps.push(...login.steps);
-    else if (experiment.perturb.some((p) => p.do === "replay-as")) {
-      errors.push("replay-as: add .windtunnel/flows/login.ts to log the other user in");
-    }
-  } catch (err) {
-    errors.push((err as Error).message);
   }
 
   const referenced = [
@@ -302,11 +339,12 @@ export async function checkExperiment(experiment: Experiment, project: Project, 
   ];
   for (const step of new Set(referenced)) {
     if (steps.length > 0 && !steps.includes(step) && step !== "login") {
-      errors.push(`step "${step}" is not in flow "${experiment.flow}" (steps: ${steps.join(", ")})`);
+      errors.push(`step "${step}" is not in ${experiment.scenario ? `scenario ${experiment.scenario}` : `flow "${experiment.flow}"`} (steps: ${steps.join(", ")})`);
     }
   }
 
-  const opened = tabLabels(users);
+  // A Mac app's scenario is one client, its code: the `app` tab.
+  const opened = mac ? [{ label: "app", user: "app" }] : tabLabels(users);
   const labels = opened.map((t) => t.label);
   // A second-tab perturbation opens `<user>#<n>` next to each tab it applies to.
   const forks = new Set<string>();
@@ -341,4 +379,28 @@ export async function checkExperiment(experiment: Experiment, project: Project, 
     errors.push("webhooks: set mockPay in windtunnel.config.yaml to control payment webhooks");
   }
   return { errors, warnings };
+}
+
+/**
+ * Finds a Mac app's scenario in its package and returns its steps; probe points the experiment
+ * names that the code doesn't have are warnings (a point may be in code the reader misses).
+ */
+async function checkScenario(experiment: Experiment, project: Project, errors: string[], warnings: string[]): Promise<string[]> {
+  const dir = join(project.root, project.config.mac?.dir ?? ".");
+  const files = await swiftFiles(dir);
+  const scenario = await findScenario(dir, experiment.scenario!, files);
+  if (!scenario) {
+    errors.push(`scenario ${experiment.scenario}: no such XCTest method in ${dir}/Tests (Class/testMethod)`);
+    return [];
+  }
+  const points = await probePoints(dir, files);
+  const requests = [...experiment.perturb.flatMap((p) => ("request" in p ? [p.request] : [])), ...(experiment.race ? [experiment.race.request] : [])];
+  for (const request of new Set(requests.filter((r) => /^point\s/i.test(r.trim())))) {
+    const pattern = parseRequestPattern(request);
+    if (!points.some((p) => matchesLogged(pattern, "POINT", p.name))) {
+      const known = [...new Set(points.map((p) => p.name))].join(", ") || "none";
+      warnings.push(`${request}: no Probe.point in the code has that name (points: ${known})`);
+    }
+  }
+  return scenario.steps;
 }

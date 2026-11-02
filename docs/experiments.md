@@ -118,6 +118,10 @@ A Tauri app's command calls are `"invoke <command>"`: `invoke save_note`, `invok
 (`*` matches any part of the name), `invoke plugin:event|emit`. They show in the request log
 and in `windtunnel_requests` as method `INVOKE`, path `save_note`.
 
+A Swift Mac app's probe points are `"point <name>"`: `point frame.compress`, `point writer.*`.
+`point: frame.compress` is short for `request: point frame.compress`, in a perturbation or a
+race. They show as method `POINT`, path `frame.compress`.
+
 ### Network perturbations
 
 Applied to requests from the browser that match `request` (optionally only during `step` or
@@ -167,6 +171,23 @@ step has finished.
 | `rotate` (`when`) | The phone turns to landscape (the screen is recreated), and back to portrait after the step |
 | `offline` | Offline for the step (airplane mode on Android; a simulator has none, so only the proxy cuts it off); its requests fail without reaching the server. Online again after it (add `repeat` for the user's retry) |
 | `push` (`when`, `payload`) | iOS: a push notification, delivered with `simctl push` as Apple's service would. `payload` is what the app gets (`aps` and its own keys). A silent one (`content-available` alone) didn't reach a running app on the simulator; one with an `alert` did, to its foreground handler |
+
+### Probe points (Swift Mac apps)
+
+A Mac app's experiment runs a `scenario` (an XCTest method) instead of a flow, and its pressure
+goes on the probe points its code reaches (`Probe.point("…")`), during `step` if set, the first
+`count` that match (default 1, or `all`):
+
+| `do` | What happens at the point |
+|---|---|
+| `delay` (`ms`) | The task waits there, then goes on |
+| `fail` (`after`) | The point throws `ProbeError`, as the call after it could have |
+| `cancel` | The task that reached it is cancelled and goes on: it finds out at its next cancellation check, as if the user had cancelled it right then |
+
+A race holds matching points at the barrier: `race: { point: export.encode, order: each }`.
+Released one at a time, the next goes once the previous point's section has finished (`try
+await Probe.point("…") { … }`); a bare point counts as finished as soon as it goes on. Points
+come from one process, so orders are arrival numbers (`[2, 1]`).
 
 ### Ordered races
 
@@ -311,6 +332,46 @@ The taps and the screen go through WebDriverAgent, the XCTest server Appium's iO
 built once (`npm i -D appium-webdriveragent`) and run on each simulator with `xcodebuild
 test-without-building`. `zoo/shop-ios` is the example: the shop's own bugs caught from the
 iPhone, a link opened twice, and an order lost from the phone's history by a push.
+
+### Swift Mac apps
+
+With `app.kind: mac` the app's code is a Swift package (`mac.dir`, default the config's folder)
+and there is no server: each run is one XCTest method, the experiment's `scenario`, started with
+`xctest` in its own process, in its own empty `$DATA_DIR` (also `$HOME`, and the home folder
+Foundation sees). Its test bundle is built once per version of the code, by default with `swift
+build --build-tests --sanitize=thread` into `.build/windtunnel-thread`.
+
+```swift
+// Tests/RecorderScenarios/RecorderScenarios.swift
+func testRecordAndStop() async throws {
+    let recorder = Recorder(directory: Probe.dataDirectory)
+    try await Probe.step("start") { try await recorder.start(take: "take-1") }
+    …
+    try await Probe.step("stop") { try await Task { try await recorder.stop() }.value }
+}
+```
+
+`Probe.step` marks the scenario's steps: Replay shows a column per step, with the probe points
+its code reached and what the run did to them, and perturbations can aim at one (`step: stop`).
+A scenario with no steps is one step, named after its method. An XCTest failure, a thrown error
+or a crash is the run's error, in the step it happened in; a rule that breaks still makes the
+run broken.
+
+Rules: `check:` commands on what the run left in `$DATA_DIR`, SQL when the app keeps a SQLite file
+(`db.kind: sqlite`), and, with ThreadSanitizer on (`mac.sanitizer: thread`, the default):
+
+```yaml
+no-data-races:
+  description: ThreadSanitizer reports no data race while the scenario runs.
+  sanitizer: thread
+```
+
+It breaks on every race ThreadSanitizer reports during the run, one row per race with its
+summary and both stacks (`access`/`stack`, `previous`/`previous_stack`). Built without it
+(`mac.sanitizer: none`, or `WINDTUNNEL_SANITIZER=none` for one shell), the rule is left out and
+the run says so. On macOS 26.4 and later, ThreadSanitizer needs Xcode 26.4 or newer: older
+toolchains build it, but the program crashes as it starts (Apple's known issue 171762808).
+`windtunnel doctor` tries it. `zoo/recorder` is the example.
 
 ### Check rules: files, media, anything SQL can't read
 

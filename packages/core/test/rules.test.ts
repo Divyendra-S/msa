@@ -45,9 +45,9 @@ for (const r of facts.requests) if (r.failure) console.log(JSON.stringify({ requ
 
   after(() => rm(dir, { recursive: true, force: true }));
 
-  it("a rule has either sql or check", () => {
+  it("a rule has one of sql, check or sanitizer", () => {
     assert.throws(() => parseRules("both:\n  sql: SELECT 1\n  check: node x.js\n"), ConfigError);
-    assert.throws(() => parseRules("none:\n  description: nothing to run\n"), /either sql or check/);
+    assert.throws(() => parseRules("none:\n  description: nothing to run\n"), /one of sql, check or sanitizer/);
     assert.deepEqual(parseRules("files:\n  check: node checks/files.mjs\n"), [{ id: "files", check: "node checks/files.mjs", expect: "empty" }]);
   });
 

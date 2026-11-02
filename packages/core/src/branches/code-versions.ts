@@ -1,5 +1,5 @@
 import { copyFile, cp, mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
-import { join, posix, sep } from "node:path";
+import { dirname, join, posix, sep } from "node:path";
 import { findAndroidSdk } from "../android/sdk.ts";
 import { sh } from "../exec.ts";
 import { addWorktree, commitPatch, git, removeWorktree, resolveRef, snapshotWorkingTree, withoutPaths } from "../git.ts";
@@ -43,6 +43,7 @@ export class CodeVersions {
   private readonly project: Project;
   private readonly inflight = new Map<string, Promise<PreparedVersion>>();
   private readonly phoneApps = new Map<string, Promise<string>>();
+  private readonly macBuilds = new Map<string, Promise<string>>();
 
   constructor(project: Project) {
     this.project = project;
@@ -144,6 +145,48 @@ export class CodeVersions {
       else await copyFile(built, `${out}.tmp`);
       await rename(`${out}.tmp`, out);
       return out;
+    });
+  }
+
+  /**
+   * A Swift Mac app's test bundle for a version (app.kind: mac), built once per version and
+   * sanitizer: by default into its own `.build/windtunnel-<sanitizer>`, so builds with and
+   * without ThreadSanitizer don't overwrite each other.
+   */
+  macTests(prepared: PreparedVersion, sanitizer: "thread" | "none"): Promise<string> {
+    const key = `${prepared.version.id}:${sanitizer}`;
+    let pending = this.macBuilds.get(key);
+    if (!pending) {
+      pending = this.buildMacTests(prepared, sanitizer);
+      this.macBuilds.set(key, pending);
+      pending.catch(() => this.macBuilds.delete(key));
+    }
+    return pending;
+  }
+
+  private async buildMacTests(prepared: PreparedVersion, sanitizer: "thread" | "none"): Promise<string> {
+    const mac = this.project.config.mac!;
+    const dir = join(prepared.worktree, this.project.appSubdir, mac.dir);
+    const scratch = `.build/windtunnel-${sanitizer}`;
+    const command = mac.build ?? `swift build --build-tests --scratch-path ${scratch}${sanitizer === "thread" ? " --sanitize=thread" : ""}`;
+    const marker = join(dir, ".build", `windtunnel-built-${sanitizer}`);
+    const bundle = async () => {
+      if (mac.tests) return join(dir, mac.tests);
+      const products = join(dir, mac.build ? ".build" : scratch, "debug");
+      const found = (await readdir(products).catch(() => [])).filter((f) => f.endsWith(".xctest"));
+      if (found.length !== 1) {
+        throw new Error(`expected one test bundle in ${products}, found ${found.length ? found.join(", ") : "none"}: set mac.tests`);
+      }
+      return join(products, found[0]!);
+    };
+    if (await exists(marker)) return bundle();
+    return withLock(`${dir}.mac-${sanitizer}.lock`, async () => {
+      if (!(await exists(marker))) {
+        await sh(command, { cwd: dir, logFile: this.logFile(prepared.version.id), env: { CI: "1" } });
+        await mkdir(dirname(marker), { recursive: true });
+        await writeFile(marker, command);
+      }
+      return bundle();
     });
   }
 

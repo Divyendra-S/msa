@@ -1,0 +1,5 @@
+description: The task saving the take is cancelled as it starts to finish it (the window closed while Stop was saving).
+scenario: RecorderScenarios/testRecordAndStop
+perturb:
+  - do: cancel
+    point: writer.finish

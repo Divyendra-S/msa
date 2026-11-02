@@ -1,0 +1,8 @@
+id: 03-cancel-while-saving
+title: Cancel while saving leaves the take open
+summary: Finishing a take awaits the disk in the task that asked for it; when that task is cancelled, the wait throws, and the take is never indexed, closed or moved into place.
+experiment: cancel-while-saving
+perturbation: Cancel the task that pressed Stop as it starts to finish the take
+breaks: [no-open-takes]
+handler: Sources/Recorder/TakeWriter.swift
+fix: Finish in a task of its own (`Task { try await save() }.value`), so cancelling the caller can't stop a save halfway.

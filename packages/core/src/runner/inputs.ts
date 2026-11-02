@@ -20,9 +20,13 @@ export async function experimentInputs(project: Project, experiment: Experiment,
   return hash.digest("hex").slice(0, 16);
 }
 
-/** The experiment's flow and the login flow, with the local files they import. */
+/**
+ * The experiment's flow and the login flow, with the local files they import. A Mac app's
+ * scenario is none: it is part of the code version.
+ */
 export async function flowFiles(project: Project, experiment: Experiment): Promise<string[]> {
   const files = new Set<string>();
+  if (experiment.flow === undefined) return [];
   for (const name of [experiment.flow, LOGIN_FLOW]) {
     const file = await findFlowFile(project.stateDir, name);
     if (file) await collect(file, files);

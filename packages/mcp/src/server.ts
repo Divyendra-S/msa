@@ -62,11 +62,12 @@ export function createServer(workspace: Workspace): McpServer {
       const map = await buildAppMap(runner.project, { schema });
       const version = await runner.branches.versions.resolve({});
       let n = 0;
-      const live = fresh ? await crawl(runner, { onProgress: (m) => progress(++n, undefined, m) }) : await readCrawl(runner.project, version);
+      // A Mac app has no pages to crawl.
+      const live = map.mac ? undefined : fresh ? await crawl(runner, { onProgress: (m) => progress(++n, undefined, m) }) : await readCrawl(runner.project, version);
       return [
         formatAppMap(map, { focus }),
-        schema ? "" : "(database schema unavailable: run windtunnel_validate to see why)",
-        live ? formatCrawl(live, 4_000, focus) : "(no live crawl yet: crawl=true runs the app and adds real control names and the free sweep)",
+        schema || !runner.project.config.db ? "" : "(database schema unavailable: run windtunnel_validate to see why)",
+        map.mac ? "" : live ? formatCrawl(live, 4_000, focus) : "(no live crawl yet: crawl=true runs the app and adds real control names and the free sweep)",
       ].filter(Boolean).join("\n\n");
     }),
   );

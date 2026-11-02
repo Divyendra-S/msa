@@ -1,0 +1,2 @@
+description: Record ten frames from the capture queue and press Stop while they are still coming in. No pressure; with ThreadSanitizer on, any data race between the capture queue and the recorder breaks no-data-races.
+scenario: RecorderScenarios/testRecordAndStop

@@ -6,6 +6,8 @@
 //   pnpm zoo:verify --app shop-android   the shop's Android app (zoo/shop-android) on emulators: its
 //                                        own cases, and shop cases it names with `from:`
 //   pnpm zoo:verify --app shop-ios       the shop's iOS app (zoo/shop-ios) on simulators, the same way
+//   pnpm zoo:verify --app recorder       the Swift recorder (zoo/recorder): its XCTest scenarios, built with
+//                                        ThreadSanitizer when it can run here (else its case is skipped)
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -17,7 +19,9 @@ import {
   loadRules,
   parseRules,
   Runner,
+  sanitizerOf,
   stopOnSignals,
+  threadSanitizerProblem,
 } from "@windtunnel/core";
 import { parse as parseYaml } from "yaml";
 
@@ -31,6 +35,8 @@ interface Case {
   variant?: string;
   breaks: string[];
   handler?: string;
+  /** Only ThreadSanitizer catches it (a Swift app's `sanitizer: thread` rule). */
+  sanitizer?: "thread";
   patch: string;
 }
 
@@ -85,14 +91,25 @@ async function main(): Promise<number> {
   });
   const repeat = Number(values.repeat);
   const app = values.app;
-  if (app !== "shop" && app !== "notes" && app !== "shop-android" && app !== "shop-ios") {
-    throw new Error(`--app must be shop, notes, shop-android or shop-ios, not ${app}`);
+  if (app !== "shop" && app !== "notes" && app !== "shop-android" && app !== "shop-ios" && app !== "recorder") {
+    throw new Error(`--app must be shop, notes, shop-android, shop-ios or recorder, not ${app}`);
   }
   const appDir = join(import.meta.dirname, "..", app);
   const casesDir = app === "shop" ? import.meta.dirname : join(appDir, "cases");
-  const cases = await loadCases(casesDir, values.case);
+  let cases = await loadCases(casesDir, values.case);
 
   const runner = await Runner.open(appDir);
+  // A Mac app's ThreadSanitizer case needs ThreadSanitizer to run on this Mac; without it, the rest run without it.
+  const mac = runner.project.config.mac;
+  if (mac && sanitizerOf(mac) === "thread") {
+    const problem = await threadSanitizerProblem();
+    if (problem) {
+      process.env.WINDTUNNEL_SANITIZER = "none";
+      const skipped = cases.filter((c) => c.sanitizer === "thread").map((c) => c.id);
+      cases = cases.filter((c) => c.sanitizer !== "thread");
+      console.log(`ThreadSanitizer can't run here: ${problem}.\nRunning without it${skipped.length ? `; skipped ${skipped.join(", ")}` : ""}.\n`);
+    }
+  }
   stopOnSignals(() => runner.close());
   try {
     // The iOS app's rules are the shop's plus one on the phone's data: the shop's must not drift.

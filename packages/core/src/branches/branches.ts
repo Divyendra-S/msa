@@ -196,7 +196,28 @@ export class Branches {
     }
   }
 
+  /**
+   * A run with no server (a Mac app's scenario): one of the `parallel` slots, a new data folder
+   * and a copy of the version's seed, for as long as `fn` runs.
+   */
+  async isolated<T>(spec: CodeVersionSpec | CodeVersion, options: { keepDatabase?: boolean }, fn: (state: SeedCopy) => Promise<T>): Promise<T> {
+    const release = await this.slots.acquire();
+    try {
+      const { version } = await this.prepare(spec);
+      const state = await this.freshState(version.id, newBranchId(), !!options.keepDatabase);
+      try {
+        return await fn({ database: state.database, dataDir: state.dataDir, env: this.stateEnv(state.dataDir, state.database) });
+      } finally {
+        await state.drop().catch(() => undefined);
+      }
+    } finally {
+      release();
+    }
+  }
+
   async create(spec: CodeVersionSpec | CodeVersion = {}, options: CreateBranchOptions = {}): Promise<Branch> {
+    const start = this.project.config.app.start;
+    if (!start) throw new Error(`app.kind ${this.project.config.app.kind} has no server to start`);
     const release = await this.slots.acquire();
     // Undo steps, run in reverse by teardown() on failure or when the branch stops.
     const cleanup: (() => unknown)[] = [release];
@@ -275,7 +296,7 @@ export class Branches {
       for (const [key, value] of Object.entries(this.project.config.app.env)) env[key] = expandVars(value, scope);
 
       const appLog = join(logDir, "app.log");
-      service = await Service.start(expandVars(this.project.config.app.start, scope), {
+      service = await Service.start(expandVars(start, scope), {
         cwd: prepared.appDir,
         env,
         logFile: appLog,

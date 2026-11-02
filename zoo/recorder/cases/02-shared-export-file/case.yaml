@@ -1,0 +1,8 @@
+id: 02-shared-export-file
+title: Two exports share one scratch file
+summary: Every export hands its frames to the encoder through the same export.scratch file, so with two exports at once one encodes the other's frame (the wrong size) into its file.
+experiment: two-exports-at-once
+perturbation: Hold both exports as they hand their first frame to the encoder, then release them in every order
+breaks: [exports-match-their-take]
+handler: Sources/Recorder/Exporter.swift
+fix: Give each export its own scratch file (next to its destination).

@@ -1,0 +1,17 @@
+# What must hold after every run, whatever the pressure. The check commands read the run's
+# folder ($DATA_DIR) and print one JSON line per take that breaks the rule.
+takes-are-whole:
+  description: Every take and export opens - its frames, then the index that counts them, and nothing after.
+  check: node checks/takes.mjs whole
+
+no-open-takes:
+  description: No take is left half-written (a .partial file) when the scenario is over.
+  check: node checks/takes.mjs open
+
+exports-match-their-take:
+  description: Every export has its take's frames, converted at its preset.
+  check: node checks/takes.mjs exports
+
+no-data-races:
+  description: ThreadSanitizer reports no data race while the scenario runs.
+  sanitizer: thread

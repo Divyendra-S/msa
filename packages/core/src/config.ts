@@ -4,7 +4,7 @@ import { z } from "zod";
 
 export const CONFIG_FILE = "windtunnel.config.yaml";
 
-/** What kind of app this is. `web`, `tauri`, `android` and `ios` run today; `mac` is planned (platforms-plan.md). */
+/** What kind of app this is: a web app, a Tauri app, a phone app, or a Swift Mac app's code (platforms-plan.md). */
 export const APP_KINDS = ["web", "tauri", "android", "ios", "mac"] as const;
 export type AppKind = (typeof APP_KINDS)[number];
 
@@ -21,7 +21,8 @@ const AppSchema = z.object({
   /** Installs dependencies in a fresh worktree. Detected from the lockfile when omitted. */
   install: z.string().optional(),
   build: z.string().optional(),
-  start: z.string(),
+  /** Starts the server. A Swift Mac app (kind mac) has none: its scenarios run its code. */
+  start: z.string().optional(),
   baseUrl: z.string().default("http://127.0.0.1:$PORT"),
   /** Path polled after start until it answers with a status below 500. */
   ready: z.string().default("/"),
@@ -33,10 +34,14 @@ const AppSchema = z.object({
   /**
    * Point $HOME at the run's own data folder ($DATA_DIR), for apps that keep files under the
    * user's home (`~/Library/Application Support/<id>`). Every run starts with it empty.
-   * Default: on for Tauri apps, off for web apps.
+   * Default: on for Tauri and Mac apps, off for web apps.
    */
   isolateHome: z.boolean().optional(),
-}).transform((app) => ({ ...app, isolateHome: app.isolateHome ?? app.kind === "tauri" }));
+})
+  .superRefine((app, ctx) => {
+    if (app.kind !== "mac" && !app.start) ctx.addIssue({ code: "custom", path: ["start"], message: "the command that starts the app" });
+  })
+  .transform((app) => ({ ...app, isolateHome: app.isolateHome ?? (app.kind === "tauri" || app.kind === "mac") }));
 
 const PostgresSchema = z.object({
   kind: z.literal("postgres"),
@@ -120,6 +125,29 @@ const IosSchema = z.object({
   devices: z.number().int().min(1).max(4).default(2),
 });
 
+/** A Swift Mac app's code (app.kind: mac), driven by its own XCTest scenarios. */
+const MacSchema = z.object({
+  /** The Swift package's folder, relative to this file. */
+  dir: z
+    .string()
+    .default(".")
+    .refine((d) => !d.startsWith("/"), "a path relative to windtunnel.config.yaml"),
+  /**
+   * `thread`: build with ThreadSanitizer, and a `sanitizer: thread` rule breaks on any data race
+   * it reports. `none`: build without it. $WINDTUNNEL_SANITIZER overrides this.
+   */
+  sanitizer: z.enum(["thread", "none"]).default("thread"),
+  /**
+   * Builds the package and its tests, in `dir` of each code version. Default: `swift build
+   * --build-tests` into `.build/windtunnel-<sanitizer>`, with ThreadSanitizer when it is on.
+   */
+  build: z.string().optional(),
+  /** The test bundle the build leaves, relative to `dir` (default: the one the default build makes). */
+  tests: z.string().optional(),
+  /** Environment variables the scenarios run with (DATA_DIR and HOME are the run's own folder). */
+  env: z.record(z.string(), z.string()).default({}),
+});
+
 const UserSchema = z.object({ email: z.string(), password: z.string() });
 
 const CrawlSchema = z.object({
@@ -169,6 +197,7 @@ export const ConfigSchema = z.object({
   app: AppSchema,
   android: AndroidSchema.optional(),
   ios: IosSchema.optional(),
+  mac: MacSchema.optional(),
   /** Optional: an app without a database is checked by `check:` rules and what users saw. */
   db: DbSchema.optional(),
   mockPay: MockPaySchema.optional(),
@@ -183,6 +212,7 @@ export const ConfigSchema = z.object({
 export type WindtunnelConfig = z.infer<typeof ConfigSchema>;
 export type AndroidConfig = z.infer<typeof AndroidSchema>;
 export type IosConfig = z.infer<typeof IosSchema>;
+export type MacConfig = z.infer<typeof MacSchema>;
 
 export class ConfigError extends Error {
   override name = "ConfigError";
@@ -210,13 +240,21 @@ export function parseConfig(text: string, source = CONFIG_FILE): WindtunnelConfi
     const issues = result.error.issues.map((i) => `  ${i.path.join(".") || "(root)"}: ${i.message}`);
     throw new ConfigError(`${source}: invalid config\n${issues.join("\n")}`);
   }
-  const { app, android, ios } = result.data;
+  const { app, android, ios, mac } = result.data;
   if (app.kind === "android" && !android) {
     throw new ConfigError(`${source}: app.kind android needs an \`android:\` section (at least \`package:\`, the application id)`);
   }
   if (android && app.kind !== "android") throw new ConfigError(`${source}: \`android:\` is for app.kind android`);
   if (app.kind === "ios" && !ios) throw new ConfigError(`${source}: app.kind ios needs an \`ios:\` section (at least \`bundleId:\`)`);
   if (ios && app.kind !== "ios") throw new ConfigError(`${source}: \`ios:\` is for app.kind ios`);
+  if (mac && app.kind !== "mac") throw new ConfigError(`${source}: \`mac:\` is for app.kind mac`);
+  if (app.kind === "mac") {
+    if (app.start) throw new ConfigError(`${source}: app.start: a Mac app's scenarios run its code; there is no server to start`);
+    if (result.data.mockPay) throw new ConfigError(`${source}: mockPay: a Mac app has no server for webhooks`);
+    if (result.data.db?.kind === "postgres") throw new ConfigError(`${source}: db: a Mac app's database is a SQLite file (db.kind: sqlite)`);
+    // Defaults: a Swift package in the config's folder.
+    return { ...result.data, mac: mac ?? MacSchema.parse({}) };
+  }
   return result.data;
 }
 

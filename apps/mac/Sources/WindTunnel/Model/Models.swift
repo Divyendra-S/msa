@@ -66,11 +66,13 @@ nonisolated struct Experiment: Decodable, Hashable, Sendable {
   let id: String
   let description: String?
   let flow: String?
+  /// A Swift Mac app's XCTest method, in place of a flow.
+  let scenario: String?
   let repeatCount: Int?
   let file: String?
 
   enum CodingKeys: String, CodingKey {
-    case id, description, flow, file
+    case id, description, flow, scenario, file
     case repeatCount = "repeat"
   }
 }
@@ -85,6 +87,8 @@ nonisolated struct ExperimentEntry: Decodable, Identifiable, Hashable, Sendable 
   let id: String
   let description: String?
   let flow: String?
+  /// A Swift Mac app's XCTest method, in place of a flow.
+  let scenario: String?
   let users: [String]?
   let repeatCount: Int?
   let file: String
@@ -92,7 +96,7 @@ nonisolated struct ExperimentEntry: Decodable, Identifiable, Hashable, Sendable 
   let last: Last?
 
   enum CodingKeys: String, CodingKey {
-    case id, description, flow, users, file, perturb, last
+    case id, description, flow, scenario, users, file, perturb, last
     case repeatCount = "repeat"
   }
 }
@@ -683,6 +687,8 @@ nonisolated struct Replay: Decodable, Sendable {
     let path: String?
     let text: String?
     let shot: String?
+    /// A Swift scenario's step: the probe points its code reached, and what the run did there.
+    let points: [String]?
     let actions: [String]
     let harness: [String]
     let tags: [String]
@@ -709,6 +715,8 @@ nonisolated struct Replay: Decodable, Sendable {
   struct Experiment: Decodable, Hashable, Identifiable, Sendable {
     let id: String
     let description: String?
+    /// A Swift Mac app's XCTest method, run in place of a flow.
+    let scenario: String?
     let users: [String]
     let pressure: [AppMap.Pressure]
     let history: [Past]

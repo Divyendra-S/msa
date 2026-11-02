@@ -1,0 +1,13 @@
+--- a/zoo/recorder/Sources/Recorder/Frame.swift
++++ b/zoo/recorder/Sources/Recorder/Frame.swift
+@@ -25,8 +25,9 @@
+ 
+     public init() {}
+ 
++    /// Only the capture queue calls this, one frame at a time, so it skips the lock.
+     func didCapture() {
+-        lock.withLock { captured += 1 }
++        captured += 1
+     }
+ 
+     func didWrite() {

@@ -1,0 +1,13 @@
+--- a/zoo/recorder/Sources/Recorder/Exporter.swift
++++ b/zoo/recorder/Sources/Recorder/Exporter.swift
+@@ -31,8 +31,8 @@
+             partial: destination.appendingPathExtension("partial"),
+             header: " source=\(take.lastPathComponent) preset=\(preset.rawValue)"
+         )
+-        // The encoder reads each frame from a file, as an external one does: this export's own.
+-        let scratch = destination.appendingPathExtension("scratch")
++        // The encoder reads each frame from a file, as an external one does.
++        let scratch = directory.appendingPathComponent("export.scratch")
+         defer { try? FileManager.default.removeItem(at: scratch) }
+         for frame in frames {
+             try preset.convert(frame.pixels).write(to: scratch)

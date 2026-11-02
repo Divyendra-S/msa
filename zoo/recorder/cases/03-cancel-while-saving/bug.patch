@@ -1,0 +1,15 @@
+--- a/zoo/recorder/Sources/Recorder/TakeWriter.swift
++++ b/zoo/recorder/Sources/Recorder/TakeWriter.swift
+@@ -44,10 +44,9 @@
+         count += 1
+     }
+ 
+-    /// Writes the index and closes the take. A take without its index can't be opened, so this
+-    /// runs to the end even when the task that asked for it is cancelled.
++    /// Writes the index and closes the take.
+     func finish() async throws {
+-        try await Task { try await self.save() }.value
++        try await save()
+     }
+ 
+     private func save() async throws {

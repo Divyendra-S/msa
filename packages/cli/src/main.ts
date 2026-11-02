@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import {
   Branches,
   browserStatus,
@@ -16,6 +16,10 @@ import {
   findAppium,
   hasAppiumDriver,
   findWebDriverAgentSource,
+  type MacConfig,
+  probePoints,
+  sanitizerOf,
+  threadSanitizerProblem,
   createSimulators,
   iosRuntimes,
   stopSimulators,
@@ -131,13 +135,15 @@ Commands
                       database changes, rules, usage; Run hunt (Muse Code) and Open in Claude Code
   mcp                 MCP server on stdin/stdout for coding agents (Claude Code, Codex, Muse Code)
   skills --out <dir>  Copy the agent skills (init, hunt, prove, test) into <dir>, e.g. .agents/skills
-  doctor              Check Node, git, the config file and the database (and the Android or iOS tools, for phone apps)
+  doctor              Check Node, git, the config file and the database (and the Android or iOS tools, for phone
+                      apps; Xcode, XCTest and ThreadSanitizer, for Swift Mac apps)
   devices [create|stop]
                       The emulators and simulators phone apps run on: list them, create them (Android: the
                       windtunnel-34 AVD, from Android's image for automated tests; iOS, in an ios project or
                       with --ios: simulators windtunnel-iphone-1, -2…), or stop the ones still running
   prepare             Check out, install and build a code version, and seed its snapshot
   branch              Start an isolated branch (app + database copy + data folder) and keep it running
+                      (not for Swift Mac apps: they have no server; each run is its scenario)
   clean               Stop leftover app processes, drop run databases and remove data folders
 
 Options
@@ -315,6 +321,12 @@ async function doctor(flags: Flags): Promise<number> {
     checks.push({ name: "git", ok: true, detail: project.repoRoot });
     if (project.config.android) checks.push(...(await androidChecks(project.root, project.config.android.avd)));
     if (project.config.ios) checks.push(...(await iosChecks(project.root, project.config.ios.devices)));
+    if (project.config.mac) {
+      // A Mac app's scenarios drive its code; no browser.
+      const chromium = checks.find((c) => c.name === "chromium")!;
+      Object.assign(chromium, { ok: true, detail: "not needed: a Mac app's scenarios run its code" });
+      checks.push(...(await macChecks(project.root, project.config.mac)));
+    }
     if (project.config.app.kind === "tauri") {
       const webkit = browserStatus("tauri");
       checks.push({ name: "webkit", ok: webkit.installed, detail: webkit.installed ? webkit.path : "not downloaded: npx playwright install webkit" });
@@ -384,6 +396,44 @@ async function iosChecks(root: string, devices: number): Promise<{ name: string;
     name: "wda",
     ok: !!wda,
     detail: wda ? `WebDriverAgent ${wda} (built on the first run)` : "not installed: npm i -D appium-webdriveragent",
+  });
+  return checks;
+}
+
+/** What Swift Mac apps need: Xcode (for XCTest), Swift, ThreadSanitizer when it's on, and the probe in the package. */
+async function macChecks(root: string, mac: MacConfig): Promise<{ name: string; ok: boolean; detail: string }[]> {
+  const checks: { name: string; ok: boolean; detail: string }[] = [];
+  const first = (command: string) => runScript(command, { cwd: root, timeoutMs: 30_000 }).then((r) => (r.code === 0 ? r.stdout.trim().split("\n")[0] : undefined), () => undefined);
+  const xcode = await first("xcodebuild -version");
+  checks.push({ name: "xcode", ok: !!xcode?.startsWith("Xcode"), detail: xcode?.startsWith("Xcode") ? xcode : "not found: XCTest comes with Xcode (App Store), then xcode-select -s /Applications/Xcode.app" });
+  const swift = await first("swift --version 2>&1");
+  checks.push({ name: "swift", ok: !!swift, detail: swift ?? "not found: install Xcode" });
+  const xctest = await first("xcrun --find xctest");
+  checks.push({ name: "xctest", ok: !!xctest, detail: xctest ?? "not found: the Command Line Tools alone have no XCTest; install Xcode" });
+  let sanitizer: string;
+  try {
+    sanitizer = sanitizerOf(mac);
+  } catch (err) {
+    checks.push({ name: "tsan", ok: false, detail: (err as Error).message });
+    sanitizer = "none";
+  }
+  if (sanitizer === "thread") {
+    const problem = await threadSanitizerProblem();
+    checks.push({ name: "tsan", ok: !problem, detail: problem ? `${problem}; or run without it: mac.sanitizer: none` : "ThreadSanitizer runs (builds have it)" });
+  } else if (!checks.some((c) => c.name === "tsan")) {
+    checks.push({ name: "tsan", ok: true, detail: "off (mac.sanitizer: none, or WINDTUNNEL_SANITIZER=none)" });
+  }
+  const dir = join(root, mac.dir);
+  const manifest = await readFile(join(dir, "Package.swift"), "utf8").catch(() => undefined);
+  const points = manifest ? await probePoints(dir) : [];
+  checks.push({
+    name: "probe",
+    ok: !!manifest?.includes("WindTunnelProbe"),
+    detail: !manifest
+      ? `no Package.swift in ${dir}: a Mac app's code is tested as a Swift package (mac.dir)`
+      : manifest.includes("WindTunnelProbe")
+        ? `WindTunnelProbe; ${points.length} probe point(s) in the code`
+        : "the package doesn't use WindTunnelProbe (swift/WindTunnelProbe): add it, and probe points where runs should step in",
   });
   return checks;
 }
@@ -671,8 +721,9 @@ async function map(flags: Flags): Promise<number> {
     }
     const text = [
       formatAppMap(appMap, { focus: flags.focus, maxChars: flags.json ? undefined : 1_000_000 }),
-      found ? formatCrawl(found, 1_000_000, flags.focus) : "(no live crawl yet: windtunnel crawl, or map --crawl)",
-    ].join("\n\n");
+      // A Mac app has no pages to crawl.
+      appMap.mac ? "" : found ? formatCrawl(found, 1_000_000, flags.focus) : "(no live crawl yet: windtunnel crawl, or map --crawl)",
+    ].filter(Boolean).join("\n\n");
     print(flags, { ...appMap, crawl: found }, text);
     return 0;
   } finally {

@@ -5,7 +5,7 @@ import {
   type ExperimentResult,
   listRuns,
   loadExperiments,
-  matchesRequest,
+  matchesLogged,
   parseRequestPattern,
   type RequestPattern,
   type RequestRecord,
@@ -78,6 +78,8 @@ export interface MapCall {
 export interface MapExperiment {
   id: string;
   description?: string;
+  /** A Swift Mac app's XCTest method, which it runs in place of a flow. */
+  scenario?: string;
   users: string[];
   /** Where it pushes, and the routes that lands on: requests sent at once, slowed or lost, a step submitted twice, a webhook sent twice. */
   pressure: { what: string; routes: string[]; step?: string }[];
@@ -144,7 +146,10 @@ export async function mapView(workspace: Workspace, runner: Runner): Promise<Map
     };
   });
 
-  const routeFor = matcher(routes, (r) => (r.path.startsWith("/") ? `${r.method === "ANY" ? "*" : r.method} ${r.path}` : undefined));
+  // Tauri commands and probe points are named, not paths: `invoke save_note`, `point writer.finish`.
+  const routeFor = matcher(routes, (r) =>
+    r.path.startsWith("/") ? `${r.method === "ANY" ? "*" : r.method} ${r.path}` : r.method === "INVOKE" || r.method === "POINT" ? `${r.method.toLowerCase()} ${r.path}` : undefined,
+  );
   const pageFor = matcher(
     map.pages.filter((p) => p.kind === "page"),
     (p) => `GET ${p.path}`,
@@ -205,6 +210,7 @@ export async function mapView(workspace: Workspace, runner: Runner): Promise<Map
     experiments.push({
       id: e.id,
       ...(e.description ? { description: e.description } : {}),
+      ...(e.scenario ? { scenario: e.scenario } : {}),
       users: e.users ?? [],
       pressure: pressureOf(e, steps, routes.filter((r) => r.webhook).map((r) => r.key), !!(project.config.android || project.config.ios)),
       ...(entry && result && focus
@@ -315,7 +321,7 @@ function pressureOf(e: Experiment, steps: MapExperiment["steps"], webhookRoutes:
     }
     return called(step).filter((key) => {
       const [method, path] = key.split(" ");
-      return matchesRequest(pattern, method!, `http://x${example(path!)}`);
+      return matchesLogged(pattern, method!, example(path!));
     });
   };
   // A step's route: the first write it sends, else whatever it calls.
@@ -329,7 +335,8 @@ function pressureOf(e: Experiment, steps: MapExperiment["steps"], webhookRoutes:
   for (const p of e.perturb) {
     const what =
       p.do === "delay" ? `slowed ${duration(p.ms)}`
-      : p.do === "fail" ? `answered ${p.status}`
+      : p.do === "fail" ? (/^point\s/i.test(p.request) ? "threw" : `answered ${p.status}`)
+      : p.do === "cancel" ? "task cancelled"
       : p.do === "lose-response" ? "response lost"
       : p.do === "duplicate" ? "sent twice"
       : p.do === "replay-as" ? `replayed as ${p.user}`
@@ -376,8 +383,8 @@ function matcher<T>(items: T[], patternOf: (item: T) => string | undefined): (me
   }
   list.sort((a, b) => a.pattern.text.split(/[:*]/).length - b.pattern.text.split(/[:*]/).length);
   return (method, path) => {
-    if (!path?.startsWith("/")) return undefined;
-    return list.find((x) => matchesRequest(x.pattern, method, `http://x${path}`))?.item;
+    if (!path || (!path.startsWith("/") && method !== "INVOKE" && method !== "POINT")) return undefined;
+    return list.find((x) => matchesLogged(x.pattern, method, path))?.item;
   };
 }
 

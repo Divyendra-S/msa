@@ -1,0 +1,13 @@
+# Wind Tunnel config for the Bug Zoo recorder: a Swift package that copies a screen recorder's
+# pipeline without UI. Its scenarios are XCTest methods (Tests/RecorderScenarios); the probe
+# points in its code (swift/WindTunnelProbe) are where runs hold, delay, fail or cancel it.
+# Each run gets its own empty folder ($DATA_DIR, its $HOME too), where the takes go.
+app:
+  kind: mac
+
+mac:
+  # The defaults: the package in this folder, built with ThreadSanitizer.
+  dir: .
+  sanitizer: thread
+
+parallel: 4

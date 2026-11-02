@@ -1,0 +1,8 @@
+id: 01-stop-while-compressing
+title: Stop while a frame is compressing
+summary: The writer writes a frame's header, then awaits its compression; Stop finishes the take in that gap, so the index lands inside the frame and the take can't be opened.
+experiment: stop-while-compressing
+perturbation: The first frame takes 300 ms to compress; Stop is pressed meanwhile
+breaks: [takes-are-whole]
+handler: Sources/Recorder/TakeWriter.swift
+fix: Compress first, then write the frame's whole record with no await in between (or check the take is still open after the await).

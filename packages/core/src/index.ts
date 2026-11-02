@@ -3,6 +3,8 @@ export { findAppium, hasAppiumDriver } from "./phone/appium.ts";
 export { createSimulators, iosRuntimes, SIMULATOR_PREFIX, windtunnelSimulators } from "./ios/simctl.ts";
 export { stopSimulators } from "./ios/simulators.ts";
 export { findWebDriverAgentSource } from "./ios/wda.ts";
+export { parseSanitizerLog, readSanitizerReports, type Sanitizer, type SanitizerReport, threadSanitizerProblem } from "./mac/sanitizer.ts";
+export { findScenario, type ProbePoint, probePoints, type ScenarioSource, swiftFiles } from "./mac/swift.ts";
 export {
   avdHome,
   createAvd,
@@ -26,6 +28,7 @@ export {
   ConfigSchema,
   expandVars,
   loadConfig,
+  type MacConfig,
   parseConfig,
   type WindtunnelConfig,
 } from "./config.ts";
@@ -64,7 +67,7 @@ export { type DbDiff, diffSnapshots, snapshotDatabase } from "./runner/db-diff.t
 export { DRILL_CHARS, drillDown, type EvidenceOptions, evidencePacket, PACKET_CHARS } from "./runner/evidence.ts";
 export { findFlowFile, FLOWS_DIR, LOGIN_FLOW, type LoadedFlow, loadFlow, stepNames } from "./runner/flows.ts";
 export { formatProof, type ProofResult, prove, type ProveOptions, type RegressionResult } from "./runner/prove.ts";
-export { matchesRequest, parseRequestPattern, type RequestPattern } from "./runner/match.ts";
+export { matchesLogged, matchesRequest, parseRequestPattern, type RequestPattern } from "./runner/match.ts";
 export { experimentInputs, flowFiles } from "./runner/inputs.ts";
 export { type ProofBranch, type ProofBranchOptions, writeProofBranch } from "./runner/proof-branch.ts";
 export { formatResults } from "./runner/report.ts";
@@ -93,6 +96,7 @@ export {
   type RunOptions,
   type Seam,
   Runner,
+  sanitizerOf,
   type TestRun,
   type VariantResult,
 } from "./runner/runner.ts";

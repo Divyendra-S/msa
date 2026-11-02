@@ -57,6 +57,9 @@ apps/
               hunts with Claude 5 (your Claude Code, or an API key) and Muse Code
 crates/
   windtunnel-tauri/  Rust crate for Tauri apps: runs the app hidden, serves its invoke calls over HTTP
+swift/
+  WindTunnelProbe/   Swift package for Mac apps: probe points where a run holds, delays, fails or
+              cancels the code, and steps for scenarios
 plugins/
   windtunnel/ plugin for Claude Code and Codex: skills (init, hunt, prove, test), MCP server,
               helper subagent
@@ -69,6 +72,8 @@ zoo/
               reuse the shop's bugs and add a phone one
   shop-ios/   the shop's iOS app (SwiftUI), the same client for the iPhone; its cases/ reuse the
               shop's bugs and add two iOS ones
+  recorder/   a Swift package copying a screen recorder's pipeline without UI: XCTest scenarios,
+              probe points, four planted bugs in cases/
   mock-pay/   mock payment provider: idempotent charges, signed webhooks, harness control
   cases/      one bug patch per case (or decoy patch per control) + expected results + verifier;
               prover and healing checks
@@ -108,6 +113,8 @@ pnpm zoo:verify:android      # the shop's Android app on headless emulators (nee
                              # and an AVD: windtunnel devices create)
 pnpm zoo:verify:ios          # the shop's iOS app on simulators (needs Xcode, an iOS runtime and the
                              # simulators: windtunnel devices create in zoo/shop-ios)
+pnpm zoo:verify:mac          # the Swift recorder's scenarios (needs Xcode; its ThreadSanitizer case
+                             # needs Xcode 26.4+ on macOS 26.4+, and is skipped where it can't run)
 pnpm zoo:prove               # the prover: proves each case's real fix, rejects the wrong fixes
 pnpm zoo:heal                # failure sorting and selector repair on a copy of the shop, rules only
 ```
@@ -256,6 +263,62 @@ windtunnel devices stop          # the simulators keep running between runs unti
 The app is built once per version of its code. WebDriverAgent, the XCTest server Appium's iOS
 driver uses, is built once and run on each simulator directly; Appium itself isn't involved. The
 Map reads the Swift code for its screens and the server calls their actions lead to.
+
+## Swift Mac apps
+
+A native Mac app, a screen recorder say, does its risky work inside its own code: Stop pressed
+while a frame is being written, two exports at once, a save cancelled halfway. There's no
+network call to hold, so the seam goes in the code: the app calls `Probe.point("…")` from
+[`swift/WindTunnelProbe`](swift/WindTunnelProbe/README.md) where it matters, and in a run each
+point asks Wind Tunnel what to do. Outside a run, and in release builds, a point does nothing.
+
+```swift
+actor TakeWriter {
+    func append(_ frame: Frame) async throws {
+        try await Probe.point("frame.compress")   // a run can hold, delay, fail or cancel it here
+        let payload = await compress(frame.pixels)
+        …
+    }
+}
+```
+
+The app's code is tested as a Swift package, driven by its own XCTest methods: an experiment
+names one as its `scenario`, and pressure goes on probe points instead of requests. `delay` and
+`fail` work as for requests (a failed point throws), `cancel` cancels the task that reached it,
+and a race holds points at the barrier and lets them go in every order. Each run gets its own
+empty folder (`$DATA_DIR`, and `$HOME` too), and nothing appears on screen.
+
+```yaml
+# windtunnel.config.yaml
+app:
+  kind: mac
+mac:
+  sanitizer: thread   # build with ThreadSanitizer (the default)
+```
+
+```yaml
+# .windtunnel/experiments/stop-while-compressing.yaml
+scenario: RecorderScenarios/testRecordAndStop
+perturb:
+  - { do: delay, point: frame.compress, ms: 300 }
+```
+
+Rules are `check:` commands on what the run left (does the take open? is anything half-written?),
+SQL if the app keeps a SQLite file, and `sanitizer: thread`: built with ThreadSanitizer, any data
+race it reports breaks the rule, with both stacks as the broken row. On macOS 26.4 and later,
+ThreadSanitizer needs Xcode 26.4 or newer (Apple's known issue 171762808); `windtunnel doctor`
+checks it, and `mac.sanitizer: none` (or `WINDTUNNEL_SANITIZER=none`) runs without it.
+
+```sh
+windtunnel doctor      # Xcode, Swift, xctest, ThreadSanitizer, the probe in the package
+windtunnel map         # the probe points, the concurrency where more could go, the scenarios
+pnpm zoo:verify:mac    # zoo/recorder: the clean recorder, and its planted bugs
+```
+
+The test bundle is built once per version of the code (`swift build --build-tests`), and each run
+starts it with `xctest` on one test method, directly. The Map and `windtunnel scan` read the Swift
+code: actors, tasks, dispatch queues, shared state the compiler doesn't check, file writes and
+cancellation checks, as places to put probe points.
 
 ## Experiments
 

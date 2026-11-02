@@ -1,0 +1,5 @@
+description: The first frame fails to compress; recording stops there, and the user presses Stop.
+scenario: RecorderScenarios/testRecordAndStop
+perturb:
+  - do: fail
+    point: frame.compress

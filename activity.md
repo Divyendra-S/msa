@@ -9,16 +9,66 @@ file says what happened recently, why, and what to know before changing things.
 ## Where things stand (2026-11-02)
 
 - `main` has Phases 1–7 done; Phase 8 (submission) is partly done.
-- **[`platforms-plan.md`](platforms-plan.md)**: Phases 1 (groundwork), 2 (Tauri), 3
-  (Android) and 4 (iOS) are done and pushed. `zoo:verify:ios` passes (252 runs on two simulators), no
-  Simulator window appears, Replay shows the iPhone's screens, and there are 163 tests. Phase 5
-  (Swift Mac apps) is in progress. Five phases, one at a time: groundwork, Tauri, Android, iOS, Swift Mac apps.
+- **[`platforms-plan.md`](platforms-plan.md)**: all five phases are done and pushed:
+  groundwork, Tauri, Android, iOS and Swift Mac apps. `zoo:verify:mac` passes (84 runs), nothing
+  appears on screen, Replay shows the scenario's steps, and there are 183 tests. The
+  ThreadSanitizer rule can't run on this Mac until Xcode is 26.4 or newer (macOS 26.5.2, Xcode
+  26.0.1: Apple's known issue 171762808): after updating Xcode, run `pnpm zoo:verify:mac` again.
 - Waiting on the project owner, not on code: the Muse Code install and `pnpm bench check --paid`,
   the npm publish of `windtunnel-cli`, the demo video.
 - Open after that: verify a headless Claude hunt with a real API key; an "Explain with Claude"
   panel; a test-database leak to fix; stretch items S1, S3, S5–S7 in `execution-plan.md`.
 
 ## Recent work, newest first
+
+### Platforms Phase 5: Swift Mac apps
+
+- **Probe** (`swift/WindTunnelProbe`): `Probe.point("…")` (or `Probe.point("…") { section }`) asks
+  the harness at `$WINDTUNNEL_PROBE` what to do: go on, wait, throw `ProbeError`, or cancel the
+  task and go on. `Probe.step` marks a scenario's steps; `Probe.dataDirectory` is `$DATA_DIR`.
+  Outside a run a point returns without suspending; a release build has no harness code (`#if
+  DEBUG`). Swift 6, macOS 13 / iOS 16.
+- **Seam** (`core/src/mac/probe.ts`): a small HTTP server per run; each point is a `Call` at the
+  existing `Network` (`POINT writer.finish`), held until decided. "Sending" a point lets the code
+  go and resolves when its section ends, so ordered races run sections one at a time. `cancel` is
+  a new pressure (points only); `point: x` is short for `request: point x`; `fail` on a point
+  throws. `matchesLogged` matches patterns against logged `INVOKE`/`POINT` names (the viewer's map
+  and Replay didn't place Tauri `INVOKE` calls before; now they do).
+- **Runs** (`core/src/mac/scenario.ts`, `runner.ts` `runScenario`): `app.kind: mac`, no server
+  (`app.start` refused). The test bundle is built once per version and sanitizer
+  (`codeVersions.macTests`: `swift build --build-tests --scratch-path .build/windtunnel-<s>`, plus
+  `--sanitize=thread`). Each run takes a branch slot and a fresh data folder (`branches.isolated`)
+  and starts `xctest -XCTest Module.Class/test <bundle>` itself, not through a shell (macOS drops
+  `DYLD_` variables for `/bin/sh`), with `DATA_DIR`, `HOME` and `CFFIXED_USER_HOME` (Foundation's
+  home) on the run's folder. XCTest failures, thrown errors, crashes and timeouts are the run's
+  error, in their step; without `Probe.step` the scenario is one step. `stopScenarios()` kills
+  live ones on close.
+- **Rules**: `sanitizer: thread` is a rule kind (`mac/sanitizer.ts` reads ThreadSanitizer's
+  reports from the run's `tsan/`, one row per race with both stacks). `threadSanitizerProblem()`
+  builds and runs a tiny program first; the runner refuses with the reason, `doctor` shows it, and
+  `WINDTUNNEL_SANITIZER=none` (or `mac.sanitizer: none`) runs without it, leaving the rule out.
+- **Experiments**: `scenario: Class/testMethod` instead of `flow:` (one or the other); only
+  `delay`, `fail`, `cancel` and races on points for Mac apps; steps are checked against the
+  test's `Probe.step` calls and point names against the code (`mac/swift.ts`).
+- **Code reader** (`explorer/src/mac.ts`): probe points with their function and comment;
+  concurrency sites per function (actors, tasks, detached tasks, task groups, dispatch queues,
+  `@unchecked Sendable`, asset writers, file writes, cancellation checks, continuations), marked
+  when a point is near; the scenarios with their steps. In the Map, `windtunnel scan` (any Swift
+  package) and MCP's map; no crawl for Mac apps.
+- **Viewer and Mac app**: Replay shows a scenario step's probe points and what the run did there
+  in place of a screenshot; experiments show their scenario; evidence folds the points a run let
+  straight through into one line per step.
+- **`zoo/recorder`**: a screen recorder's pipeline without UI (capture queue, `Recorder` actor,
+  `TakeWriter` actor, `Exporter`), two XCTest scenarios, five experiments, four rules
+  (`checks/takes.mjs` and `no-data-races`), four cases. `pnpm zoo:verify:mac` (skips case 04 where
+  ThreadSanitizer can't run).
+- **Checked**: `zoo:verify:mac` PASS, 84 runs in 20 s; a window watcher saw no new window; Replay
+  shows the steps; 183 tests; the shop (840 runs), notes (72), Android (180) and iOS (252)
+  verifies give the same tables as before.
+- **Not checked**: ThreadSanitizer live. On this Mac (macOS 26.5.2, Xcode 26.0.1) any program
+  built with it crashes as it starts; `swift test --sanitize=thread` also refuses to load it into
+  SwiftPM's helper. Once Xcode 26.4+ is installed, run `pnpm zoo:verify:mac`: case 04 should break
+  `no-data-races`, and if `xctest` refuses the inserted runtime too, that is the next thing to fix.
 
 ### Platforms Phase 4: iOS apps on simulators
 

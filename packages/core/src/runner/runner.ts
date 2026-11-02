@@ -9,9 +9,12 @@ import { Appium } from "../phone/appium.ts";
 import { type Branch, Branches } from "../branches/branches.ts";
 import { browserFor } from "../browser.ts";
 import type { CodeVersion, CodeVersionSpec } from "../branches/code-versions.ts";
-import { ConfigError } from "../config.ts";
+import { CONFIG_FILE, ConfigError, expandVars, type MacConfig } from "../config.ts";
 import type { Database } from "../database.ts";
-import { CommandError, sh } from "../exec.ts";
+import { CommandError, runScript, sh } from "../exec.ts";
+import { ScenarioRun, stopScenarios } from "../mac/scenario.ts";
+import { type Sanitizer, threadSanitizerLibrary, threadSanitizerProblem } from "../mac/sanitizer.ts";
+import { findScenario } from "../mac/swift.ts";
 import type { TestUser } from "../flow-api.ts";
 import { checkRules, loadRules, phoneFilesOf, type Rule, type RuleResult } from "../rules.ts";
 import { type DbSnapshot, diffSnapshots, snapshotDatabase } from "./db-diff.ts";
@@ -130,6 +133,16 @@ interface IosRuntime {
   agents: Map<string, Promise<WebDriverAgent>>;
 }
 
+/** What a Mac app's runs on one code version need: xctest, the version's test bundle, ThreadSanitizer's runtime. */
+interface MacSetup {
+  xctest: string;
+  bundle: string;
+  /** The Swift package's folder in the version's worktree. */
+  cwd: string;
+  /** ThreadSanitizer's runtime, when the build has it. */
+  library?: string;
+}
+
 /** The phones of a run, leased from the emulators or simulators; none for web and desktop apps. */
 interface PhoneLease {
   acquire(n: number): Promise<string[]>;
@@ -143,6 +156,8 @@ export class Runner {
   private browser?: Promise<Browser>;
   private android?: Promise<AndroidRuntime>;
   private ios?: Promise<IosRuntime>;
+  private readonly macSetups = new Map<string, Promise<MacSetup>>();
+  private sanitizerChecked?: Promise<string | undefined>;
   private headed = false;
   private readonly baselines = new Map<string, Promise<DbSnapshot>>();
   /** Old runs are pruned once per runner, before its first run. */
@@ -164,14 +179,22 @@ export class Runner {
   /** Validates experiments against the project; throws a ConfigError listing every problem. */
   async validate(experiments: Experiment[]): Promise<{ rules: Rule[]; warnings: string[] }> {
     const { kind } = this.project.config.app;
-    if (kind === "mac") {
-      throw new ConfigError(`app.kind ${kind}: only web, Tauri, Android and iOS apps can run experiments so far (the plan for ${kind} apps is in platforms-plan.md)`);
-    }
-    const rules = await loadRules(this.project);
+    let rules = await loadRules(this.project);
     const problems: string[] = [];
     const warnings: string[] = [];
     for (const rule of rules) {
       if (rule.phone && kind !== "ios") problems.push(`rule ${rule.id}: phone: rules read an iOS app's data on its simulator (app.kind: ios)`);
+      if (rule.sanitizer && kind !== "mac") problems.push(`rule ${rule.id}: sanitizer: rules are for Swift Mac apps built with ThreadSanitizer (app.kind: mac)`);
+    }
+    // Built without ThreadSanitizer, its rules can't be checked: left out, and said so.
+    const unchecked = kind === "mac" && sanitizerOf(this.project.config.mac!) === "none" ? rules.filter((r) => r.sanitizer) : [];
+    if (unchecked.length > 0) {
+      rules = rules.filter((r) => !r.sanitizer);
+      for (const rule of unchecked) {
+        const named = experiments.filter((e) => e.rules !== "all" && e.rules.includes(rule.id));
+        if (named.length) problems.push(`${named.map((e) => e.id).join(", ")}: rule ${rule.id} needs ThreadSanitizer (mac.sanitizer: thread)`);
+        else warnings.push(`rule ${rule.id} is not checked: built without ThreadSanitizer`);
+      }
     }
     for (const experiment of experiments) {
       const result = await checkExperiment(experiment, this.project, rules);
@@ -235,6 +258,8 @@ export class Runner {
     const spec = options.version ?? {};
     const version = "tree" in spec ? spec : await this.branches.versions.resolve(spec);
     await this.branches.prepare(version);
+    // A Mac app's tests are built before its runs start, so a build error is one error, not one per run.
+    if (this.project.config.mac) await this.macSetup(version);
     this.pruned ??= this.store.prune();
     await this.pruned;
     this.headed = !!options.headed;
@@ -243,6 +268,7 @@ export class Runner {
 
   async close(): Promise<void> {
     if (this.browser) await (await this.browser).close().catch(() => undefined);
+    stopScenarios();
     // The emulators keep running for the next runs; `windtunnel devices stop` shuts them down.
     if (this.android) await (await this.android.catch(() => undefined))?.appium.close();
     const ios = this.ios && (await this.ios.catch(() => undefined));
@@ -261,8 +287,9 @@ export class Runner {
     const { id: runId, dir } = await this.store.create();
     await writeJson(`${dir}/experiment.json`, experiment);
     const rules = experiment.rules === "all" ? allRules : allRules.filter((r) => experiment.rules.includes(r.id));
-    const flow = await loadFlow(this.project.stateDir, experiment.flow);
-    const login = (await findFlowFile(this.project.stateDir, LOGIN_FLOW))
+    // A Mac app's experiments run a scenario, not a flow.
+    const flow = experiment.flow === undefined ? undefined : await loadFlow(this.project.stateDir, experiment.flow);
+    const login = flow && (await findFlowFile(this.project.stateDir, LOGIN_FLOW))
       ? await loadFlow(this.project.stateDir, LOGIN_FLOW)
       : undefined;
     const users = experimentUsers(experiment, this.project);
@@ -309,19 +336,8 @@ export class Runner {
     return result;
   }
 
-  private async runRep(job: {
-    experiment: Experiment;
-    variant: Variant;
-    version: CodeVersion;
-    rules: Rule[];
-    flow: LoadedFlow;
-    login?: LoadedFlow;
-    users: string[];
-    rep: number;
-    dir: string;
-    options: RunOptions;
-    touched: Set<string>;
-  }): Promise<RepSummary> {
+  private async runRep(job: RepJob): Promise<RepSummary> {
+    if (this.project.config.mac) return this.runScenario(job);
     const started = Date.now();
     const dir = this.store.repDir(job.dir, job.rep);
     await mkdir(dir, { recursive: true });
@@ -369,7 +385,7 @@ export class Runner {
         proxy: branch.proxy,
         database: branch.database,
         tenant: branch.payments?.tenant,
-        flow: job.flow,
+        flow: job.flow!,
         login: job.login,
         users: this.testUsers(),
         tabs: tabLabels(job.users),
@@ -470,6 +486,127 @@ export class Runner {
       });
     }
     return summary;
+  }
+
+  /** A Mac app's run: its scenario on a fresh data folder (and SQLite copy), with no server. */
+  private async runScenario(job: RepJob): Promise<RepSummary> {
+    const started = Date.now();
+    const dir = this.store.repDir(job.dir, job.rep);
+    await mkdir(dir, { recursive: true });
+    const mac = this.project.config.mac!;
+    let run: ScenarioRun | undefined;
+    let ruleResults: RuleResult[] = [];
+    let outcome: RepOutcome = "error";
+    let error: string | undefined;
+    let diffSummary = "";
+    let dataDir: string | undefined;
+    try {
+      const setup = await this.macSetup(job.version);
+      const scenario = await findScenario(setup.cwd, job.experiment.scenario!);
+      if (!scenario) throw new Error(`no XCTest method ${job.experiment.scenario} in this version's tests`);
+      const reports = setup.library ? join(dir, "tsan") : undefined;
+      await this.branches.isolated(job.version, { keepDatabase: job.options.keepDatabase }, async (state) => {
+        dataDir = state.dataDir;
+        if (state.database) await this.baseline(job.version.id, state.database);
+        // Foundation finds the home folder from CFFIXED_USER_HOME, not HOME.
+        const home: Record<string, string> = this.project.config.app.isolateHome ? { CFFIXED_USER_HOME: state.dataDir } : {};
+        const env: Record<string, string> = { ...state.env, ...home };
+        for (const [key, value] of Object.entries(mac.env)) env[key] = expandVars(value, { ...process.env, ...env });
+        run = new ScenarioRun({
+          experiment: job.experiment,
+          variant: job.variant,
+          xctest: setup.xctest,
+          bundle: setup.bundle,
+          test: scenario.test,
+          cwd: setup.cwd,
+          env,
+          ...(setup.library && reports ? { sanitizer: { library: setup.library, reports } } : {}),
+          dir,
+        });
+        await run.execute();
+        const target = {
+          database: state.database,
+          cwd: this.project.root,
+          env: { DATA_DIR: state.dataDir, RUN_DIR: dir, ...(this.project.config.app.isolateHome ? { HOME: state.dataDir } : {}) },
+          ...(reports ? { threadSanitizer: reports } : {}),
+        };
+        ruleResults = await checkRules(target, job.rules, runFacts(run.requests, run.steps, {}));
+        if (state.database) {
+          const diff = diffSnapshots(await this.baseline(job.version.id, state.database), await snapshotDatabase(state.database));
+          diffSummary = diff.summary;
+          await writeJson(`${dir}/db-diff.json`, diff);
+        }
+      });
+      const broken = ruleResults.filter((r) => !r.ok && !r.error);
+      const ruleErrors = ruleResults.filter((r) => r.error);
+      const first = run!.errors[0];
+      error = first ? `${first.step ? `${first.step}: ` : ""}${first.message.split("\n")[0]}` : ruleErrors[0] ? `rule ${ruleErrors[0].id}: ${ruleErrors[0].error}` : undefined;
+      outcome = broken.length > 0 ? "broken" : error ? "error" : "ok";
+    } catch (err) {
+      error = (err as Error).message.split("\n")[0];
+    }
+
+    const ran = run as ScenarioRun | undefined;
+    const warnings = ran?.warnings() ?? [];
+    const summary: RepSummary = {
+      rep: job.rep,
+      variant: job.variant.name,
+      outcome,
+      broken: ruleResults.filter((r) => !r.ok && !r.error).map((r) => r.id),
+      ...(error ? { error } : {}),
+      durationMs: Date.now() - started,
+      diff: diffSummary,
+      ...(warnings.length ? { warnings } : {}),
+    };
+    await writeJson(`${dir}/result.json`, {
+      ...summary,
+      startedAt: ran ? new Date(ran.t0).toISOString() : undefined,
+      scenario: job.experiment.scenario,
+      branch: { dataDir, kept: !!job.options.keepDatabase, seam: "probe" },
+      rules: ruleResults,
+      errors: ran?.errors ?? [],
+      timedOut: ran?.timedOut ?? false,
+      steps: ran?.steps ?? [],
+      race: ran?.race,
+      webhooks: [],
+      charges: [],
+      chargeCalls: [],
+      console: [],
+      traces: [],
+    });
+    if (ran) {
+      await writeJson(`${dir}/requests.json`, ran.requests);
+      for (const r of ran.requests) if (r.sent !== null) job.touched.add(`${r.method} ${r.url}`);
+    }
+    return summary;
+  }
+
+  /** xctest, the version's test bundle (built on first use) and ThreadSanitizer's runtime, once per version. */
+  private macSetup(version: CodeVersion): Promise<MacSetup> {
+    let setup = this.macSetups.get(version.id);
+    if (!setup) {
+      setup = (async () => {
+        const mac = this.project.config.mac!;
+        const sanitizer = sanitizerOf(mac);
+        if (sanitizer === "thread") {
+          this.sanitizerChecked ??= threadSanitizerProblem();
+          const problem = await this.sanitizerChecked;
+          if (problem) {
+            throw new ConfigError(`${problem}. Update Xcode, or run without ThreadSanitizer: mac.sanitizer: none in ${CONFIG_FILE}, or WINDTUNNEL_SANITIZER=none`);
+          }
+        }
+        const xctest = (await runScript("xcrun --find xctest", { cwd: this.project.root, timeoutMs: 30_000 })).stdout.trim();
+        if (!xctest) throw new ConfigError("xctest not found: install Xcode (the Command Line Tools alone have no XCTest)");
+        const library = sanitizer === "thread" ? await threadSanitizerLibrary() : undefined;
+        if (sanitizer === "thread" && !library) throw new ConfigError("ThreadSanitizer's runtime is not in the active Xcode toolchain");
+        const prepared = await this.branches.prepare(version);
+        const bundle = await this.branches.versions.macTests(prepared, sanitizer);
+        return { xctest, bundle, cwd: join(prepared.worktree, this.project.appSubdir, mac.dir), ...(library ? { library } : {}) };
+      })();
+      this.macSetups.set(version.id, setup);
+      setup.catch(() => this.macSetups.delete(version.id));
+    }
+    return setup;
   }
 
   private testUsers(): Record<string, TestUser> {
@@ -575,6 +712,30 @@ export class Runner {
     this.browser ??= browserFor(this.project.config.app.kind).type.launch({ headless: !this.headed });
     return this.browser;
   }
+}
+
+/** One repetition of an experiment, as the runner hands it out. */
+interface RepJob {
+  experiment: Experiment;
+  variant: Variant;
+  version: CodeVersion;
+  rules: Rule[];
+  /** Absent for a Mac app's scenario. */
+  flow?: LoadedFlow;
+  login?: LoadedFlow;
+  users: string[];
+  rep: number;
+  dir: string;
+  options: RunOptions;
+  touched: Set<string>;
+}
+
+/** Whether a Mac app's build has ThreadSanitizer: $WINDTUNNEL_SANITIZER, else `mac.sanitizer`. */
+export function sanitizerOf(mac: MacConfig): Sanitizer {
+  const value = process.env.WINDTUNNEL_SANITIZER;
+  if (value === undefined || value === "") return mac.sanitizer;
+  if (value === "thread" || value === "none") return value;
+  throw new ConfigError(`WINDTUNNEL_SANITIZER=${value}: use thread or none`);
 }
 
 function seamFromEnv(): Seam {

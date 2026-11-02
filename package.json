@@ -16,6 +16,7 @@
     "zoo:verify:notes": "node zoo/cases/verify.ts --app notes",
     "zoo:verify:android": "node zoo/cases/verify.ts --app shop-android",
     "zoo:verify:ios": "node zoo/cases/verify.ts --app shop-ios",
+    "zoo:verify:mac": "node zoo/cases/verify.ts --app recorder",
     "zoo:prove": "node zoo/cases/prove.ts",
     "zoo:heal": "node zoo/cases/heal.ts",
     "demo:setup": "node zoo/demo/setup.ts",
