@@ -1,5 +1,8 @@
-export { findAppium } from "./android/appium.ts";
 export { connectedSerials, runningEmulators, stopEmulator } from "./android/emulators.ts";
+export { findAppium, hasAppiumDriver } from "./phone/appium.ts";
+export { createSimulators, iosRuntimes, SIMULATOR_PREFIX, windtunnelSimulators } from "./ios/simctl.ts";
+export { stopSimulators } from "./ios/simulators.ts";
+export { findWebDriverAgentSource } from "./ios/wda.ts";
 export {
   avdHome,
   createAvd,

@@ -52,6 +52,7 @@ describe("app map of the Bug Zoo shop", () => {
         "DELETE /api/session",
         "GET /api/cart",
         "GET /api/health",
+        "GET /api/orders",
         "GET /api/orders/:id",
         "GET /api/products",
         "POST /api/cart/items",

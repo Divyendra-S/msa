@@ -4,6 +4,7 @@ import { openSync, closeSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { withLock } from "../lock.ts";
+import { DevicePool } from "../phone/pool.ts";
 import { exists } from "../project.ts";
 import { sleep } from "../runner/time.ts";
 import { AdbError, adb, type AndroidSdk, avdHome, shell } from "./sdk.ts";
@@ -32,9 +33,7 @@ export class Emulators {
   readonly avd: string;
   readonly max: number;
   private readonly logDir: string;
-  private started?: Promise<void>;
-  private readonly free: string[] = [];
-  private readonly queue: { n: number; grant: (serials: string[]) => void }[] = [];
+  private readonly pool: DevicePool;
   /** The APK each phone has, as far as this process knows. */
   private readonly installed = new Map<string, string>();
 
@@ -43,17 +42,12 @@ export class Emulators {
     this.avd = options.avd;
     this.max = options.max;
     this.logDir = options.logDir;
+    this.pool = new DevicePool(options.max, () => this.start());
   }
 
   /** `n` phones for one run; give them back with `release`. Waits while other runs hold them. */
-  async acquire(n: number): Promise<string[]> {
-    if (n > this.max) throw new AdbError(`this experiment needs ${n} phones; android.devices allows ${this.max}`);
-    this.started ??= this.start();
-    await this.started;
-    return new Promise((grant) => {
-      this.queue.push({ n, grant });
-      this.pump();
-    });
+  acquire(n: number): Promise<string[]> {
+    return this.pool.acquire(n, () => new AdbError(`this experiment needs ${n} phones; android.devices allows ${this.max}`));
   }
 
   /** Puts the app on a phone, unless this build is already there. */
@@ -64,20 +58,11 @@ export class Emulators {
   }
 
   release(serials: string[]): void {
-    this.free.push(...serials);
-    this.pump();
-  }
-
-  /** First come, first served: a run waiting for two phones isn't overtaken by runs that need one. */
-  private pump(): void {
-    while (this.queue.length > 0 && this.free.length >= this.queue[0]!.n) {
-      const next = this.queue.shift()!;
-      next.grant(this.free.splice(0, next.n));
-    }
+    this.pool.release(serials);
   }
 
   /** Finds the AVD's emulators already running and boots the rest, up to `max`. */
-  private async start(): Promise<void> {
+  private async start(): Promise<string[]> {
     await this.prepareSnapshot();
     const running = await runningEmulators(this.sdk, this.avd);
     const ports = new Set((await connectedSerials(this.sdk)).map(portOf));
@@ -87,7 +72,7 @@ export class Emulators {
       if (!ports.has(port)) toBoot.push(port);
     }
     const booted = await Promise.all(toBoot.map((port) => this.boot(port, ["-read-only", "-snapshot", SNAPSHOT, "-no-snapshot-save"])));
-    this.free.push(...running.slice(0, this.max), ...booted);
+    return [...running, ...booted];
   }
 
   /** Boots once to make the snapshot runs start from, unless the AVD has it. */

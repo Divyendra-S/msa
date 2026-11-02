@@ -6,19 +6,73 @@ A handoff for whoever picks up this repo next, human or coding agent. Newest fir
 [`platforms-plan.md`](platforms-plan.md) for testing Tauri, Android, iOS and Swift Mac apps. This
 file says what happened recently, why, and what to know before changing things.
 
-## Where things stand (2026-10-30)
+## Where things stand (2026-11-02)
 
 - `main` has Phases 1–7 done; Phase 8 (submission) is partly done.
-- **[`platforms-plan.md`](platforms-plan.md)**: Phases 1 (groundwork), 2 (Tauri) and 3
-  (Android) are done and pushed. `zoo:verify:android` passes (180 runs on two headless
-  emulators), no emulator window appears, Replay shows the phone's screens, and there are 153
-  tests. Phase 4 (iOS) is in progress. Five phases, one at a time: groundwork, Tauri, Android, iOS, Swift Mac apps.
+- **[`platforms-plan.md`](platforms-plan.md)**: Phases 1 (groundwork), 2 (Tauri), 3
+  (Android) and 4 (iOS) are done and pushed. `zoo:verify:ios` passes (252 runs on two simulators), no
+  Simulator window appears, Replay shows the iPhone's screens, and there are 163 tests. Phase 5
+  (Swift Mac apps) is in progress. Five phases, one at a time: groundwork, Tauri, Android, iOS, Swift Mac apps.
 - Waiting on the project owner, not on code: the Muse Code install and `pnpm bench check --paid`,
   the npm publish of `windtunnel-cli`, the demo video.
 - Open after that: verify a headless Claude hunt with a real API key; an "Explain with Claude"
   panel; a test-database leak to fix; stretch items S1, S3, S5–S7 in `execution-plan.md`.
 
 ## Recent work, newest first
+
+### Platforms Phase 4: iOS apps on simulators
+
+- **Devices** (`core/src/ios/`):
+  - `simctl.ts` runs `xcrun simctl`; `windtunnel devices create` (in an iOS project, or `--ios`)
+    makes `windtunnel-iphone-1` and `-2` (iPhone 17, the newest iOS runtime).
+  - `simulators.ts` boots them with `simctl boot` (no Simulator.app), keeps them running between
+    runs (`windtunnel devices stop`), and leases them through `phone/pool.ts`, the lease the
+    emulators now share.
+  - `wda.ts` builds WebDriverAgent (Appium's XCTest server, from `appium-webdriveragent`) once per
+    version into the cache, starts it on each simulator with `xcodebuild test-without-building`,
+    and speaks its HTTP API directly. **No Appium server for iOS**: the XCUITest driver writes
+    `~/Library/Preferences/com.apple.iphonesimulator.plist` on every session and, with
+    `isHeadless`, quits Simulator.app if it's open; neither is acceptable on the owner's Mac.
+- **Driver** (`runner/ios-driver.ts`): each phone reaches its server at its own proxy port on
+  127.0.0.1 (a simulator shares the Mac's network). A run reinstalls the app (its data gone),
+  puts it in portrait and launches it with `ios.arguments`. The screen is WebDriverAgent's page
+  source (`ios/screen.ts`, about 15 ms), taps are W3C actions by coordinates, typing is checked
+  against the field afterwards. Screenshots are `simctl io screenshot`.
+- **Shared phone code** (`core/src/phone/`, `runner/phone-ui.ts`): the screen model, the flow's
+  `ui` (now with `openLink`), the Appium wrapper (Android only now) and the device lease.
+- **iOS pressures**: `push` (`simctl push`, during or after a step) and a link opened twice
+  (`double-submit` on a step that calls `ui.openLink`). `offline` on iOS is the proxy alone.
+- **Phone rules**: `phone: <path>` in rules.yaml runs the rule's SQL on the app's own SQLite file,
+  copied off each phone after the run (`phone/<tab>/` in the run folder), with that phone's
+  user's facts; rows carry `user`.
+- **Config**: `app.kind: ios` with an `ios:` section (bundleId, build, app, arguments, env,
+  devices). The default build keeps derived data in `build/` (`-IDECustomDerivedDataLocation`),
+  not in `~/Library/Developer/Xcode/DerivedData`. Builds are cached per version of the app's
+  folder, as APKs are (`cache/phone-apps/`).
+- **`zoo/shop-ios`**: SwiftUI client of the zoo shop (which got `GET /api/orders`), with an order
+  history in SQLite. Cases: the shop's 01, 02, 05, c1 (`from:`), `i1-pay-link-twice` and
+  `i2-history-refresh` (actor reentrancy, caught by a phone rule). Its rules are a copy of the
+  shop's plus the phone rule; `zoo:verify:ios` checks the copy. `pnpm zoo:verify:ios`.
+- **Checked**: `zoo:verify:ios` PASS, 252 runs in 1,571 s from shut-down simulators; a window
+  watcher saw no Simulator window; Replay shows the iPhone's steps; 163 tests; the Android, shop
+  and notes verifies give the same tables as before.
+- **Map**: `explorer/src/ios.ts` reads SwiftUI views (`…Screen`), `call("POST", "/api/…")`
+  helpers and Swift string interpolation; the Kotlin reader shares `phone-code.ts` with it.
+- Things to know:
+  - The iOS 26.0.1 runtime (8.05 GB download, 7.5 GB on disk) was downloaded with the owner's OK.
+  - Xcode 26.0.1 lacks `lib_TestingInterop.dylib` for the simulator, which WebDriverAgent copies
+    for every Xcode 26; Wind Tunnel's build leaves out what the Xcode lacks, by WebDriverAgent's
+    own setting.
+  - iOS 26 asks "Open in “Shop”?" for a link opened with `simctl openurl`. XCUITest's alert
+    accept reports success without answering it, and unanswered ones pile up and swallow every
+    tap and keystroke. The driver taps the button where SpringBoard draws it; after one Open, iOS
+    stopped asking. A leftover question is cancelled when the app launches.
+  - A silent push (`content-available` alone) didn't reach the app on the simulator; one with an
+    `alert` reached its foreground handler without asking for notification permission.
+  - Appium's sessions during this phase wrote the owner's Simulator.app preferences; the seven
+    keys it added (and its entries for Wind Tunnel's simulators) were removed again.
+  - Xcode builds made `~/Library/Developer/Xcode/DerivedData` folders before the build moved its
+    derived data; those were removed.
 
 ### Platforms Phase 3: Android apps on headless emulators
 

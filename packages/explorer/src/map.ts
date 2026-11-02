@@ -5,6 +5,7 @@ import { findNextRoutes, HTTP_METHODS } from "./routes.ts";
 import { formatTable, naturalKeys, type TableInfo } from "./schema.ts";
 import { type Effect, type FetchEffect, SourceIndex, type SqlEffect, type UiFacts, unique } from "./source.ts";
 import { findAndroidApp } from "./android.ts";
+import { findIosApp } from "./ios.ts";
 import { findTauriApp } from "./tauri.ts";
 
 export interface RouteInfo {
@@ -88,18 +89,18 @@ export async function buildAppMap(project: Project, options: { schema?: TableInf
   }
   if (tauri && pages.length === 0) pages.push(...tauri.pages.map((p) => ({ ...p, kind: "page" as const })));
 
-  // An Android app: its screens are the pages, and each route says where the phone calls it.
-  const androidRoot = join(project.root, project.config.android?.dir ?? ".");
-  const android = await findAndroidApp(androidRoot);
-  if (android) {
-    const prefix = relative(project.root, androidRoot);
+  // A phone app (Android or iOS): its screens are the pages, and each route says where the phone calls it.
+  const phoneRoot = join(project.root, project.config.android?.dir ?? project.config.ios?.dir ?? ".");
+  const phone = project.config.ios ? await findIosApp(phoneRoot) : await findAndroidApp(phoneRoot);
+  if (phone) {
+    const prefix = relative(project.root, phoneRoot);
     for (const r of routes) {
-      const callers = android.calls.filter((c) => c.method === r.method && samePath(c.path, r.path));
+      const callers = phone.calls.filter((c) => c.method === r.method && samePath(c.path, r.path));
       if (callers.length) r.notes.push(`called by the phone app: ${callers.map((c) => `${c.fn ?? "?"} (${join(prefix, c.file)}:${c.line})`).join(", ")}`);
     }
-    pages.unshift(...android.screens.map((sc) => ({ path: sc.name, file: `${join(prefix, sc.file)}:${sc.line}`, kind: "page" as const, ui: sc.ui })));
+    pages.unshift(...phone.screens.map((sc) => ({ path: sc.name, file: `${join(prefix, sc.file)}:${sc.line}`, kind: "page" as const, ui: sc.ui })));
   }
-  const client = tauri?.framework ?? android?.framework;
+  const client = tauri?.framework ?? phone?.framework;
   const name = client ? (framework === "unknown" ? client : `${client} + ${framework}`) : framework;
 
   return { root: project.root, framework: name, routes, pages, helperFlags: [...helperFlags], schema: options.schema, windtunnel: await windtunnelFiles(project) };

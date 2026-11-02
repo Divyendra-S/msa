@@ -1,9 +1,11 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Browser } from "playwright";
-import { Appium } from "../android/appium.ts";
 import { Emulators } from "../android/emulators.ts";
 import { type AndroidSdk, findAndroidSdk } from "../android/sdk.ts";
+import { Simulators } from "../ios/simulators.ts";
+import { buildWebDriverAgent, findWebDriverAgentSource, WebDriverAgent, type WebDriverAgentBuild } from "../ios/wda.ts";
+import { Appium } from "../phone/appium.ts";
 import { type Branch, Branches } from "../branches/branches.ts";
 import { browserFor } from "../browser.ts";
 import type { CodeVersion, CodeVersionSpec } from "../branches/code-versions.ts";
@@ -11,7 +13,7 @@ import { ConfigError } from "../config.ts";
 import type { Database } from "../database.ts";
 import { CommandError, sh } from "../exec.ts";
 import type { TestUser } from "../flow-api.ts";
-import { checkRules, loadRules, type Rule, type RuleResult } from "../rules.ts";
+import { checkRules, loadRules, phoneFilesOf, type Rule, type RuleResult } from "../rules.ts";
 import { type DbSnapshot, diffSnapshots, snapshotDatabase } from "./db-diff.ts";
 import { runFacts } from "./facts.ts";
 import {
@@ -25,6 +27,7 @@ import {
 import { findFlowFile, LOGIN_FLOW, type LoadedFlow, loadFlow } from "./flows.ts";
 import { experimentInputs } from "./inputs.ts";
 import { AndroidDriver } from "./android-driver.ts";
+import { IosDriver } from "./ios-driver.ts";
 import type { Driver } from "./driver.ts";
 import { PlaywrightDriver } from "./playwright-driver.ts";
 import { Rep, type TraceMode } from "./rep.ts";
@@ -119,12 +122,27 @@ interface AndroidRuntime {
   appium: Appium;
 }
 
+/** What runs on iOS simulators need, started with the first one. */
+interface IosRuntime {
+  simulators: Simulators;
+  wda: WebDriverAgentBuild;
+  /** WebDriverAgent on each simulator, started when a run first uses it. */
+  agents: Map<string, Promise<WebDriverAgent>>;
+}
+
+/** The phones of a run, leased from the emulators or simulators; none for web and desktop apps. */
+interface PhoneLease {
+  acquire(n: number): Promise<string[]>;
+  release(ids: string[]): void;
+}
+
 /** Runs experiments: each repetition in its own branch, all at once up to `parallel`. */
 export class Runner {
   readonly branches: Branches;
   readonly store: RunStore;
   private browser?: Promise<Browser>;
   private android?: Promise<AndroidRuntime>;
+  private ios?: Promise<IosRuntime>;
   private headed = false;
   private readonly baselines = new Map<string, Promise<DbSnapshot>>();
   /** Old runs are pruned once per runner, before its first run. */
@@ -146,12 +164,15 @@ export class Runner {
   /** Validates experiments against the project; throws a ConfigError listing every problem. */
   async validate(experiments: Experiment[]): Promise<{ rules: Rule[]; warnings: string[] }> {
     const { kind } = this.project.config.app;
-    if (kind !== "web" && kind !== "tauri" && kind !== "android") {
-      throw new ConfigError(`app.kind ${kind}: only web, Tauri and Android apps can run experiments so far (the plan for ${kind} apps is in platforms-plan.md)`);
+    if (kind === "mac") {
+      throw new ConfigError(`app.kind ${kind}: only web, Tauri, Android and iOS apps can run experiments so far (the plan for ${kind} apps is in platforms-plan.md)`);
     }
     const rules = await loadRules(this.project);
     const problems: string[] = [];
     const warnings: string[] = [];
+    for (const rule of rules) {
+      if (rule.phone && kind !== "ios") problems.push(`rule ${rule.id}: phone: rules read an iOS app's data on its simulator (app.kind: ios)`);
+    }
     for (const experiment of experiments) {
       const result = await checkExperiment(experiment, this.project, rules);
       problems.push(...result.errors.map((e) => `${experiment.id}: ${e}`));
@@ -210,7 +231,7 @@ export class Runner {
   async run(experiments: Experiment[], options: RunOptions = {}): Promise<ExperimentResult[]> {
     const { rules } = await this.validate(experiments);
     // A phone's calls can only be caught at the proxy in front of its server.
-    options = { ...options, seam: this.project.config.app.kind === "android" ? "proxy" : (options.seam ?? seamFromEnv()) };
+    options = { ...options, seam: this.onPhones() ? "proxy" : (options.seam ?? seamFromEnv()) };
     const spec = options.version ?? {};
     const version = "tree" in spec ? spec : await this.branches.versions.resolve(spec);
     await this.branches.prepare(version);
@@ -224,6 +245,8 @@ export class Runner {
     if (this.browser) await (await this.browser).close().catch(() => undefined);
     // The emulators keep running for the next runs; `windtunnel devices stop` shuts them down.
     if (this.android) await (await this.android.catch(() => undefined))?.appium.close();
+    const ios = this.ios && (await this.ios.catch(() => undefined));
+    for (const agent of ios?.agents.values() ?? []) await (await agent.catch(() => undefined))?.stop();
     await this.branches.close();
   }
 
@@ -308,7 +331,7 @@ export class Runner {
     let phones: string[] = [];
     try {
       // Phones first: a run waiting for one shouldn't hold a server meanwhile.
-      if (this.project.config.android) phones = await (await this.androidRuntime()).emulators.acquire(job.users.length);
+      if (this.onPhones()) phones = await (await this.phoneLease()).acquire(job.users.length);
       branch = await this.branches.create(job.version, {
         logDir: dir,
         keepDatabase: job.options.keepDatabase,
@@ -316,14 +339,14 @@ export class Runner {
         beforeStart: async (db) => void (db && (await this.baseline(job.version.id, db))),
       });
     } catch (err) {
-      if (phones.length) (await this.androidRuntime()).emulators.release(phones);
+      if (phones.length) (await this.phoneLease()).release(phones);
       // One run that can't start must not take the others down with it.
       const summary: RepSummary = {
         rep: job.rep,
         variant: job.variant.name,
         outcome: "error",
         broken: [],
-        error: `could not start the ${this.project.config.android ? "run" : "branch"}: ${(err as Error).message.split("\n")[0]}`,
+        error: `could not start the ${this.onPhones() ? "run" : "branch"}: ${(err as Error).message.split("\n")[0]}`,
         durationMs: Date.now() - started,
         diff: "",
       };
@@ -352,12 +375,14 @@ export class Runner {
         tabs: tabLabels(job.users),
         dir,
         trace,
-        ...(this.project.config.android ? { client: "phone" } : {}),
+        ...(this.onPhones() ? { client: "phone" } : {}),
       });
       await rep.execute();
 
+      const phoneFiles = phoneFilesOf(job.rules);
       const target = {
         database: branch.database,
+        ...(phoneFiles.length ? { phones: await rep.phoneData(phoneFiles, dir) } : {}),
         cwd: this.project.root,
         env: {
           DATA_DIR: branch.dataDir,
@@ -388,7 +413,7 @@ export class Runner {
     const keepTraces = trace === "on" || (trace === "failures" && outcome !== "ok");
     const traces = rep ? await rep.close(keepTraces).catch(() => []) : [];
     await branch.stop().catch(() => undefined);
-    if (phones.length) (await this.androidRuntime()).emulators.release(phones);
+    if (phones.length) (await this.phoneLease()).release(phones);
 
     const warnings = rep?.warnings() ?? [];
     const summary: RepSummary = {
@@ -463,20 +488,69 @@ export class Runner {
     return snapshot;
   }
 
-  /** A browser for web and Tauri apps; the run's phones for Android apps. */
+  /** Whether the app runs on phones (emulators or simulators), which reach the server through the proxy. */
+  private onPhones(): boolean {
+    return !!(this.project.config.android || this.project.config.ios);
+  }
+
+  private async phoneLease(): Promise<PhoneLease> {
+    return this.project.config.ios ? (await this.iosRuntime()).simulators : (await this.androidRuntime()).emulators;
+  }
+
+  /** A browser for web and Tauri apps; the run's phones for Android and iOS apps. */
   private async driver(version: CodeVersion, phones: string[], branch: Branch): Promise<Driver> {
-    const android = this.project.config.android;
+    const { android, ios } = this.project.config;
+    if (ios) {
+      const runtime = await this.iosRuntime();
+      const { phoneApp } = await this.branches.prepare(version);
+      return new IosDriver({
+        phones,
+        app: { bundleId: ios.bundleId, app: phoneApp!, arguments: ios.arguments, env: ios.env },
+        proxy: branch.proxy!,
+        agent: (udid) => this.agent(runtime, udid),
+      });
+    }
     if (!android) return new PlaywrightDriver(await this.launch());
     const { sdk, emulators, appium } = await this.androidRuntime();
-    const { apk } = await this.branches.prepare(version);
-    for (const phone of phones) await emulators.install(phone, apk!, android.package);
+    const { phoneApp } = await this.branches.prepare(version);
+    for (const phone of phones) await emulators.install(phone, phoneApp!, android.package);
     return new AndroidDriver({
       sdk,
       appium,
       phones,
-      app: { package: android.package, activity: android.activity, apk: apk!, extras: android.extras },
+      app: { package: android.package, activity: android.activity, apk: phoneApp!, extras: android.extras },
       proxy: branch.proxy!,
     });
+  }
+
+  private iosRuntime(): Promise<IosRuntime> {
+    this.ios ??= (async () => {
+      const source = await findWebDriverAgentSource(this.project.root);
+      if (!source) throw new ConfigError("WebDriverAgent is not installed: `npm i -D appium-webdriveragent` in the project (see `windtunnel doctor`)");
+      const logs = join(this.project.stateDir, "logs", "devices");
+      const wda = await buildWebDriverAgent(source, join(this.project.cacheDir, "wda"), join(logs, "wda-build.log"));
+      return { simulators: new Simulators({ max: this.project.config.ios!.devices }), wda, agents: new Map() };
+    })();
+    return this.ios;
+  }
+
+  /** WebDriverAgent on a simulator, reading the app's screen. */
+  private agent(runtime: IosRuntime, udid: string): Promise<WebDriverAgent> {
+    let agent = runtime.agents.get(udid);
+    if (!agent) {
+      agent = (async () => {
+        const started = await WebDriverAgent.start(runtime.wda, {
+          udid,
+          dir: join(this.project.cacheDir, "wda", "runs"),
+          logFile: join(this.project.stateDir, "logs", "devices", `wda-${udid}.log`),
+        });
+        await started.open(this.project.config.ios!.bundleId);
+        return started;
+      })();
+      runtime.agents.set(udid, agent);
+      agent.catch(() => runtime.agents.delete(udid));
+    }
+    return agent;
   }
 
   private androidRuntime(): Promise<AndroidRuntime> {
@@ -486,7 +560,12 @@ export class Runner {
       const { avd, devices } = this.project.config.android!;
       const logs = join(this.project.stateDir, "logs", "devices");
       const emulators = new Emulators(sdk, { avd, max: devices, logDir: logs });
-      const appium = await Appium.start({ from: this.project.root, sdk, logFile: join(logs, "appium.log") });
+      const appium = await Appium.start({
+        from: this.project.root,
+        driver: "appium-uiautomator2-driver",
+        env: { ANDROID_HOME: sdk.root, ANDROID_SDK_ROOT: sdk.root },
+        logFile: join(logs, "appium.log"),
+      });
       return { sdk, emulators, appium };
     })();
     return this.android;

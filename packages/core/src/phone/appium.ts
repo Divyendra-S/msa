@@ -8,7 +8,6 @@ import { killTree } from "../exec.ts";
 import { allocatePort, releasePort } from "../ports.ts";
 import { exists } from "../project.ts";
 import { sleep } from "../runner/time.ts";
-import type { AndroidSdk } from "./sdk.ts";
 
 /** The part of a webdriverio session Wind Tunnel uses. */
 export interface PhoneSession {
@@ -31,9 +30,12 @@ export interface PhoneElement {
   getSize(): Promise<{ width: number; height: number }>;
 }
 
+/** The Appium driver a kind of phone needs, as an npm package. */
+export type AppiumDriverPackage = "appium-uiautomator2-driver";
+
 /**
- * Where Appium and its UiAutomator2 driver are installed: the nearest folder above the project
- * with `node_modules/appium` (it is also APPIUM_HOME, so drivers installed there are found).
+ * Where Appium and its drivers are installed: the nearest folder above the project with
+ * `node_modules/appium` (it is also APPIUM_HOME, so drivers installed there are found).
  */
 export async function findAppium(from: string): Promise<{ home: string; bin: string } | undefined> {
   let dir = from;
@@ -44,6 +46,11 @@ export async function findAppium(from: string): Promise<{ home: string; bin: str
     if (parent === dir) return undefined;
     dir = parent;
   }
+}
+
+/** Whether an Appium driver package is installed next to Appium. */
+export function hasAppiumDriver(home: string, driver: AppiumDriverPackage): Promise<boolean> {
+  return exists(join(home, "node_modules", driver, "package.json"));
 }
 
 /** One Appium server for a runner; one session per phone, kept for the runner's life. */
@@ -61,16 +68,18 @@ export class Appium {
     this.url = `http://127.0.0.1:${port}`;
   }
 
-  static async start(options: { from: string; sdk: AndroidSdk; logFile: string }): Promise<Appium> {
+  static async start(options: { from: string; driver: AppiumDriverPackage; env?: Record<string, string>; logFile: string }): Promise<Appium> {
     const found = await findAppium(options.from);
-    if (!found) {
-      throw new Error("Appium is not installed: `npm i -D appium appium-uiautomator2-driver webdriverio` in the project (see `windtunnel doctor`)");
+    if (!found || !(await hasAppiumDriver(found.home, options.driver))) {
+      throw new Error(`Appium is not installed: \`npm i -D appium ${options.driver} webdriverio\` in the project (see \`windtunnel doctor\`)`);
     }
     const port = await allocatePort();
     await mkdir(dirname(options.logFile), { recursive: true });
     const log = createWriteStream(options.logFile, { flags: "a" });
-    const child = spawn(process.execPath, [found.bin, "server", "--address", "127.0.0.1", "--port", String(port), "--log-level", "warn", "--log-no-colors"], {
-      env: { ...process.env, APPIUM_HOME: found.home, ANDROID_HOME: options.sdk.root, ANDROID_SDK_ROOT: options.sdk.root },
+    // WINDTUNNEL_APPIUM_LOG=debug logs every command to the phone, for working out what went wrong there.
+    const level = process.env.WINDTUNNEL_APPIUM_LOG ?? "warn";
+    const child = spawn(process.execPath, [found.bin, "server", "--address", "127.0.0.1", "--port", String(port), "--log-level", level, "--log-no-colors"], {
+      env: { ...process.env, ...options.env, APPIUM_HOME: found.home },
       stdio: ["ignore", "pipe", "pipe"],
     });
     child.stdout?.pipe(log);
@@ -87,18 +96,21 @@ export class Appium {
     throw new Error(`Appium did not start in 60 s; see ${options.logFile}`);
   }
 
-  /** The phone's session, started on first use (the first one installs Appium's server on the phone). */
-  session(serial: string): Promise<PhoneSession> {
-    let session = this.sessions.get(serial);
+  /**
+   * The phone's session, started on first use with these capabilities (the first one puts
+   * Appium's own server on the phone); `settings` are applied once it's up.
+   */
+  session(device: string, capabilities: Record<string, unknown>, settings?: Record<string, unknown>): Promise<PhoneSession> {
+    let session = this.sessions.get(device);
     if (!session) {
-      session = this.connect(serial);
-      this.sessions.set(serial, session);
-      session.catch(() => this.sessions.delete(serial));
+      session = this.connect(capabilities, settings);
+      this.sessions.set(device, session);
+      session.catch(() => this.sessions.delete(device));
     }
     return session;
   }
 
-  private async connect(serial: string): Promise<PhoneSession> {
+  private async connect(capabilities: Record<string, unknown>, settings?: Record<string, unknown>): Promise<PhoneSession> {
     const require = createRequire(join(this.home, "package.json"));
     const wdio = (await import(pathToFileURL(require.resolve("webdriverio")).href)) as {
       remote(options: object): Promise<PhoneSession>;
@@ -108,23 +120,12 @@ export class Appium {
       port: this.port,
       path: "/",
       logLevel: "silent",
+      // The first session on a phone installs Appium's server there, which takes a while.
       connectionRetryTimeout: 180_000,
       connectionRetryCount: 0,
-      capabilities: {
-        platformName: "Android",
-        "appium:automationName": "UiAutomator2",
-        "appium:udid": serial,
-        "appium:noReset": true,
-        "appium:newCommandTimeout": 0,
-        "appium:disableWindowAnimation": true,
-        "appium:skipLogcatCapture": true,
-        "appium:skipUnlock": true,
-        "appium:uiautomator2ServerLaunchTimeout": 120_000,
-        "appium:adbExecTimeout": 120_000,
-      },
+      capabilities,
     });
-    // Flows wait for what they need themselves; UiAutomator's own wait for an idle screen only slows them.
-    await session.updateSettings({ waitForIdleTimeout: 0, waitForSelectorTimeout: 0 });
+    if (settings) await session.updateSettings(settings);
     return session;
   }
 

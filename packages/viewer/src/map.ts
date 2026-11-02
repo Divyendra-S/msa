@@ -206,7 +206,7 @@ export async function mapView(workspace: Workspace, runner: Runner): Promise<Map
       id: e.id,
       ...(e.description ? { description: e.description } : {}),
       users: e.users ?? [],
-      pressure: pressureOf(e, steps, routes.filter((r) => r.webhook).map((r) => r.key), !!project.config.android),
+      pressure: pressureOf(e, steps, routes.filter((r) => r.webhook).map((r) => r.key), !!(project.config.android || project.config.ios)),
       ...(entry && result && focus
         ? {
             run: {
@@ -344,6 +344,7 @@ function pressureOf(e: Experiment, steps: MapExperiment["steps"], webhookRoutes:
       : p.do === "background" ? `backgrounded ${duration(p.for)}`
       : p.do === "rotate" ? "phone turned"
       : p.do === "offline" ? "offline"
+      : p.do === "push" ? "push notification"
       : "database edited";
     out.push({ what, routes: "request" in p ? caught(p.request, p.step) : inStep(p.step), ...(p.step ? { step: p.step } : {}) });
   }

@@ -16,7 +16,7 @@ export function newGroup(): Group {
  * What a step does to the client while its first request is in flight: reload the page, or (on a
  * phone) kill the app, send it to the background, turn the phone.
  */
-export type Interruption = "refresh" | "kill-app" | "background" | "rotate";
+export type Interruption = "refresh" | "kill-app" | "background" | "rotate" | "push";
 
 /** What a tab exposes to the network layer. */
 export interface NetworkTab {
@@ -290,6 +290,11 @@ export class Network {
       }
       case "rotate": {
         note(record, "phone turned to landscape while the server handled this request");
+        await tab.interrupt(what, "start");
+        return this.forward(call);
+      }
+      case "push": {
+        note(record, "a push notification arrived while the server handled this request");
         await tab.interrupt(what, "start");
         return this.forward(call);
       }

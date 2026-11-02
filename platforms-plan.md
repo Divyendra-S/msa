@@ -1,7 +1,7 @@
 # Wind Tunnel beyond web apps — Plan
 
-Last updated 2026-10-30. **Status: Phases 1 (groundwork), 2 (Tauri) and 3 (Android) done and
-pushed. Phase 4 (iOS) is in progress.**
+Last updated 2026-11-02. **Status: Phases 1 (groundwork), 2 (Tauri), 3 (Android) and 4 (iOS)
+done and pushed. Phase 5 (Swift Mac apps) is in progress.**
 
 Today Wind Tunnel tests Next.js + Postgres web apps. This plan adds Tauri apps, Android and iOS
 apps on an emulator or simulator, and native Swift Mac apps, all running in the background: no
@@ -14,8 +14,8 @@ window on screen, no mouse or keyboard taken.
 | 1 Groundwork | Done, pushed |
 | 2 Tauri | Done, pushed |
 | 3 Android | Done, pushed |
-| 4 iOS | In progress |
-| 5 Swift Mac apps | Not started |
+| 4 iOS | Done, pushed |
+| 5 Swift Mac apps | In progress |
 
 What Phase 1 changed, for anyone using Wind Tunnel today:
 
@@ -46,6 +46,18 @@ What Phase 3 adds:
 - `zoo/shop-android`, the shop's Android app: the shop's bugs caught from the phone, and a
   phone bug; `pnpm zoo:verify:android`.
 - The Map lists the phone's screens and which server routes its calls reach.
+
+What Phase 4 adds:
+
+- `app.kind: ios`: the app runs on iOS simulators booted without Simulator.app (`windtunnel
+  devices create` once, in the project), its server as for Android. The same `phoneFlow`s drive
+  it, plus `ui.openLink(url)`. WebDriverAgent is built once and run directly; no Appium for iOS.
+- iOS pressures: `push` (a notification during or after a step) and a link opened twice.
+- Rules on the phone's own data: `phone: <path>` runs a rule's SQL on the app's SQLite file,
+  copied off each phone after the run.
+- `zoo/shop-ios`, the shop's SwiftUI app: the shop's bugs caught from the iPhone, a link opened
+  twice, and an order lost by an actor's reentrancy; `pnpm zoo:verify:ios`.
+- The Map reads Swift: the app's screens and which server routes their actions reach.
 
 ## The idea
 
@@ -305,19 +317,65 @@ Found on the way:
 
 The same proxy and server side as Phase 3.
 
-- [ ] **Setup:** the iOS simulator runtime (ask first, about 8 GB).
-- [ ] **Test app `zoo/shop-ios`:** a small SwiftUI client of the shop's API, the same screens as
-  Android; the API address comes from a launch argument.
-- [ ] **Device:** `simctl boot` without Simulator.app; the app is reinstalled or the simulator
+- [x] **Setup:** the iOS simulator runtime (ask first, about 8 GB). Done: the owner said yes;
+  iOS 26.0.1 for Apple silicon, 8.05 GB download, 7.5 GB on disk. `windtunnel devices create`
+  makes `windtunnel-iphone-1` and `-2` (iPhone 17).
+- [x] **Test app `zoo/shop-ios`:** a small SwiftUI client of the shop's API, the same screens as
+  Android; the API address comes from a launch argument. Done: plus an order history in SQLite
+  and `shop://checkout`, the payment page's way back; the shop got `GET /api/orders`.
+- [x] **Device:** `simctl boot` without Simulator.app; the app is reinstalled or the simulator
   erased per run. Data stored on the phone is a folder on the Mac (`simctl get_app_container`),
-  so SQL rules can read it.
-- [ ] **Driver:** Appium with the XCUITest driver and `isHeadless`. First check: no Simulator
-  window opens on Xcode 26.
-- [ ] **iOS pressures:** a push notification during a step (`simctl push`), a link opened twice
-  (`simctl openurl`), plus the Phase 3 ones.
+  so SQL rules can read it. Done: the app is reinstalled per run; a rule with `phone: <path>`
+  runs on each phone's copy of that file, with that phone's user's facts.
+- [x] **Driver:** Appium with the XCUITest driver and `isHeadless`. First check: no Simulator
+  window opens on Xcode 26. Done differently: WebDriverAgent (the XCUITest driver's server on the
+  phone) is built once and run with `xcodebuild test-without-building`, spoken to directly. The
+  XCUITest driver writes the user's Simulator.app preferences on every session and quits
+  Simulator.app if it's open, so it isn't used. No Simulator window opened.
+- [x] **iOS pressures:** a push notification during a step (`simctl push`), a link opened twice
+  (`simctl openurl`), plus the Phase 3 ones. Done: `push` (during or after a step, with a
+  payload) and `ui.openLink`, which `double-submit` opens twice; `offline` on iOS is the proxy
+  alone (a simulator has no airplane mode).
 
 **Done when:** the same shop bugs fail from the simulator and pass with the fixes, no Simulator
 window appears, and Replay shows iOS screenshots.
+
+- [x] `pnpm zoo:verify:ios` passes: 252 runs in 1,571 s on two simulators, started from shut
+  down. The clean app and the control pass all 10 experiments; from the iPhone, the shop's case 01
+  breaks `one-order-per-cart` and case 02 `one-charge-per-order` (lost response, 3/3), case 05
+  breaks `stock-non-negative` with two buyers (3/9, the ordering that releases both at once, as on
+  the web); `i1-pay-link-twice` breaks `one-order-per-cart` (3/3), and `i2-history-refresh` breaks
+  the phone rule `history-has-every-confirmed-order` (3/3).
+- [x] No Simulator window: a window watcher ran from before the first boot through the iOS
+  verify. Simulator.app never started. Once, at the very first boot of the newly downloaded
+  runtime, a CoreServicesUIAgent window (macOS checking the new runtime) showed briefly; it didn't
+  come back on later boots, including the verify's cold boots. The other new windows were the
+  owner's own (the screenshot tool, Notification Centre). Wind Tunnel's runs now write nothing to
+  Simulator's or Xcode's settings or folders.
+- [x] Replay shows the iPhone's screens: the Mac app's Replay for `zoo/shop-ios` shows each
+  step's iPhone screenshot, its calls, and the pressure ("app killed mid-request").
+- [x] `pnpm typecheck` and `pnpm test` pass (163 tests). The other zoo apps' verifies give the
+  same tables as before, after the phone code shared with Android was moved: Android PASS (180
+  runs in 632 s, no emulator window), the shop PASS (840 runs in 693 s, the 3 expected errors in
+  case 04), notes PASS (72 runs in 35 s).
+- [x] Docs: README (iOS apps, layout), `docs/experiments.md` (iOS apps, `push`, `openLink`,
+  phone rules), the init skill, `zoo/shop-ios/README.md`, `zoo/cases/README.md`, `activity.md`.
+- [x] The owner says "push".
+
+Found on the way:
+- Xcode 26.0.1 has no `lib_TestingInterop.dylib` for the simulator, which WebDriverAgent expects
+  of every Xcode 26: its build fails. Wind Tunnel leaves out what the Xcode lacks, with the
+  setting WebDriverAgent already uses for Xcode 16.
+- iOS 26 asks "Open in “Shop”?" for a link from `simctl openurl`. XCUITest's alert accept says it
+  worked but doesn't answer it; unanswered questions pile up and swallow every tap and keystroke,
+  while the app's own screen looks normal. Wind Tunnel taps Open where SpringBoard draws it, and
+  checks typed text arrived.
+- A silent push (`content-available` alone) didn't reach the app on the simulator; a push with
+  an `alert` did.
+- Xcode puts each build's derived data in `~/Library/Developer/Xcode/DerivedData` unless told
+  otherwise; the default build keeps it in `build/`, and WebDriverAgent's runs in the cache.
+- Not yet: real devices, `expire-session`, `advance-clock` and `replay-as` on phones, scrolling to
+  a control below the fold, phone rules on Android.
 
 ## Phase 5 — Swift Mac apps
 

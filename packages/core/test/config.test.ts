@@ -66,6 +66,21 @@ db:
     assert.throws(() => parseConfig("app:\n  start: x\nandroid:\n  package: p\n"), /app\.kind android/);
   });
 
+  it("reads an iOS app on the simulator, and the server it talks to", () => {
+    const config = parseConfig("app:\n  kind: ios\n  dir: ../shop\n  start: next start\nios:\n  bundleId: dev.windtunnel.shop\n  arguments: [-apiUrl, $BASE_URL]\n");
+    assert.equal(config.app.dir, "../shop");
+    assert.deepEqual(config.ios, {
+      dir: ".",
+      build: 'xcodebuild -quiet -sdk iphonesimulator -configuration Debug -IDECustomDerivedDataLocation="$PWD/build/DerivedData" ARCHS="$(uname -m)" build',
+      bundleId: "dev.windtunnel.shop",
+      arguments: ["-apiUrl", "$BASE_URL"],
+      env: {},
+      devices: 2,
+    });
+    assert.throws(() => parseConfig("app:\n  kind: ios\n  start: x\n"), /ios:/);
+    assert.throws(() => parseConfig("app:\n  start: x\nios:\n  bundleId: b\n"), /app\.kind ios/);
+  });
+
   it("reads a SQLite database inside the run's data folder", () => {
     const config = parseConfig("app:\n  start: x\n  isolateHome: true\ndb:\n  kind: sqlite\n  seed: node seed.js\n");
     assert.deepEqual(config.db, { kind: "sqlite", file: "app.db", seed: "node seed.js" });

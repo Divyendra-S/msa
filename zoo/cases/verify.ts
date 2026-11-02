@@ -5,6 +5,7 @@
 //   pnpm zoo:verify --app notes      the Tauri notes app (zoo/notes), its cases in zoo/notes/cases
 //   pnpm zoo:verify --app shop-android   the shop's Android app (zoo/shop-android) on emulators: its
 //                                        own cases, and shop cases it names with `from:`
+//   pnpm zoo:verify --app shop-ios       the shop's iOS app (zoo/shop-ios) on simulators, the same way
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -13,6 +14,8 @@ import {
   type Experiment,
   type ExperimentResult,
   loadExperiments,
+  loadRules,
+  parseRules,
   Runner,
   stopOnSignals,
 } from "@windtunnel/core";
@@ -82,7 +85,9 @@ async function main(): Promise<number> {
   });
   const repeat = Number(values.repeat);
   const app = values.app;
-  if (app !== "shop" && app !== "notes" && app !== "shop-android") throw new Error(`--app must be shop, notes or shop-android, not ${app}`);
+  if (app !== "shop" && app !== "notes" && app !== "shop-android" && app !== "shop-ios") {
+    throw new Error(`--app must be shop, notes, shop-android or shop-ios, not ${app}`);
+  }
   const appDir = join(import.meta.dirname, "..", app);
   const casesDir = app === "shop" ? import.meta.dirname : join(appDir, "cases");
   const cases = await loadCases(casesDir, values.case);
@@ -90,6 +95,14 @@ async function main(): Promise<number> {
   const runner = await Runner.open(appDir);
   stopOnSignals(() => runner.close());
   try {
+    // The iOS app's rules are the shop's plus one on the phone's data: the shop's must not drift.
+    if (app === "shop-ios") {
+      const shop = parseRules(await readFile(join(import.meta.dirname, "..", "shop", ".windtunnel", "rules.yaml"), "utf8"));
+      const own = new Map((await loadRules(runner.project)).map((r) => [r.id, r]));
+      for (const rule of shop) {
+        if (JSON.stringify(own.get(rule.id)) !== JSON.stringify(rule)) throw new Error(`zoo/shop-ios/.windtunnel/rules.yaml: ${rule.id} differs from the shop's`);
+      }
+    }
     const experiments: Experiment[] = await loadExperiments(runner.project, values.experiment ?? []);
     for (const c of cases) {
       if (!c.control && !experiments.some((e) => e.id === c.experiment)) throw new Error(`${c.id}: experiment ${c.experiment} not selected`);

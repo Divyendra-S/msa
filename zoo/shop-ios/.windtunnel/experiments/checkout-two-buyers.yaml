@@ -1,0 +1,9 @@
+description: Alice and Bob pay for the last Limited Print on their phones at the same moment, in every order.
+flow: checkout
+users: [alice, bob]
+params:
+  product: Limited Print
+  mayBeSoldOut: true
+race:
+  request: POST /api/orders
+  order: each

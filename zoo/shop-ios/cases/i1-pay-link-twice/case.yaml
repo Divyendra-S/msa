@@ -1,0 +1,13 @@
+id: i1-pay-link-twice
+title: Payment link opened twice
+summary: >-
+  The app counts on the disabled "Pay now" button to pay once, but the payment page's way back
+  (shop://checkout) pays without the button; with the server no longer making one order per cart
+  (the shop's case 01), coming back twice turns one cart into two orders.
+experiment: checkout-link-twice
+perturbation: shop://checkout opened twice
+breaks: [one-order-per-cart]
+handler: app/api/orders/route.ts
+fix: >-
+  Create the order atomically (unique cart_id + INSERT … ON CONFLICT), and check `paying` in
+  `pay()` itself, not only on the button.

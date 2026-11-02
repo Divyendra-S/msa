@@ -1,0 +1,7 @@
+description: The phone is offline when Alice taps "Pay now"; back online, she taps it again.
+flow: checkout
+perturb:
+  - do: offline
+    step: pay
+  - do: repeat
+    step: pay

@@ -1,0 +1,5 @@
+# Wind Tunnel local state. Flows, experiments and rules.yaml are meant to be committed.
+runs/
+logs/
+pids/
+cache/

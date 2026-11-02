@@ -1,15 +1,16 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { MockEvent, Tenant } from "@windtunnel/mock-pay";
-import { type Database, runStatement } from "../database.ts";
+import { type Database, runStatement, settleSqliteCopy } from "../database.ts";
 import type { FlowContext, TestUser } from "../flow-api.ts";
-import type { PhoneTab } from "./android-driver.ts";
+import type { PhoneData } from "../rules.ts";
 import type { Driver, DriverSession, DriverTab, ScreenState } from "./driver.ts";
 import type { BrowserPerturbation, Experiment, RaceOrder, Variant, WebhookSpec } from "./experiment.ts";
 import { isNetworkPerturbation } from "./experiment.ts";
 import type { LoadedFlow } from "./flows.ts";
 import { type ActionCall, describeAction } from "./instrument.ts";
 import { type Call, type Group, type Interruption, Network, newGroup, type RaceRecord, type RequestRecord } from "./network.ts";
+import type { PhoneTab } from "./phone-ui.ts";
 import { pathOf } from "./playwright-driver.ts";
 import type { HttpProxy } from "./proxy.ts";
 import { type LocatorFailure, locatorFailure } from "./snapshot.ts";
@@ -533,10 +534,10 @@ export class Rep {
     // A step's first request can carry one interruption: a refresh, or a phone pressure.
     const during = perturbations.find(
       (p): p is Extract<BrowserPerturbation, { when: "during" | "after" }> =>
-        (p.do === "refresh" || p.do === "kill-app" || p.do === "background" || p.do === "rotate") && p.when === "during",
+        (p.do === "refresh" || p.do === "kill-app" || p.do === "background" || p.do === "rotate" || p.do === "push") && p.when === "during",
     );
     const offline = perturbations.some((p) => p.do === "offline");
-    if (offline) notes.push("phone offline during the step (airplane mode), online again after it");
+    if (offline) notes.push("phone offline during the step, online again after it");
     let result = await this.attempt(tab, name, undefined, action, {
       notes,
       doubleSubmit: perturbations.some((p) => p.do === "double-submit"),
@@ -571,9 +572,12 @@ export class Rep {
         await tab.driver.reload();
         await this.network.quiet(tab.group);
         this.noteLast(tab, name, "page refreshed after the step");
-      } else if ((p.do === "kill-app" || p.do === "background" || p.do === "rotate") && p.when === "after") {
+      } else if ((p.do === "kill-app" || p.do === "background" || p.do === "rotate" || p.do === "push") && p.when === "after") {
         const phone = this.phone(tab);
-        if (p.do === "kill-app") {
+        if (p.do === "push") {
+          await this.push(phone, p.payload);
+          this.noteLast(tab, name, "a push notification arrived after the step");
+        } else if (p.do === "kill-app") {
           await phone.kill();
           await phone.reopen();
           this.noteLast(tab, name, "app killed after the step, then opened again");
@@ -592,6 +596,28 @@ export class Rep {
       }
     }
     return result;
+  }
+
+  /**
+   * Copies each phone's app files that `phone:` rules read, into `dir/phone/<tab>/`. The app is
+   * stopped first, so a database it was writing is whole.
+   */
+  async phoneData(paths: string[], dir: string): Promise<PhoneData[]> {
+    const out: PhoneData[] = [];
+    for (const tab of this.tabs) {
+      if (tab.isFork || !("kill" in tab.driver)) continue;
+      const phone = tab.driver as PhoneTab;
+      if (!phone.appFile) throw new Error("phone: rules read an iOS app's data; this phone can't hand it over");
+      await phone.kill();
+      const files: Record<string, string | undefined> = {};
+      for (const path of paths) {
+        const dest = join(dir, "phone", tab.label, path.replace(/[^\w.-]+/g, "_"));
+        files[path] = (await phone.appFile(path, dest)) ? dest : undefined;
+        if (files[path] && /\.(sqlite3?|db)$/i.test(path)) await settleSqliteCopy(dest);
+      }
+      out.push({ user: tab.user.name, files });
+    }
+    return out;
   }
 
   private noteLast(tab: Tab, step: string, note: string): void {
@@ -633,8 +659,17 @@ export class Rep {
       note(`app brought back after ${ms} ms`);
       return phone.reopen();
     }
+    if (what === "push") {
+      note("a push notification arrived while a request was in flight");
+      return this.push(phone, armed?.perturbation.do === "push" ? armed.perturbation.payload : {});
+    }
     note("phone turned to landscape while a request was in flight");
     return phone.rotate(true);
+  }
+
+  private push(phone: PhoneTab, payload: Record<string, unknown>): Promise<void> {
+    if (!phone.push) throw new Error("push: this phone can't deliver push notifications (iOS simulators can)");
+    return phone.push(payload);
   }
 
   private async attempt<T>(

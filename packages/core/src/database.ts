@@ -29,6 +29,17 @@ export function describeDatabase(db: Database | undefined): string {
  * Opens a SQLite file with Node's built-in driver. Loaded on first use, so apps on Postgres
  * never load it (it is still marked experimental in some Node versions).
  */
+/** Folds a copied SQLite file's write-ahead log into it, so the copy opens read-only on its own. */
+export async function settleSqliteCopy(path: string): Promise<void> {
+  const db = await openSqlite(path);
+  try {
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    db.exec("PRAGMA journal_mode = DELETE");
+  } finally {
+    db.close();
+  }
+}
+
 export async function openSqlite(path: string, options: { readOnly?: boolean } = {}): Promise<DatabaseSync> {
   const { DatabaseSync } = await import("node:sqlite");
   const db = new DatabaseSync(path, { readOnly: !!options.readOnly });

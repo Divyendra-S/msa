@@ -1,0 +1,13 @@
+id: i2-history-refresh
+title: Order history refresh loses an order
+summary: >-
+  A push makes the app refresh its order history: the OrderHistory actor reads its orders, waits
+  for the shop's list, then writes back what it read. The order placed while it waited is gone
+  from the phone, though the user saw it confirmed (actor reentrancy).
+experiment: checkout-order-push
+perturbation: A push during the checkout; the list comes 2 s later
+breaks: [history-has-every-confirmed-order]
+handler: ShopIOS/OrderHistory.swift
+fix: >-
+  Write after the await only what the await brought: record each order of the shop's list
+  (an upsert), instead of replacing the history with the copy read before it.

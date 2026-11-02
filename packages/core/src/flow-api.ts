@@ -46,7 +46,12 @@ export interface PhoneUi {
   see(text: string | RegExp, options?: { timeout?: number }): Promise<string>;
   /** Whether matching text is on screen right now. */
   shows(text: string | RegExp): Promise<boolean>;
-  /** Presses the system Back button. */
+  /**
+   * Opens a link with the app, as tapping it in another app does: a payment page sending the
+   * user back, a link in an email. The app must handle the link's scheme.
+   */
+  openLink(url: string): Promise<void>;
+  /** Presses the system Back button (Android; an iOS app has its own). */
   back(): Promise<void>;
   /** Everything on screen as text, top to bottom. */
   text(): Promise<string>;
@@ -61,7 +66,7 @@ export type PhoneFlowFunction = (ctx: PhoneFlowContext) => Promise<void>;
 
 export interface Flow {
   readonly kind: "windtunnel.flow";
-  /** What the flow drives: a page (web and Tauri apps) or a phone (Android). */
+  /** What the flow drives: a page (web and Tauri apps) or a phone (Android and iOS). */
   readonly surface: "page" | "phone";
   /** A phone flow is called with a PhoneFlowContext in its place. */
   readonly run: FlowFunction;

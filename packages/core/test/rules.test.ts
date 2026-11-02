@@ -5,8 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { ConfigError } from "../src/config.ts";
-import { openSqlite } from "../src/database.ts";
-import { checkRules, parseRules, type RunFacts } from "../src/rules.ts";
+import { openSqlite, settleSqliteCopy } from "../src/database.ts";
+import { checkRules, parseRules, phoneFilesOf, type RunFacts } from "../src/rules.ts";
 
 const FACTS: RunFacts = {
   requests: [
@@ -105,5 +105,39 @@ crashes:
     assert.equal(results[2]!.error, "check exited with 3: boom");
     const [held] = await checkRules({ cwd: dir }, parseRules("lost:\n  check: node check.mjs\n"), { requests: [], pages: [] });
     assert.deepEqual(held, { id: "lost", ok: true, rows: [] });
+  });
+
+  it("phone rules run on each phone's own file, with that phone's user's facts, and say whose phone broke them", async () => {
+    const rules = parseRules(`history:
+  phone: Library/Application Support/shop.sqlite
+  sql: >-
+    SELECT p.step FROM windtunnel_pages p
+    WHERE p.text LIKE '%Order placed%' AND NOT EXISTS (SELECT 1 FROM orders)
+server:
+  sql: SELECT 1 WHERE 0
+`);
+    assert.deepEqual(phoneFilesOf(rules), ["Library/Application Support/shop.sqlite"]);
+    const alice = join(dir, "alice.sqlite");
+    const bob = join(dir, "bob.sqlite");
+    for (const file of [alice, bob]) {
+      const db = await openSqlite(file);
+      db.exec("PRAGMA journal_mode = WAL; CREATE TABLE orders (order_id INTEGER PRIMARY KEY)");
+      if (file === bob) db.exec("INSERT INTO orders VALUES (1)");
+      db.close();
+      await settleSqliteCopy(file);
+    }
+    const facts: RunFacts = { requests: [], pages: [...FACTS.pages, { ...FACTS.pages[0]!, tab: "bob", user_name: "bob" }] };
+    const phones = (aliceFile: string | undefined) => [
+      { user: "alice", files: { "Library/Application Support/shop.sqlite": aliceFile } },
+      { user: "bob", files: { "Library/Application Support/shop.sqlite": bob } },
+    ];
+    const [history, server] = await checkRules({ cwd: dir, phones: phones(alice) }, rules, facts);
+    assert.deepEqual(history, { id: "history", ok: false, rows: [{ user: "alice", step: "done" }] });
+    assert.equal(server!.ok, true);
+    // An app that never wrote its file kept nothing to break the rule; outside a run there are no phones.
+    assert.equal((await checkRules({ cwd: dir, phones: phones(undefined) }, rules, facts))[0]!.ok, true);
+    assert.equal((await checkRules({ cwd: dir }, rules, facts))[0]!.ok, true);
+    assert.throws(() => parseRules("x:\n  phone: a.db\n  check: node x.mjs\n"), /sql, not check/);
+    assert.throws(() => parseRules("x:\n  phone: ../a.db\n  sql: SELECT 1\n"), /inside the app's data folder/);
   });
 });

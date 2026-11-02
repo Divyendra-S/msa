@@ -108,12 +108,16 @@ perturb:
   - { do: kill-app, step: pay }
   - { do: background, step: pay, for: 2s, when: after }
   - { do: rotate, step: pay }
-  - { do: offline, step: pay }`);
+  - { do: offline, step: pay }
+  - { do: push, step: pay, payload: { aps: { alert: Hi }, event: orders-changed } }
+  - { do: push, step: confirmation, when: after }`);
     assert.deepEqual(e.perturb, [
       { do: "kill-app", step: "pay", when: "during" },
       { do: "background", step: "pay", when: "after", for: 2000 },
       { do: "rotate", step: "pay", when: "during" },
       { do: "offline", step: "pay" },
+      { do: "push", step: "pay", when: "during", payload: { aps: { alert: "Hi" }, event: "orders-changed" } },
+      { do: "push", step: "confirmation", when: "after", payload: { aps: { alert: "Wind Tunnel" } } },
     ]);
   });
 
@@ -132,7 +136,10 @@ perturb:
         "refresh: not for phone apps (use kill-app or background)",
         "second-tab: not for phone apps (it needs a browser)",
       ]);
-      assert.deepEqual(await check("web", "flow: click\nperturb: [{ do: offline, step: pay }]"), ["offline: only for phone apps (app.kind: android)"]);
+      assert.deepEqual(await check("web", "flow: click\nperturb: [{ do: offline, step: pay }]"), ["offline: only for phone apps (app.kind: android or ios)"]);
+      assert.deepEqual(await check("ios", "flow: tap\nperturb: [{ do: push, step: pay }, { do: offline, step: pay }, { do: double-submit, step: pay }]"), []);
+      assert.deepEqual(await check("android", "flow: tap\nperturb: [{ do: push, step: pay }]"), ["push: only for iOS apps so far (app.kind: ios)"]);
+      assert.deepEqual(await check("ios", "flow: tap\nperturb: [{ do: expire-session, step: pay }]"), ["expire-session: not for phone apps (it needs a browser)"]);
       assert.match((await check("android", "flow: click"))[0]!, /flow "click" drives a page; a phone app's flows are `export default phoneFlow/);
       assert.match((await check("web", "flow: tap"))[0]!, /flow "tap" is a phoneFlow, but app.kind is web/);
     } finally {

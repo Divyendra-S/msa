@@ -84,3 +84,11 @@ export async function POST(req: Request) {
   ]);
   return Response.json({ orderId: order.id, status: "processing" });
 }
+
+// The user's orders, newest first, for the phone app's order history.
+export async function GET() {
+  const user = await getCurrentUser();
+  if (!user) return Response.json({ error: "Please log in" }, { status: 401 });
+  const orders = await query<Order>("SELECT id, status, total_cents FROM orders WHERE user_id = $1 ORDER BY id DESC", [user.id]);
+  return Response.json({ orders: orders.map((o) => ({ id: o.id, status: o.status, totalCents: o.total_cents })) });
+}

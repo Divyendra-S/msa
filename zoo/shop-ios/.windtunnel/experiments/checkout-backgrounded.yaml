@@ -1,0 +1,6 @@
+description: Alice switches to another app while the checkout is on its way, and comes back two seconds later.
+flow: checkout
+perturb:
+  - do: background
+    step: pay
+    for: 2s

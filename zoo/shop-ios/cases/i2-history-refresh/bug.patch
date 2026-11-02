@@ -1,0 +1,30 @@
+--- a/zoo/shop-ios/ShopIOS/OrderHistory.swift
++++ b/zoo/shop-ios/ShopIOS/OrderHistory.swift
+@@ -63,11 +63,24 @@
+ 
+     /// Brings the history up to date with the shop's list, when a push says orders changed.
+     func refresh(from api: ShopApi) async throws {
++        let known = all()
+         let remote = try await api.orders()
+-        // Written once the list is here, order by order: whatever was recorded meanwhile stays.
+-        for order in remote {
+-            record(orderId: order.id, status: order.status, totalCents: order.totalCents)
++        let status = Dictionary(remote.map { ($0.id, $0.status) }, uniquingKeysWith: { first, _ in first })
++        // Each order the phone has, with the shop's status for it.
++        replaceAll(known.map { HistoryEntry(orderId: $0.orderId, status: status[$0.orderId] ?? $0.status, totalCents: $0.totalCents) })
++    }
++
++    private func replaceAll(_ entries: [HistoryEntry]) {
++        Self.run(db, "BEGIN")
++        Self.run(db, "DELETE FROM orders")
++        for entry in entries {
++            Self.run(
++                db,
++                "INSERT INTO orders (order_id, status, total_cents) VALUES (?, ?, ?)",
++                [.int(entry.orderId), .text(entry.status), .int(entry.totalCents)]
++            )
+         }
++        Self.run(db, "COMMIT")
+     }
+ 
+     private enum Value {

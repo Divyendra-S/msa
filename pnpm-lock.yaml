@@ -17,6 +17,9 @@ importers:
       appium-uiautomator2-driver:
         specifier: 8.7.0
         version: 8.7.0(@types/node@24.19.2)(appium@3.8.0(@types/node@24.19.2))
+      appium-webdriveragent:
+        specifier: 16.15.0
+        version: 16.15.0(@appium/logger@2.0.12)(@types/node@24.19.2)
       typescript:
         specifier: ~6.0.3
         version: 6.0.3
@@ -177,6 +180,10 @@ packages:
 
   '@appium/schema@1.3.0':
     resolution: {integrity: sha512-A/1zs8jUr9q/0Ft3dXSvWQN7JMo/bIcFv5o34fWMRtxZwtHsbl44t5PP5nirZOLZfD8G4oFvm0NSyvjs+sqAzg==}
+    engines: {node: ^20.19.0 || ^22.12.0 || >=24.0.0, npm: '>=10'}
+
+  '@appium/strongbox@2.0.1':
+    resolution: {integrity: sha512-gaVkfdlkI9EZnszEDco3D9R7XMQ4oblZJi2UJxYE6N2cYS5IXXAWbau6KBixGAPt8SBnzUL0olY/z3//zH+Sng==}
     engines: {node: ^20.19.0 || ^22.12.0 || >=24.0.0, npm: '>=10'}
 
   '@appium/support@7.2.8':
@@ -791,6 +798,10 @@ packages:
       - portscanner
       - teen_process
 
+  appium-webdriveragent@16.15.0:
+    resolution: {integrity: sha512-17AesL9oajcUfOgICnMFAF6wWUEML23MwhsHWsTUXOepIdBZm1+vQvhSFfpiGIG3WEo12/xm8ILH3FKLrERZhg==}
+    engines: {node: ^20.19.0 || ^22.12.0 || >=24.0.0, npm: '>=10'}
+
   appium@3.8.0:
     resolution: {integrity: sha512-hqY6TQnBfl3x3tiv6u8kW33DI4gacKEyreoWODr02ayuFUd2P390hKxPrCikeW7K3L4SVABR4rZ6+PfECbNwGw==}
     engines: {node: ^20.19.0 || ^22.12.0 || >=24.0.0, npm: '>=10'}
@@ -1225,6 +1236,10 @@ packages:
     resolution: {integrity: sha512-TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA==}
     engines: {node: '>=0.12'}
 
+  env-paths@4.0.0:
+    resolution: {integrity: sha512-pxP8eL2SwwaTRi/KHYwLYXinDs7gL3jxFcBYmEdYfZmZXbaVDvdppd0XBU8qVz03rDfKZMXg1omHCbsJjZrMsw==}
+    engines: {node: '>=20'}
+
   es-define-property@1.0.1:
     resolution: {integrity: sha512-e3nRfgfUZ4rNGL232gUgX06QNyyez04KdjFrF+LTRoOXmrOgFKDg4BCdsjW8EnT69eqdYGmRpJwiPVYNrCaW3g==}
     engines: {node: '>= 0.4'}
@@ -1536,6 +1551,10 @@ packages:
 
   is-promise@4.0.0:
     resolution: {integrity: sha512-hvpoI6korhJMnej285dSg6nu1+e6uxs7zG3BYAm5byqDsgJNWwxzM6z6iZiAgQR4TJ30JmBTOwqZUw3WlyH3AQ==}
+
+  is-safe-filename@0.1.1:
+    resolution: {integrity: sha512-4SrR7AdnY11LHfDKTZY1u6Ga3RuxZdl3YKWWShO5iyuG5h8QS4GD2tOb04peBJ5I7pXbR+CGBNEhTcwK+FzN3g==}
+    engines: {node: '>=20'}
 
   is-stream@2.0.1:
     resolution: {integrity: sha512-hFoiJiTl63nn+kstHGBtewWSKnQLpyb155KHheA1l39uvtO9nWIop1p3udqPcUd/xbF1VLMO4n7OI6p7RbngDg==}
@@ -2675,6 +2694,10 @@ snapshots:
     dependencies:
       json-schema: 0.4.0
 
+  '@appium/strongbox@2.0.1':
+    dependencies:
+      env-paths: 4.0.0
+
   '@appium/support@7.2.8(@types/node@24.19.2)':
     dependencies:
       '@appium/logger': 2.0.12
@@ -3203,6 +3226,24 @@ snapshots:
     transitivePeerDependencies:
       - '@types/node'
 
+  appium-webdriveragent@16.15.0(@appium/logger@2.0.12)(@types/node@24.19.2):
+    dependencies:
+      '@appium/base-driver': 10.8.1(@appium/logger@2.0.12)(@types/node@24.19.2)
+      '@appium/strongbox': 2.0.1
+      '@appium/support': 7.2.8(@types/node@24.19.2)
+      async-lock: 1.4.1
+      asyncbox: 6.4.3
+      axios: 1.20.0
+      teen_process: 4.2.1
+    transitivePeerDependencies:
+      - '@appium/logger'
+      - '@types/node'
+      - bare-abort-controller
+      - bare-buffer
+      - debug
+      - react-native-b4a
+      - supports-color
+
   appium@3.8.0(@types/node@24.19.2):
     dependencies:
       '@appium/base-driver': 10.8.1(@appium/logger@2.0.12)(@types/node@24.19.2)
@@ -3654,6 +3695,10 @@ snapshots:
 
   entities@7.0.1: {}
 
+  env-paths@4.0.0:
+    dependencies:
+      is-safe-filename: 0.1.1
+
   es-define-property@1.0.1: {}
 
   es-errors@1.3.0: {}
@@ -4017,6 +4062,8 @@ snapshots:
   is-plain-obj@4.1.0: {}
 
   is-promise@4.0.0: {}
+
+  is-safe-filename@0.1.1: {}
 
   is-stream@2.0.1: {}
 

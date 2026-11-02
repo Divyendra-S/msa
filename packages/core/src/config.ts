@@ -4,7 +4,7 @@ import { z } from "zod";
 
 export const CONFIG_FILE = "windtunnel.config.yaml";
 
-/** What kind of app this is. `web`, `tauri` and `android` run today; the others are planned (platforms-plan.md). */
+/** What kind of app this is. `web`, `tauri`, `android` and `ios` run today; `mac` is planned (platforms-plan.md). */
 export const APP_KINDS = ["web", "tauri", "android", "ios", "mac"] as const;
 export type AppKind = (typeof APP_KINDS)[number];
 
@@ -93,6 +93,33 @@ const AndroidSchema = z.object({
   devices: z.number().int().min(1).max(4).default(2),
 });
 
+/** The app on an iOS simulator (app.kind: ios); `app` is then the server it talks to. */
+const IosSchema = z.object({
+  /** The Xcode project's folder, relative to this file. */
+  dir: z
+    .string()
+    .default(".")
+    .refine((d) => !d.startsWith("/"), "a path relative to windtunnel.config.yaml"),
+  /**
+   * Builds the app for the simulator, in `dir` of each code version: an Xcode project's first
+   * target, into `build/` (its derived data too, not ~/Library/Developer/Xcode/DerivedData). A
+   * build is reused while that folder's code is unchanged.
+   */
+  build: z
+    .string()
+    .default('xcodebuild -quiet -sdk iphonesimulator -configuration Debug -IDECustomDerivedDataLocation="$PWD/build/DerivedData" ARCHS="$(uname -m)" build'),
+  /** The built `.app`, relative to `dir` (default: the one the build left in `build/`). */
+  app: z.string().optional(),
+  /** The bundle identifier. */
+  bundleId: z.string(),
+  /** Launch arguments; `$BASE_URL` is where the phone reaches the server: http://127.0.0.1:<port>. `-name value` sets a UserDefaults value. */
+  arguments: z.array(z.string()).default([]),
+  /** Environment variables the app is launched with (`$BASE_URL` too). */
+  env: z.record(z.string(), z.string()).default({}),
+  /** Simulators running at once, at most: each takes about 1.5 GB of memory. A run takes one per user. */
+  devices: z.number().int().min(1).max(4).default(2),
+});
+
 const UserSchema = z.object({ email: z.string(), password: z.string() });
 
 const CrawlSchema = z.object({
@@ -141,6 +168,7 @@ const HuntSchema = z.object({
 export const ConfigSchema = z.object({
   app: AppSchema,
   android: AndroidSchema.optional(),
+  ios: IosSchema.optional(),
   /** Optional: an app without a database is checked by `check:` rules and what users saw. */
   db: DbSchema.optional(),
   mockPay: MockPaySchema.optional(),
@@ -154,6 +182,7 @@ export const ConfigSchema = z.object({
 
 export type WindtunnelConfig = z.infer<typeof ConfigSchema>;
 export type AndroidConfig = z.infer<typeof AndroidSchema>;
+export type IosConfig = z.infer<typeof IosSchema>;
 
 export class ConfigError extends Error {
   override name = "ConfigError";
@@ -181,11 +210,13 @@ export function parseConfig(text: string, source = CONFIG_FILE): WindtunnelConfi
     const issues = result.error.issues.map((i) => `  ${i.path.join(".") || "(root)"}: ${i.message}`);
     throw new ConfigError(`${source}: invalid config\n${issues.join("\n")}`);
   }
-  const { app, android } = result.data;
+  const { app, android, ios } = result.data;
   if (app.kind === "android" && !android) {
     throw new ConfigError(`${source}: app.kind android needs an \`android:\` section (at least \`package:\`, the application id)`);
   }
   if (android && app.kind !== "android") throw new ConfigError(`${source}: \`android:\` is for app.kind android`);
+  if (app.kind === "ios" && !ios) throw new ConfigError(`${source}: app.kind ios needs an \`ios:\` section (at least \`bundleId:\`)`);
+  if (ios && app.kind !== "ios") throw new ConfigError(`${source}: \`ios:\` is for app.kind ios`);
   return result.data;
 }
 

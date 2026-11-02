@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { join, posix, sep } from "node:path";
 import { findAndroidSdk } from "../android/sdk.ts";
 import { sh } from "../exec.ts";
@@ -32,8 +32,8 @@ export interface PreparedVersion {
   worktree: string;
   /** The server's folder inside the worktree (the app's, unless `app.dir` points elsewhere). */
   appDir: string;
-  /** For a phone app: its built APK, shared by every version with the same app code. */
-  apk?: string;
+  /** For a phone app: its build (an APK, or an iOS simulator `.app`), shared by every version with the same app code. */
+  phoneApp?: string;
 }
 
 const READY_MARKER = ".windtunnel-ready.json";
@@ -42,7 +42,7 @@ const READY_MARKER = ".windtunnel-ready.json";
 export class CodeVersions {
   private readonly project: Project;
   private readonly inflight = new Map<string, Promise<PreparedVersion>>();
-  private readonly apks = new Map<string, Promise<string>>();
+  private readonly phoneApps = new Map<string, Promise<string>>();
 
   constructor(project: Project) {
     this.project = project;
@@ -72,50 +72,78 @@ export class CodeVersions {
     let pending = this.inflight.get(version.id);
     if (!pending) {
       pending = this.prepareOnce(version)
-        .then(async (prepared) => (this.project.config.android ? { ...prepared, apk: await this.apk(prepared) } : prepared))
+        .then(async (prepared) => (this.phoneBuild() ? { ...prepared, phoneApp: await this.phoneApp(prepared) } : prepared))
         .finally(() => this.inflight.delete(version.id));
       this.inflight.set(version.id, pending);
     }
     return pending;
   }
 
-  get apksDir(): string {
-    return join(this.project.cacheDir, "apks");
+  get phoneAppsDir(): string {
+    return join(this.project.cacheDir, "phone-apps");
+  }
+
+  /** How this project's phone app is built, if it has one. */
+  private phoneBuild(): { dir: string; command: string; ext: "apk" | "app"; output: (dir: string) => Promise<string>; env: () => Promise<Record<string, string>> } | undefined {
+    const { android, ios } = this.project.config;
+    if (android) {
+      return {
+        dir: android.dir,
+        command: android.build,
+        ext: "apk",
+        output: async (dir) => join(dir, android.apk),
+        env: async (): Promise<Record<string, string>> => {
+          const sdk = await findAndroidSdk();
+          return sdk ? { ANDROID_HOME: sdk.root, ANDROID_SDK_ROOT: sdk.root } : {};
+        },
+      };
+    }
+    if (ios) {
+      return {
+        dir: ios.dir,
+        command: ios.build,
+        ext: "app",
+        output: async (dir) => (ios.app ? join(dir, ios.app) : findSimulatorApp(join(dir, "build"))),
+        env: async () => ({}),
+      };
+    }
+    return undefined;
   }
 
   /**
    * Builds the phone app of a version, unless a version with the same app code (its folder's
-   * git tree) already did: a patch to the server reuses the APK.
+   * git tree) already did: a patch to the server reuses the app.
    */
-  private apk(prepared: PreparedVersion): Promise<string> {
-    const android = this.project.config.android!;
-    const rel = posix.normalize([this.project.appSubdir.split(sep).join("/"), android.dir].filter(Boolean).join("/"));
+  private phoneApp(prepared: PreparedVersion): Promise<string> {
+    const build = this.phoneBuild()!;
+    const rel = posix.normalize([this.project.appSubdir.split(sep).join("/"), build.dir].filter(Boolean).join("/"));
     return (async () => {
       const tree = (await git(["rev-parse", `${prepared.version.commit}:${rel === "." ? "" : rel}`], this.project.repoRoot)).trim();
-      const apk = join(this.apksDir, `${tree.slice(0, 12)}.apk`);
-      let pending = this.apks.get(apk);
+      const out = join(this.phoneAppsDir, `${tree.slice(0, 12)}.${build.ext}`);
+      let pending = this.phoneApps.get(out);
       if (!pending) {
-        pending = this.buildApk(prepared, apk);
-        this.apks.set(apk, pending);
-        pending.catch(() => this.apks.delete(apk));
+        pending = this.buildPhoneApp(prepared, out);
+        this.phoneApps.set(out, pending);
+        pending.catch(() => this.phoneApps.delete(out));
       }
       return pending;
     })();
   }
 
-  private async buildApk(prepared: PreparedVersion, apk: string): Promise<string> {
-    if (await exists(apk)) return apk;
-    const android = this.project.config.android!;
-    await mkdir(this.apksDir, { recursive: true });
-    return withLock(`${apk}.lock`, async () => {
-      if (await exists(apk)) return apk;
-      const dir = join(prepared.worktree, this.project.appSubdir, android.dir);
-      const sdk = await findAndroidSdk();
-      const env: Record<string, string> = { CI: "1", ...(sdk ? { ANDROID_HOME: sdk.root, ANDROID_SDK_ROOT: sdk.root } : {}) };
-      await sh(android.build, { cwd: dir, logFile: this.logFile(prepared.version.id), env });
-      await copyFile(join(dir, android.apk), `${apk}.tmp`);
-      await rename(`${apk}.tmp`, apk);
-      return apk;
+  private async buildPhoneApp(prepared: PreparedVersion, out: string): Promise<string> {
+    if (await exists(out)) return out;
+    const build = this.phoneBuild()!;
+    await mkdir(this.phoneAppsDir, { recursive: true });
+    return withLock(`${out}.lock`, async () => {
+      if (await exists(out)) return out;
+      const dir = join(prepared.worktree, this.project.appSubdir, build.dir);
+      await sh(build.command, { cwd: dir, logFile: this.logFile(prepared.version.id), env: { CI: "1", ...(await build.env()) } });
+      const built = await build.output(dir);
+      await rm(`${out}.tmp`, { recursive: true, force: true });
+      if (build.ext === "app") await cp(built, `${out}.tmp`, { recursive: true, verbatimSymlinks: true });
+      else await copyFile(built, `${out}.tmp`);
+      await rename(`${out}.tmp`, out);
+      return out;
     });
   }
 
@@ -224,4 +252,26 @@ async function detectInstall(appDir: string): Promise<string | undefined> {
     if (await exists(join(appDir, file))) return command;
   }
   return (await exists(join(appDir, "package.json"))) ? "npm install --no-audit --no-fund" : undefined;
+}
+
+/** The one app an Xcode build for the simulator left under `dir` (`…/Debug-iphonesimulator/Name.app`). */
+async function findSimulatorApp(dir: string): Promise<string> {
+  const found: string[] = [];
+  const walk = async (d: string, depth: number): Promise<void> => {
+    if (depth > 6) return;
+    for (const entry of await readdir(d, { withFileTypes: true }).catch(() => [])) {
+      if (!entry.isDirectory()) continue;
+      const path = join(d, entry.name);
+      if (entry.name.endsWith(".app")) {
+        if (d.endsWith("-iphonesimulator")) found.push(path);
+      } else if (!entry.name.endsWith(".xcarchive") && entry.name !== "Intermediates.noindex") await walk(path, depth + 1);
+    }
+  };
+  await walk(dir, 0);
+  if (found.length === 1) return found[0]!;
+  throw new Error(
+    found.length === 0
+      ? `the build left no simulator app in ${dir}: set ios.app to the built .app (relative to ios.dir)`
+      : `the build left ${found.length} simulator apps (${found.map((f) => f.slice(dir.length + 1)).join(", ")}): set ios.app to the one to run`,
+  );
 }

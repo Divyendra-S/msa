@@ -1,0 +1,12 @@
+description: Alice pays on the payment page, which sends her back to the app twice in a row (shop://checkout opens twice); any checkout requests that get through reach the server together.
+flow: checkout
+params:
+  payBy: link
+perturb:
+  - do: double-submit
+    step: pay
+race:
+  request: POST /api/orders
+  count: 2
+  # Each opening waits for the user to answer iOS's "Open in "Shop"?": about a second apart.
+  timeout: 3s

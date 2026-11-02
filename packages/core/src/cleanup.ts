@@ -60,7 +60,11 @@ export async function clean(branches: Branches, options: { all?: boolean } = {})
   if (options.all) {
     await rm(join(project.cacheDir, "sqlite"), { recursive: true, force: true });
     await rm(join(project.cacheDir, "cargo-target"), { recursive: true, force: true });
+    // Phone apps built per code version (APKs, iOS simulator apps); `apks` held them before iOS.
+    await rm(join(project.cacheDir, "phone-apps"), { recursive: true, force: true });
     await rm(join(project.cacheDir, "apks"), { recursive: true, force: true });
+    // WebDriverAgent, built for iOS simulators, and its test results.
+    await rm(join(project.cacheDir, "wda"), { recursive: true, force: true });
   }
 
   if (options.all) result.worktrees = await branches.versions.removeAll();

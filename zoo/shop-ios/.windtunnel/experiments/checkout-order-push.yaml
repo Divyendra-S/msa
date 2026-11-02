@@ -1,0 +1,10 @@
+description: A push says Alice's orders changed while her checkout is on its way; the app's refresh of its order history waits two seconds for the list.
+flow: checkout
+perturb:
+  - do: push
+    step: pay
+    # The shop's "your order was updated" notification; the app refreshes its order history on it.
+    payload: { aps: { alert: "Your order was updated" }, event: orders-changed }
+  - do: delay
+    request: GET /api/orders
+    ms: 2s

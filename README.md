@@ -67,6 +67,8 @@ zoo/
   notes/      Bug Zoo notes app: Tauri v2 + SQLite, three planted bugs in cases/
   shop-android/  the shop's Android app (Kotlin + Compose), a client of zoo/shop's API; its cases/
               reuse the shop's bugs and add a phone one
+  shop-ios/   the shop's iOS app (SwiftUI), the same client for the iPhone; its cases/ reuse the
+              shop's bugs and add two iOS ones
   mock-pay/   mock payment provider: idempotent charges, signed webhooks, harness control
   cases/      one bug patch per case (or decoy patch per control) + expected results + verifier;
               prover and healing checks
@@ -104,6 +106,8 @@ pnpm zoo:verify              # every shop experiment against the clean shop, eac
 pnpm zoo:verify:notes        # the same for the Tauri notes app (needs cargo and Playwright's WebKit)
 pnpm zoo:verify:android      # the shop's Android app on headless emulators (needs the Android SDK, a JDK
                              # and an AVD: windtunnel devices create)
+pnpm zoo:verify:ios          # the shop's iOS app on simulators (needs Xcode, an iOS runtime and the
+                             # simulators: windtunnel devices create in zoo/shop-ios)
 pnpm zoo:prove               # the prover: proves each case's real fix, rejects the wrong fixes
 pnpm zoo:heal                # failure sorting and selector repair on a copy of the shop, rules only
 ```
@@ -207,6 +211,51 @@ windtunnel devices stop          # the emulators keep running between runs until
 The APK is built once per version of the app's code: patches to the server reuse it. Appium's
 UiAutomator2 driver does the taps and reads the screen. The Map lists the phone's screens next to
 the server's routes, and which route each of its calls reaches.
+
+## iOS apps
+
+An iOS app runs the same way on iOS simulators booted without Simulator.app: no window, and
+nothing changed in your Simulator or Xcode settings. The simulator shares the Mac's network, so
+each phone reaches its server at its own proxy port on 127.0.0.1. The same phone flows drive it,
+and `ui.openLink(url)` opens a link with the app, as a payment page sending the user back does.
+
+iOS experiments add a push notification during or after a step (`do: push`, with the payload the
+app gets) and a link opened twice (`double-submit` on a step that opens a link), besides the
+phone pressures above. Rules can read the app's own data on the phone: `phone:` names a SQLite
+file in the app's data folder, and the rule's SQL runs on each phone's copy with what that
+phone's user saw.
+
+```yaml
+app:
+  kind: ios
+  dir: ../server
+  start: npm start
+ios:
+  bundleId: com.example.shop     # built with xcodebuild for the simulator, into build/
+  arguments: [-apiUrl, $BASE_URL] # launch arguments: -name value sets a UserDefaults value
+```
+
+```yaml
+# .windtunnel/rules.yaml
+history-has-every-confirmed-order:
+  phone: Library/Application Support/shop.sqlite
+  sql: >-
+    SELECT p.text FROM windtunnel_pages p
+    WHERE p.text LIKE '%Order confirmed%'
+      AND NOT EXISTS (SELECT 1 FROM orders o WHERE instr(p.text, 'Order #' || o.order_id || ' ') > 0)
+```
+
+```sh
+xcodebuild -downloadPlatform iOS  # once, if Xcode has no iOS simulator runtime (about 8 GB)
+windtunnel devices create        # once, in the iOS project: simulators windtunnel-iphone-1 and -2
+windtunnel doctor                # Xcode, the runtime, the simulators, WebDriverAgent (npm i -D appium-webdriveragent)
+pnpm zoo:verify:ios              # zoo/shop-ios: the clean app, the shop's bugs, two iOS bugs
+windtunnel devices stop          # the simulators keep running between runs until this
+```
+
+The app is built once per version of its code. WebDriverAgent, the XCTest server Appium's iOS
+driver uses, is built once and run on each simulator directly; Appium itself isn't involved. The
+Map reads the Swift code for its screens and the server calls their actions lead to.
 
 ## Experiments
 

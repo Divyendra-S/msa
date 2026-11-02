@@ -68,9 +68,10 @@ It prints one line per variant: what didn't pass (the case's own experiment firs
 `*`), then how many others passed.
 
 Options: `--repeat <n>` (default 3), `--case <id>`, `--experiment <id>` (repeatable), `--app
-notes` or `--app shop-android` for the other zoo apps, whose cases are in their own `cases/`. A
-`case.yaml` there with `from: <folder>` reuses that case's patch and description with its own
-experiment: `zoo/shop-android` catches the shop's bugs from the phone that way.
+notes`, `--app shop-android` or `--app shop-ios` for the other zoo apps, whose cases are in
+their own `cases/`. A `case.yaml` there with `from: <folder>` reuses that case's patch and
+description with its own experiment: `zoo/shop-android` and `zoo/shop-ios` catch the shop's bugs
+from the phone that way.
 
 ## Prove
 

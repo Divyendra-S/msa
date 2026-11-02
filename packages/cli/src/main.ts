@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
   Branches,
@@ -14,6 +14,12 @@ import {
   DEFAULT_IMAGE,
   findAndroidSdk,
   findAppium,
+  hasAppiumDriver,
+  findWebDriverAgentSource,
+  createSimulators,
+  iosRuntimes,
+  stopSimulators,
+  windtunnelSimulators,
   listAvds,
   listSystemImages,
   runningEmulators,
@@ -92,6 +98,7 @@ export interface Flags {
   "dry-run"?: boolean;
   hosts?: string;
   image?: string;
+  ios?: boolean;
   help?: boolean;
 }
 
@@ -124,10 +131,11 @@ Commands
                       database changes, rules, usage; Run hunt (Muse Code) and Open in Claude Code
   mcp                 MCP server on stdin/stdout for coding agents (Claude Code, Codex, Muse Code)
   skills --out <dir>  Copy the agent skills (init, hunt, prove, test) into <dir>, e.g. .agents/skills
-  doctor              Check Node, git, the config file and the database (and the Android tools, for phone apps)
+  doctor              Check Node, git, the config file and the database (and the Android or iOS tools, for phone apps)
   devices [create|stop]
-                      The Android emulators phone apps run on: list them, create the AVD (windtunnel-34,
-                      from Android's image for automated tests), or stop the ones still running
+                      The emulators and simulators phone apps run on: list them, create them (Android: the
+                      windtunnel-34 AVD, from Android's image for automated tests; iOS, in an ios project or
+                      with --ios: simulators windtunnel-iphone-1, -2…), or stop the ones still running
   prepare             Check out, install and build a code version, and seed its snapshot
   branch              Start an isolated branch (app + database copy + data folder) and keep it running
   clean               Stop leftover app processes, drop run databases and remove data folders
@@ -166,6 +174,7 @@ Options
   --dry-run           (install) only show what would be done
   --hosts <a,b>       (install) only these agents: claude, codex, muse (default: every one found)
   --image <id>        (devices create) system image, e.g. system-images;android-34;google_atd;arm64-v8a
+  --ios               (devices) the iOS simulators, outside an ios project
   --json              Machine-readable output
 `;
 
@@ -305,6 +314,7 @@ async function doctor(flags: Flags): Promise<number> {
     checks.push({ name: "config", ok: true, detail: project.configPath });
     checks.push({ name: "git", ok: true, detail: project.repoRoot });
     if (project.config.android) checks.push(...(await androidChecks(project.root, project.config.android.avd)));
+    if (project.config.ios) checks.push(...(await iosChecks(project.root, project.config.ios.devices)));
     if (project.config.app.kind === "tauri") {
       const webkit = browserStatus("tauri");
       checks.push({ name: "webkit", ok: webkit.installed, detail: webkit.installed ? webkit.path : "not downloaded: npx playwright install webkit" });
@@ -325,7 +335,7 @@ async function doctor(flags: Flags): Promise<number> {
   return checks.every((c) => c.ok) ? 0 : 1;
 }
 
-/** What phone apps need: the SDK, the AVD, Java for Gradle, and Appium with its Android driver. */
+/** What Android apps need: the SDK, the AVD, Java for Gradle, and Appium with its Android driver. */
 async function androidChecks(root: string, avd: string): Promise<{ name: string; ok: boolean; detail: string }[]> {
   const checks: { name: string; ok: boolean; detail: string }[] = [];
   const sdk = await findAndroidSdk();
@@ -345,21 +355,51 @@ async function androidChecks(root: string, avd: string): Promise<{ name: string;
   }
   const java = await runScript("java -version 2>&1 | head -1", { cwd: root, timeoutMs: 15_000 }).catch(() => undefined);
   checks.push({ name: "java", ok: java?.code === 0 && /version/.test(java.stdout), detail: java?.code === 0 ? java.stdout.trim() : "not found: Gradle needs a JDK (17 or newer)" });
-  const appium = await findAppium(root);
-  const driver = appium && (await stat(resolve(appium.home, "node_modules", "appium-uiautomator2-driver")).then(() => true, () => false));
+  checks.push(await appiumCheck(root, "appium-uiautomator2-driver", "UiAutomator2"));
+  return checks;
+}
+
+/** What iOS apps need: Xcode, an iOS simulator runtime, Wind Tunnel's simulators, and WebDriverAgent's source. */
+async function iosChecks(root: string, devices: number): Promise<{ name: string; ok: boolean; detail: string }[]> {
+  const checks: { name: string; ok: boolean; detail: string }[] = [];
+  const xcode = await runScript("xcodebuild -version | head -1", { cwd: root, timeoutMs: 30_000 }).catch(() => undefined);
+  const hasXcode = xcode?.code === 0 && /Xcode/.test(xcode.stdout);
+  checks.push({ name: "xcode", ok: hasXcode, detail: hasXcode ? xcode!.stdout.trim() : "not found: install Xcode from the App Store, then xcode-select -s /Applications/Xcode.app" });
+  if (hasXcode) {
+    const runtime = (await iosRuntimes().catch(() => []))[0];
+    checks.push({ name: "runtime", ok: !!runtime, detail: runtime ? `${runtime.name} (${runtime.identifier})` : "no iOS simulator runtime: xcodebuild -downloadPlatform iOS (about 8 GB)" });
+    const simulators = await windtunnelSimulators().catch(() => []);
+    const booted = simulators.filter((s) => s.state === "Booted").map((s) => s.name);
+    checks.push({
+      name: "phones",
+      ok: simulators.length >= devices,
+      detail:
+        simulators.length >= devices
+          ? `${simulators.map((s) => s.name).join(", ")}; ${booted.length ? `running: ${booted.join(", ")}` : "none running (the first run boots them)"}`
+          : `${simulators.length} of ${devices} simulators: windtunnel devices create`,
+    });
+  }
+  const wda = await findWebDriverAgentSource(root);
   checks.push({
-    name: "appium",
-    ok: !!driver,
-    detail: driver ? `${appium.home}/node_modules (UiAutomator2 driver)` : "not installed: npm i -D appium appium-uiautomator2-driver webdriverio",
+    name: "wda",
+    ok: !!wda,
+    detail: wda ? `WebDriverAgent ${wda} (built on the first run)` : "not installed: npm i -D appium-webdriveragent",
   });
   return checks;
 }
 
-/** `windtunnel devices`: the emulators Wind Tunnel runs phones on. */
+async function appiumCheck(root: string, driver: "appium-uiautomator2-driver", name: string): Promise<{ name: string; ok: boolean; detail: string }> {
+  const appium = await findAppium(root);
+  const ok = !!appium && (await hasAppiumDriver(appium.home, driver));
+  return { name: "appium", ok, detail: ok ? `${appium!.home}/node_modules (${name} driver)` : `not installed: npm i -D appium ${driver} webdriverio` };
+}
+
+/** `windtunnel devices`: the emulators and simulators Wind Tunnel runs phones on. */
 async function devices(action: string | undefined, flags: Flags): Promise<number> {
-  const sdk = await findAndroidSdk();
-  if (!sdk) throw new ConfigError("no Android SDK found: install Android Studio, or set ANDROID_HOME");
   const project = await openProject(flags.cwd).catch(() => undefined);
+  if (flags.ios || project?.config.ios) return iosDevices(action, flags, project?.config.ios?.devices ?? 2);
+  const sdk = await findAndroidSdk();
+  if (!sdk) throw new ConfigError("no Android SDK found: install Android Studio, or set ANDROID_HOME (for iOS simulators: --ios)");
   const avd = project?.config.android?.avd ?? DEFAULT_AVD;
   if (action === "create") {
     const image = flags.image ?? DEFAULT_IMAGE;
@@ -374,7 +414,10 @@ async function devices(action: string | undefined, flags: Flags): Promise<number
   if (action === "stop") {
     const running = await runningEmulators(sdk);
     for (const serial of running) await stopEmulator(sdk, serial);
-    print(flags, { stopped: running }, running.length ? `stopped ${running.join(", ")}` : "no emulators running");
+    // Simulators left running by an iOS project's runs stop too.
+    const simulators = await stopSimulators().catch(() => []);
+    const stopped = [...running, ...simulators];
+    print(flags, { stopped }, stopped.length ? `stopped ${stopped.join(", ")}` : "no emulators running");
     return 0;
   }
   if (action) throw new ConfigError(`devices ${action}: use create or stop, or nothing to list`);
@@ -388,6 +431,39 @@ async function devices(action: string | undefined, flags: Flags): Promise<number
       `sdk      ${sdk.root}`,
       `avd      ${avd}${avds.includes(avd) ? "" : " (not created: windtunnel devices create)"}`,
       `running  ${running.length ? running.join(", ") : "none"}`,
+    ].join("\n"),
+  );
+  return 0;
+}
+
+/** `windtunnel devices` for iOS: Wind Tunnel's simulators. */
+async function iosDevices(action: string | undefined, flags: Flags, count: number): Promise<number> {
+  if (action === "create") {
+    const { created, runtime, deviceType } = await createSimulators(count);
+    const names = (await windtunnelSimulators()).map((s) => s.name);
+    print(
+      flags,
+      { created, runtime: runtime.identifier, deviceType, simulators: names },
+      created.length
+        ? `created ${created.join(", ")} (${deviceType}, ${runtime.name})\nThey boot without Simulator.app on the first run.`
+        : `${names.join(", ")} already there`,
+    );
+    return 0;
+  }
+  if (action === "stop") {
+    const stopped = await stopSimulators();
+    print(flags, { stopped }, stopped.length ? `stopped ${stopped.join(", ")}` : "no simulators running");
+    return 0;
+  }
+  if (action) throw new ConfigError(`devices ${action}: use create or stop, or nothing to list`);
+  const runtime = (await iosRuntimes())[0];
+  const simulators = await windtunnelSimulators();
+  print(
+    flags,
+    { runtime: runtime?.identifier ?? null, simulators },
+    [
+      `runtime     ${runtime ? runtime.name : "none (xcodebuild -downloadPlatform iOS)"}`,
+      `simulators  ${simulators.length ? simulators.map((s) => `${s.name} (${s.state.toLowerCase()})`).join(", ") : "none: windtunnel devices create"}`,
     ].join("\n"),
   );
   return 0;

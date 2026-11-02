@@ -65,6 +65,14 @@ const Perturbation = z.discriminatedUnion("do", [
   }),
   z.strictObject({ do: z.literal("rotate"), step: Step, when: z.enum(["during", "after"]).default("during"), tab: Tab }),
   z.strictObject({ do: z.literal("offline"), step: Step, tab: Tab }),
+  // iOS: a push notification, as Apple's push service delivers it (`aps` and the app's own keys).
+  z.strictObject({
+    do: z.literal("push"),
+    step: Step,
+    when: z.enum(["during", "after"]).default("during"),
+    payload: z.record(z.string(), z.unknown()).default({ aps: { alert: "Wind Tunnel" } }),
+    tab: Tab,
+  }),
   // App state: runs once, before the first tab reaches the step.
   z.strictObject({ do: z.literal("sql"), step: Step, sql: z.string().min(1), tab: Tab }),
 ]);
@@ -150,8 +158,10 @@ export function isNetworkPerturbation(p: Perturbation): p is NetworkPerturbation
   return "request" in p;
 }
 
-/** Perturbations only a phone has: its app can be killed, sent away, turned, cut off. */
-export const PHONE_PERTURBATIONS = new Set(["kill-app", "background", "rotate", "offline"]);
+/** Perturbations only a phone has: its app can be killed, sent away, turned, cut off, notified. */
+export const PHONE_PERTURBATIONS = new Set(["kill-app", "background", "rotate", "offline", "push"]);
+/** Of those, the ones only an iOS simulator does so far. */
+export const IOS_PERTURBATIONS = new Set(["push"]);
 /** Perturbations that need a browser: a page to reload or open twice, cookies, a fake clock, another user's session. */
 export const BROWSER_PERTURBATIONS = new Set(["refresh", "second-tab", "expire-session", "advance-clock", "replay-as"]);
 
@@ -244,12 +254,15 @@ export async function checkExperiment(experiment: Experiment, project: Project, 
       errors.push(`unknown user "${user}" (config users: ${configured.join(", ") || "none"})`);
     }
   }
-  const phone = project.config.app.kind === "android";
+  const { kind } = project.config.app;
+  const phone = kind === "android" || kind === "ios";
   for (const p of experiment.perturb) {
     if (phone && BROWSER_PERTURBATIONS.has(p.do)) {
       errors.push(`${p.do}: not for phone apps (${p.do === "refresh" ? "use kill-app or background" : "it needs a browser"})`);
     } else if (!phone && PHONE_PERTURBATIONS.has(p.do)) {
-      errors.push(`${p.do}: only for phone apps (app.kind: android)`);
+      errors.push(`${p.do}: only for phone apps (app.kind: android or ios)`);
+    } else if (kind !== "ios" && IOS_PERTURBATIONS.has(p.do)) {
+      errors.push(`${p.do}: only for iOS apps so far (app.kind: ios)`);
     }
   }
   if (phone && experiment.clock) errors.push("clock: phone apps run on the phone's own clock");

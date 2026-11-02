@@ -52,9 +52,10 @@ Keep page actions inside steps. Each run uses a fresh browser context per user (
 
 ### Phone flows
 
-An Android app's flows are `phoneFlow`s: the same context, with the app's screen (`ui`) in place
-of `page`. Controls and fields are found by what the user reads: a control's text or accessibility
-label (`contentDescription`), a field's label.
+An Android or iOS app's flows are `phoneFlow`s: the same context, with the app's screen (`ui`)
+in place of `page`. Controls and fields are found by what the user reads: a control's text or
+accessibility label (`contentDescription` on Android, `accessibilityLabel` on iOS), a field's
+label or placeholder.
 
 ```ts
 import { phoneFlow } from "windtunnel";
@@ -73,15 +74,17 @@ export default phoneFlow(async ({ ui, step, login, params }) => {
 | `ui` | |
 |---|---|
 | `tap(label)` | Taps the control labelled `label` (text or accessibility label, ignoring case), once it is on screen and enabled. A text that isn't inside a control doesn't count; two controls with the same label is an error, so give repeated ones their own labels (`Add Ceramic Mug to cart`) |
-| `fill(label, value)` | Replaces what the text field labelled `label` holds (its own label, hint or the label drawn inside it) |
+| `fill(label, value)` | Replaces what the text field labelled `label` holds (its own label, hint or placeholder, or the label drawn inside it); on iOS it checks the text arrived |
 | `see(text)` | Waits until text containing `text` (ignoring case), or matching a RegExp, is on screen; returns it |
 | `shows(text)` | Whether matching text is on screen now |
-| `back()` | The system Back button |
+| `openLink(url)` | Opens a link with the app, as tapping it in another app does (a payment page sending the user back, a link in an email). On iOS, the user answers Open when iOS asks |
+| `back()` | The system Back button (Android; on iOS, tap the app's own) |
 | `text()` | Everything on screen, top to bottom |
 
 Each waits up to 10 s (`{ timeout }` to change it). A run starts with the app's data cleared
-(`pm clear`), the phone in portrait and online, and the app opened with the config's launch
-extras. Each user is a phone of their own, so `users: [alice, bob]` takes two.
+(`pm clear` on Android, the app installed afresh on iOS), the phone in portrait and online, and
+the app opened with the config's launch extras or arguments. Each user is a phone of their own,
+so `users: [alice, bob]` takes two.
 
 ## Experiments
 
@@ -148,21 +151,22 @@ Applied to a `step` (optionally only in `tab`).
 | `sql` (`sql`) | One SQL statement runs against the run's database before the first tab reaches the step, e.g. to expire sessions on the server: `UPDATE sessions SET expires_at = now()` |
 
 On a phone, `double-submit` is a double tap: both taps land before the app can react, as on a
-phone busy for a moment. `refresh`, `expire-session`, `advance-clock`, `second-tab` and
+phone busy for a moment. On a step that opens a link, it opens the link twice. `refresh`, `expire-session`, `advance-clock`, `second-tab` and
 `replay-as` need a browser.
 
 ### Phone pressures
 
-Applied to a `step` (optionally only in `tab`), for Android apps. `during`: while the step's
-first request is with the server (the step waits for the whole pressure); `after`: once the step
-has finished.
+Applied to a `step` (optionally only in `tab`), for Android and iOS apps. `during`: while the
+step's first request is with the server (the step waits for the whole pressure); `after`: once the
+step has finished.
 
 | `do` | What happens |
 |---|---|
 | `kill-app` (`when`) | The app's process is stopped, as Android does to an app it needs the memory from; the server's answer goes nowhere; then the app is opened again |
 | `background` (`when`, `for`, default 1s) | Home, then back to the app after `for` |
 | `rotate` (`when`) | The phone turns to landscape (the screen is recreated), and back to portrait after the step |
-| `offline` | Airplane mode for the step; its requests fail without reaching the server. Online again after it (add `repeat` for the user's retry) |
+| `offline` | Offline for the step (airplane mode on Android; a simulator has none, so only the proxy cuts it off); its requests fail without reaching the server. Online again after it (add `repeat` for the user's retry) |
+| `push` (`when`, `payload`) | iOS: a push notification, delivered with `simctl push` as Apple's service would. `payload` is what the app gets (`aps` and its own keys). A silent one (`content-available` alone) didn't reach a running app on the simulator; one with an `alert` did, to its foreground handler |
 
 ### Ordered races
 
@@ -277,6 +281,36 @@ through `adb reverse` and a proxy port of its own, so every call is caught at th
 under the phone's tab; patterns, races and webhooks work as for the web. Rules are the server's
 SQL rules, plus `windtunnel_requests` and `windtunnel_pages` (each step's screen text).
 `zoo/shop-android` is the example: the shop's own bugs caught from the phone, and a phone one.
+
+### iOS apps
+
+With `app.kind: ios` the app runs on iOS simulators named `windtunnel-iphone-1`, `-2`… (`windtunnel
+devices create`; at most `ios.devices` at once, default 2), booted without Simulator.app. Its
+server runs as for Android. The simulator shares the Mac's network, so each phone reaches the
+server at its own proxy port on 127.0.0.1, and calls are logged under the phone's tab. The app is
+built with `ios.build` (by default the Xcode project's first target, into `build/`) once per
+version of its code.
+
+A rule with `phone:` reads the app's own data: the path is a SQLite file in the app's data
+folder (`Library/Application Support/shop.sqlite`). After the run it is copied off each phone
+(into the run's `phone/<tab>/`), and the rule's SQL runs on each copy, with `windtunnel_requests`
+and `windtunnel_pages` holding that phone's user's facts. Broken rows say whose phone they came
+from (`user`).
+
+```yaml
+history-has-every-confirmed-order:
+  description: Every order the user saw confirmed on the phone is in the phone's order history.
+  phone: Library/Application Support/shop.sqlite
+  sql: >-
+    SELECT p.step FROM windtunnel_pages p
+    WHERE p.text LIKE '%Order confirmed%'
+      AND NOT EXISTS (SELECT 1 FROM orders o WHERE instr(p.text, 'Order #' || o.order_id || ' ') > 0)
+```
+
+The taps and the screen go through WebDriverAgent, the XCTest server Appium's iOS driver uses,
+built once (`npm i -D appium-webdriveragent`) and run on each simulator with `xcodebuild
+test-without-building`. `zoo/shop-ios` is the example: the shop's own bugs caught from the
+iPhone, a link opened twice, and an order lost from the phone's history by a push.
 
 ### Check rules: files, media, anything SQL can't read
 

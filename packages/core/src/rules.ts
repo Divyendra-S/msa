@@ -23,13 +23,23 @@ const RuleSchema = z
      * DATA_DIR, database variables and BASE_URL, and gets the run facts as JSON on stdin.
      */
     check: z.string().optional(),
+    /**
+     * A SQLite file the app keeps on the phone, relative to its data folder (`Library/Application
+     * Support/shop.sqlite`): the SQL runs on each phone's copy, after the run, with the run facts
+     * of that phone's user. Broken rows say whose phone they're from (`user`).
+     */
+    phone: z.string().min(1).optional(),
     expect: z.literal("empty").default("empty"),
   })
-  .refine((r) => (r.sql === undefined) !== (r.check === undefined), { message: "a rule has either sql or check (not both)" });
+  .refine((r) => (r.sql === undefined) !== (r.check === undefined), { message: "a rule has either sql or check (not both)" })
+  .refine((r) => r.phone === undefined || r.sql !== undefined, { message: "a phone rule is SQL on the phone's file (sql, not check)" })
+  .refine((r) => r.phone === undefined || (!r.phone.startsWith("/") && !r.phone.split("/").includes("..")), {
+    message: "phone: a path inside the app's data folder",
+  });
 
 const RulesFileSchema = z.record(z.string().regex(/^[a-z0-9][a-z0-9-]*$/, "rule ids are lower-case-with-dashes"), RuleSchema);
 
-export type Rule = { id: string; description?: string; expect: "empty" } & (
+export type Rule = { id: string; description?: string; expect: "empty"; phone?: string } & (
   | { sql: string; check?: undefined }
   | { check: string; sql?: undefined }
 );
@@ -129,6 +139,21 @@ export interface RuleTarget {
   cwd: string;
   /** DATA_DIR, BASE_URL…; the database's variables are added. */
   env?: Record<string, string>;
+  /** The run's phones, for `phone:` rules: none outside a run, so those rules have nothing to check. */
+  phones?: PhoneData[];
+}
+
+/** What a phone kept, copied off it after the run. */
+export interface PhoneData {
+  /** The phone's user. */
+  user: string;
+  /** Each rule's `phone:` path, and where its copy is (absent when the app never wrote that file). */
+  files: Record<string, string | undefined>;
+}
+
+/** The phone files a set of rules reads. */
+export function phoneFilesOf(rules: Rule[]): string[] {
+  return [...new Set(rules.flatMap((r) => (r.phone ? [r.phone] : [])))];
 }
 
 /**
@@ -136,8 +161,11 @@ export interface RuleTarget {
  * Rules that read run facts see `facts` (empty tables without them, e.g. on the seed data).
  */
 export async function checkRules(target: RuleTarget, rules: Rule[], facts?: RunFacts): Promise<RuleResult[]> {
-  const sqlRules = rules.filter((r): r is Rule & { sql: string } => r.sql !== undefined);
+  const sqlRules = rules.filter((r): r is Rule & { sql: string } => r.sql !== undefined && r.phone === undefined);
   const results = new Map<string, RuleResult>();
+  for (const rule of rules) {
+    if (rule.phone !== undefined && rule.sql !== undefined) results.set(rule.id, await checkPhoneRule({ ...rule, sql: rule.sql }, target.phones ?? [], facts));
+  }
   if (sqlRules.length > 0) {
     const db = target.database;
     const sqlResults =
@@ -216,6 +244,24 @@ async function checkSqlite(
   } finally {
     conn.close();
   }
+}
+
+/** A phone rule on each phone's copy of its file, with the facts of that phone's user; rows are tagged with the user. */
+async function checkPhoneRule(rule: Rule & { sql: string; phone?: string }, phones: PhoneData[], facts?: RunFacts): Promise<RuleResult> {
+  const rows: Record<string, unknown>[] = [];
+  for (const phone of phones) {
+    const file = phone.files[rule.phone!];
+    // An app that never wrote the file kept nothing that could break the rule.
+    if (!file) continue;
+    const own = facts && {
+      requests: facts.requests.filter((r) => r.user_name === phone.user),
+      pages: facts.pages.filter((p) => p.user_name === phone.user),
+    };
+    const [result] = await checkSqlite({ kind: "sqlite", path: file, seed: "" }, [rule], own);
+    if (result!.error) return { id: rule.id, ok: false, rows: [], error: `${phone.user}'s phone: ${result!.error}` };
+    rows.push(...result!.rows.map((r) => ({ user: phone.user, ...r })));
+  }
+  return { id: rule.id, ok: rows.length === 0, rows: rows.slice(0, MAX_ROWS) };
 }
 
 function sqliteValue(value: unknown): string | number | null {

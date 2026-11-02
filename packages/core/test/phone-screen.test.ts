@@ -2,7 +2,8 @@
 // names, what the user reads.
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { findControl, findField, matchesText, parseScreen, screenAlerts, screenTexts, snapshotScreen } from "../src/android/screen.ts";
+import { parseScreen } from "../src/android/screen.ts";
+import { findControl, findField, matchesText, screenAlerts, screenTexts, snapshotScreen } from "../src/phone/screen.ts";
 
 function node(cls: string, attrs: Record<string, string>, children = ""): string {
   const all = { class: cls, text: "", "content-desc": "", clickable: "false", enabled: "true", displayed: "true", ...attrs };

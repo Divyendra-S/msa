@@ -18,6 +18,8 @@ export { findInSource, parseLocator, rankCandidates, replaceInSource, similarity
 export { findNextRoutes, type RouteFile } from "./routes.ts";
 export { formatTable, readSchema, readSqliteSchema, seedSchema, type TableInfo } from "./schema.ts";
 export { type AndroidApp, type AndroidCall, type AndroidScreen, findAndroidApp } from "./android.ts";
+export { findIosApp } from "./ios.ts";
+export type { PhoneApp, PhoneCall, PhoneScreen } from "./phone-code.ts";
 export { findTauriApp, type TauriApp, type TauriCommand } from "./tauri.ts";
 export { type Effect, parseSql, SourceIndex, type SqlEffect } from "./source.ts";
 export { afterTriage, answerDecision, controlOf, type FailureLabel, formatTriage, sortFailures, type TriageEntry } from "./triage.ts";
