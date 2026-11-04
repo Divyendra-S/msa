@@ -644,6 +644,8 @@ nonisolated struct Replay: Decodable, Sendable {
     let startedAt: String
     let rep: Int
     let reps: Int
+    /// The race's ordering that repetition ran (`2,1`, `together`), when it had one.
+    let variant: String?
     let broken: [String]
     let durationMs: Double
     let error: String?
@@ -707,6 +709,14 @@ nonisolated struct Replay: Decodable, Sendable {
     let description: String?
     let rows: Int
     let sample: String?
+    /// Its first rows, in full (none from an older bridge).
+    let examples: [String]?
+  }
+  /// Why it breaks the app, what would fix it, and where (`path:line`), as the agent found it.
+  struct Finding: Decodable, Hashable, Sendable {
+    let cause: String
+    let fix: String?
+    let code: [String]
   }
   struct Rules: Decodable, Hashable, Sendable {
     let broken: [Broken]
@@ -717,6 +727,7 @@ nonisolated struct Replay: Decodable, Sendable {
     let description: String?
     /// A Swift Mac app's XCTest method, run in place of a flow.
     let scenario: String?
+    let finding: Finding?
     let users: [String]
     let pressure: [AppMap.Pressure]
     let history: [Past]

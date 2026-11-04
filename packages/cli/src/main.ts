@@ -18,6 +18,8 @@ import {
   findWebDriverAgentSource,
   type MacConfig,
   probePoints,
+  scenarioHost,
+  swiftFiles,
   sanitizerOf,
   threadSanitizerProblem,
   createSimulators,
@@ -424,13 +426,31 @@ async function macChecks(root: string, mac: MacConfig): Promise<{ name: string; 
     checks.push({ name: "tsan", ok: true, detail: "off (mac.sanitizer: none, or WINDTUNNEL_SANITIZER=none)" });
   }
   const dir = join(root, mac.dir);
+  if (mac.project) {
+    // An Xcode project lists its packages in project.pbxproj (a workspace, in its projects').
+    const pbxproj = await readFile(join(dir, mac.project, "project.pbxproj"), "utf8").catch(() => undefined);
+    const files = await swiftFiles(dir);
+    const host = await scenarioHost(dir, files);
+    const points = await probePoints(dir, files);
+    const uses = pbxproj === undefined || pbxproj.includes("WindTunnelProbe");
+    checks.push({
+      name: "probe",
+      ok: uses && !!host,
+      detail: !uses
+        ? `${mac.project} doesn't use WindTunnelProbe (swift/WindTunnelProbe): add it as a local package to the app's target`
+        : !host
+          ? "the app never calls Probe.hostScenario(): call it first thing in its entry point, or each run would start the app itself"
+          : `WindTunnelProbe; the app hosts scenarios (${host.file}:${host.line}); ${points.length} probe point(s) in the code`,
+    });
+    return checks;
+  }
   const manifest = await readFile(join(dir, "Package.swift"), "utf8").catch(() => undefined);
   const points = manifest ? await probePoints(dir) : [];
   checks.push({
     name: "probe",
     ok: !!manifest?.includes("WindTunnelProbe"),
     detail: !manifest
-      ? `no Package.swift in ${dir}: a Mac app's code is tested as a Swift package (mac.dir)`
+      ? `no Package.swift in ${dir}: a Mac app's code is tested as a Swift package (mac.dir), or as an Xcode project (mac.project)`
       : manifest.includes("WindTunnelProbe")
         ? `WindTunnelProbe; ${points.length} probe point(s) in the code`
         : "the package doesn't use WindTunnelProbe (swift/WindTunnelProbe): add it, and probe points where runs should step in",

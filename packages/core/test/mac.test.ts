@@ -8,7 +8,8 @@ import { after, before, describe, it } from "node:test";
 import { parseConfig } from "../src/config.ts";
 import { parseSanitizerLog, readSanitizerReports } from "../src/mac/sanitizer.ts";
 import { ScenarioRun } from "../src/mac/scenario.ts";
-import { findScenario, probePoints } from "../src/mac/swift.ts";
+import { findScenario, isTestFile, probePoints, scenarioHost } from "../src/mac/swift.ts";
+import { hostedTests, xcodeBuildCommand } from "../src/mac/xcode.ts";
 import type { Project } from "../src/project.ts";
 import { checkRules, parseRules } from "../src/rules.ts";
 import { checkExperiment, parseExperiment, variantsOf } from "../src/runner/experiment.ts";
@@ -63,6 +64,23 @@ describe("a Mac app's config", () => {
     assert.throws(() => parseConfig("app:\n  kind: mac\n  start: ./server\n"), /no server to start/);
     assert.throws(() => parseConfig("app:\n  kind: web\n"), /app.start/);
     assert.throws(() => parseConfig("app:\n  kind: web\n  start: x\nmac: {}\n"), /`mac:` is for app.kind mac/);
+  });
+
+  it("names an Xcode project with its scheme, or neither", () => {
+    const config = parseConfig("app:\n  kind: mac\nmac:\n  project: Reco.xcodeproj\n  scheme: Reco\n  sanitizer: none\n");
+    assert.deepEqual(config.mac, { dir: ".", project: "Reco.xcodeproj", scheme: "Reco", sanitizer: "none", env: {} });
+    assert.throws(() => parseConfig("app:\n  kind: mac\nmac:\n  project: Reco.xcodeproj\n"), /mac.scheme: the scheme that builds Reco.xcodeproj/);
+    assert.throws(() => parseConfig("app:\n  kind: mac\nmac:\n  scheme: Reco\n"), /set mac.project too/);
+    assert.throws(() => parseConfig("app:\n  kind: mac\nmac:\n  project: Reco\n  scheme: Reco\n"), /an .xcodeproj or .xcworkspace/);
+    assert.throws(() => parseConfig("app:\n  kind: mac\nmac:\n  project: A.xcworkspace\n  scheme: A\n  tests: x.xctest\n"), /found in its build/);
+  });
+
+  it("builds an Xcode project for testing, ad-hoc signed, into $DERIVED_DATA", () => {
+    const mac = parseConfig("app:\n  kind: mac\nmac:\n  project: My App.xcworkspace\n  scheme: App\n").mac!;
+    const command = xcodeBuildCommand(mac, "thread");
+    assert.match(command, /^xcodebuild -workspace 'My App.xcworkspace' -scheme App -configuration Debug -destination 'platform=macOS,arch=\w+' -derivedDataPath "\$DERIVED_DATA" -enableThreadSanitizer YES build-for-testing -quiet /);
+    assert.match(command, /CODE_SIGN_IDENTITY=- .* ENABLE_HARDENED_RUNTIME=NO$/);
+    assert.ok(!xcodeBuildCommand({ ...mac, project: "Reco.xcodeproj" }, "none").includes("Sanitizer"));
   });
 });
 
@@ -190,6 +208,106 @@ SUMMARY: ThreadSanitizer: data race Frame.swift:34 in FrameStats.didCapture()
 ThreadSanitizer: reported 1 warnings
 `;
 
+const XCODE_SCENARIOS = `import XCTest
+@testable import Reco
+
+final class WindTunnelScenarios: XCTestCase {
+    func testEditThenClose() async throws {
+        await Probe.step("open") {}
+        await Probe.step("close") {}
+    }
+}
+`;
+
+const RECO_MAIN = `import WindTunnelProbe
+
+@main
+enum RecoMain {
+    static func main() {
+        // Probe.hostScenario() in a comment doesn't count
+        Probe.hostScenario()
+        RecoApp.main()
+    }
+}
+`;
+
+describe("reading an Xcode project", () => {
+  let root: string;
+
+  before(async () => {
+    root = await mkdtemp(join(tmpdir(), "wt-xcode-"));
+    await mkdir(join(root, "Reco.xcodeproj"), { recursive: true });
+    await mkdir(join(root, "Reco"), { recursive: true });
+    await mkdir(join(root, "RecoTests"), { recursive: true });
+    await writeFile(join(root, "RecoTests", "WindTunnelScenarios.swift"), XCODE_SCENARIOS);
+    await writeFile(join(root, "Reco", "RecoMain.swift"), RECO_MAIN);
+    await writeFile(join(root, "Reco", "TakeWriter.swift"), WRITER);
+  });
+
+  after(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("finds a scenario in any folder of tests, in the test bundle's module", async () => {
+    assert.deepEqual(await findScenario(root, "WindTunnelScenarios/testEditThenClose", undefined, { module: "RecoTests" }), {
+      test: "RecoTests.WindTunnelScenarios/testEditThenClose",
+      file: "RecoTests/WindTunnelScenarios.swift",
+      line: 5,
+      steps: ["open", "close"],
+    });
+    // Before the build, the module isn't known yet; the steps are.
+    assert.equal((await findScenario(root, "WindTunnelScenarios/testEditThenClose", undefined, {}))?.test, "WindTunnelScenarios/testEditThenClose");
+    assert.equal(await findScenario(root, "Other.WindTunnelScenarios/testEditThenClose", undefined, { module: "RecoTests" }), undefined);
+    // Read as a Swift package, it has no Tests/ folder.
+    assert.equal(await findScenario(root, "WindTunnelScenarios/testEditThenClose"), undefined);
+  });
+
+  it("finds where the app hosts scenarios, and leaves tests out of its probe points", async () => {
+    assert.deepEqual(await scenarioHost(root), { file: "Reco/RecoMain.swift", line: 7 });
+    assert.deepEqual((await probePoints(root)).map((p) => p.name), ["frame.compress", "writer.finish"]);
+    assert.ok(isTestFile("RecoTests/A.swift", "import Testing\n"));
+    assert.ok(isTestFile("Tests/X/A.swift", ""));
+    assert.ok(!isTestFile("Reco/A.swift", "import Foundation // XCTest\n"));
+  });
+
+  it("reads the app-hosted test bundles a build left, from its .xctestrun", async () => {
+    const products = join(root, "dd", "Build", "Products");
+    const app = join(products, "Debug", "Reco.app");
+    await mkdir(join(app, "Contents"), { recursive: true });
+    await writeFile(
+      join(app, "Contents", "Info.plist"),
+      `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>Reco</string></dict></plist>`,
+    );
+    const target = (name: string, hosted: boolean, ui = false) => `<dict>
+      <key>BlueprintName</key><string>${name}</string><key>ProductModuleName</key><string>${name}</string>
+      <key>IsAppHostedTestBundle</key><${hosted}/><key>IsUITestBundle</key><${ui}/>
+      <key>TestHostPath</key><string>__TESTROOT__/Debug/Reco.app</string>
+      <key>TestBundlePath</key><string>__TESTHOST__/Contents/PlugIns/${name}.xctest</string>
+      <key>TestingEnvironmentVariables</key><dict>
+        <key>DYLD_FRAMEWORK_PATH</key><string>__TESTROOT__/Debug:__PLATFORMS__/MacOSX.platform/Developer/Library/Frameworks</string>
+        <key>DYLD_INSERT_LIBRARIES</key><string>__TESTHOST__/Contents/Frameworks/libXCTestBundleInject.dylib</string>
+      </dict></dict>`;
+    await writeFile(
+      join(products, "Reco_Reco_macosx26.0-arm64.xctestrun"),
+      `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict>
+        <key>TestConfigurations</key><array><dict><key>TestTargets</key><array>
+          ${target("RecoTests", true)}${target("RecoUITests", true, true)}${target("LogicTests", false)}
+        </array></dict></array></dict></plist>`,
+    );
+    const [tests, ...others] = await hostedTests(join(root, "dd"));
+    assert.equal(others.length, 0);
+    assert.equal(tests!.module, "RecoTests");
+    assert.equal(tests!.executable, join(app, "Contents", "MacOS", "Reco"));
+    assert.equal(tests!.bundle, join(app, "Contents", "PlugIns", "RecoTests.xctest"));
+    assert.match(tests!.xctest, /Platforms\/MacOSX.platform\/Developer\/Library\/Frameworks\/XCTest.framework\/XCTest$/);
+    // XCTest's own injector is left out: the app loads the bundle itself.
+    assert.deepEqual(Object.keys(tests!.env), ["DYLD_FRAMEWORK_PATH", "DYLD_LIBRARY_PATH"]);
+    assert.ok(tests!.env.DYLD_FRAMEWORK_PATH!.startsWith(`${join(products, "Debug")}:`));
+    assert.ok(!tests!.env.DYLD_FRAMEWORK_PATH!.includes("__"));
+    assert.match(tests!.env.DYLD_LIBRARY_PATH!, /MacOSX.platform\/Developer\/usr\/lib$/);
+  });
+});
+
 describe("ThreadSanitizer's reports", () => {
   it("reads a report: what, where, and both stacks", () => {
     assert.deepEqual(parseSanitizerLog(REPORT), [
@@ -230,7 +348,8 @@ describe("ThreadSanitizer's reports", () => {
  */
 const FAKE_XCTEST = `#!/usr/bin/env node
 const probe = process.env.WINDTUNNEL_PROBE;
-const test = process.argv[3].split("/")[1];
+// As xctest, the test is on the command line; as an Xcode project's app, in WINDTUNNEL_SCENARIO.
+const test = (process.env.WINDTUNNEL_SCENARIO ?? process.argv[3]).split("/")[1];
 const events = [];
 const post = (path, body) => fetch(new URL(path, probe), { method: "POST", body: JSON.stringify(body) }).then((r) => r.json());
 async function point(name, body) {
@@ -242,10 +361,10 @@ async function point(name, body) {
     await post("done", { id: reply.id });
   }
 }
-async function step(name, body) {
+async function step(name, body, picture) {
   await post("step", { name, phase: "start" });
   await body();
-  await post("step", { name, phase: "end" });
+  await post("step", { name, phase: "end", ...(picture ? { picture } : {}) });
 }
 const scenarios = {
   async testRace() {
@@ -268,6 +387,16 @@ const scenarios = {
   async testCrash() {
     await step("stop", async () => process.kill(process.pid, "SIGSEGV"));
   },
+  async testPicture() {
+    // What the step showed, as swift/WindTunnelProbe sends it: a base64 JPEG.
+    await step("open", async () => {}, Buffer.from("not really a jpeg").toString("base64"));
+    await step("close", async () => {});
+  },
+  async testLeaveHeld() {
+    // Work the test doesn't wait for: the process exits while the point is held.
+    void point("export.pumped").catch(() => {});
+    await new Promise((r) => setTimeout(r, 100));
+  },
   async testCrashWhileHeld() {
     setTimeout(() => process.kill(process.pid, "SIGKILL"), 100);
     await point("export.encode", async () => {});
@@ -275,9 +404,12 @@ const scenarios = {
 };
 try {
   await scenarios[test]();
+  if (process.env.WINDTUNNEL_SCENARIO) events.push("hosted " + process.env.WINDTUNNEL_SCENARIO + " " + process.env.WINDTUNNEL_TESTS + " " + process.env.WINDTUNNEL_XCTEST);
   require_fs().writeFileSync(process.env.DATA_DIR + "/events.txt", events.join("\\n"));
   console.log("Test Case '-[Fake.Scenarios " + test + "]' passed (0.1 seconds).");
   console.log("\\t Executed 1 test, with 0 failures (0 unexpected) in 0.1 (0.1) seconds");
+  // As xctest does: the process ends with the test, whatever it left running.
+  process.exit(0);
 } catch (err) {
   console.log("/x/Scenarios.swift:12: error: -[Fake.Scenarios " + test + "] : failed: caught error: \\"" + err.message + "\\"");
   console.log("\\t Executed 1 test, with 1 failure (0 unexpected) in 0.1 (0.1) seconds");
@@ -343,7 +475,7 @@ describe("a scenario run", () => {
     const { scenario } = await run("testCrash");
     assert.match(scenario.errors[0]!.message, /^the scenario crashed \(SIGSEGV\)/);
     assert.equal(scenario.errors[0]!.step, "stop");
-    assert.equal(scenario.steps[0]!.error, "the scenario ended during this step");
+    assert.equal(scenario.steps[0]!.error, "the scenario crashed (SIGSEGV) during this step");
   });
 
   it("lets go of a point held at the barrier when its process dies", async () => {
@@ -363,5 +495,33 @@ describe("a scenario run", () => {
     const scenario = new ScenarioRun({ experiment: parse("scenario: Scenarios/testGone"), variant: { name: "default" }, xctest: empty, bundle: "Fake.xctest", test: "Fake.Scenarios/testGone", cwd: root, env: { DATA_DIR: dir }, dir });
     await scenario.execute();
     assert.deepEqual(scenario.errors.map((e) => e.message), ["no test Fake.Scenarios/testGone in Fake.xctest"]);
+  });
+
+  it("keeps what a step showed as its screenshot, as a page's step has one", async () => {
+    const dir = await mkdtemp(join(root, "run-"));
+    const scenario = new ScenarioRun({ experiment: parse("scenario: Scenarios/testPicture"), variant: { name: "default" }, xctest, bundle: "Fake.xctest", test: "Fake.Scenarios/testPicture", cwd: root, env: { DATA_DIR: dir }, dir });
+    await scenario.execute();
+    assert.deepEqual(scenario.steps.map((s) => [s.step, s.shot]), [["open", "step-01-app.jpg"], ["close", undefined]]);
+    assert.equal(await readFile(join(dir, "screens", "step-01-app.jpg"), "utf8"), "not really a jpeg");
+  });
+
+  it("warns when the scenario ended with a point still held: the code after it never ran", async () => {
+    const { scenario } = await run("testLeaveHeld", "perturb: [{ do: delay, point: export.pumped, ms: 600 }]");
+    assert.deepEqual(scenario.errors, []);
+    assert.equal(scenario.warnings().length, 1);
+    assert.match(scenario.warnings()[0]!, /^point export.pumped: still held when the scenario ended \(at \d+ ms; let go at \d+ ms\), so the code after it never ran/);
+  });
+
+  it("runs an Xcode project's scenario inside its app: the app's executable, told the test, the bundle and XCTest", async () => {
+    const dir = await mkdtemp(join(root, "run-"));
+    const experiment = parse("scenario: Scenarios/testRace\nrace: { point: export.encode, order: [2, 1] }");
+    const host = { module: "Fake", bundle: "/b/Fake.xctest", executable: xctest, xctest: "/x/XCTest", env: { DYLD_FRAMEWORK_PATH: "/f" } };
+    const scenario = new ScenarioRun({ experiment, variant: variantsOf(experiment, ["app"])[0]!, host, test: "Fake.Scenarios/testRace", cwd: root, env: { DATA_DIR: dir }, dir });
+    await scenario.execute();
+    assert.deepEqual(scenario.errors, []);
+    const events = (await readFile(join(dir, "events.txt"), "utf8")).split("\n");
+    // (DYLD_ variables are passed too; macOS drops them for this fake, which starts through /usr/bin/env.)
+    assert.deepEqual(events.slice(-1), ["hosted Fake.Scenarios/testRace /b/Fake.xctest /x/XCTest"]);
+    assert.deepEqual(events.filter((e) => / (in|out)$/.test(e)), ["b in", "b out", "a in", "a out"]);
   });
 });

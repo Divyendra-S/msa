@@ -4,6 +4,8 @@ import { findAndroidSdk } from "../android/sdk.ts";
 import { sh } from "../exec.ts";
 import { addWorktree, commitPatch, git, removeWorktree, resolveRef, snapshotWorkingTree, withoutPaths } from "../git.ts";
 import { withLock } from "../lock.ts";
+import type { Sanitizer } from "../mac/sanitizer.ts";
+import { derivedDataDir, type HostedTests, hostedTests, xcodeBuildCommand } from "../mac/xcode.ts";
 import { exists, type Project } from "../project.ts";
 
 /**
@@ -36,6 +38,9 @@ export interface PreparedVersion {
   phoneApp?: string;
 }
 
+/** A version's Mac tests: a Swift package's test bundle, or an Xcode project's app-hosted ones. */
+export type MacTests = { kind: "package"; bundle: string } | { kind: "xcode"; hosted: HostedTests[] };
+
 const READY_MARKER = ".windtunnel-ready.json";
 
 /** Turns code versions into installed, built worktrees, cached by tree id. */
@@ -43,7 +48,7 @@ export class CodeVersions {
   private readonly project: Project;
   private readonly inflight = new Map<string, Promise<PreparedVersion>>();
   private readonly phoneApps = new Map<string, Promise<string>>();
-  private readonly macBuilds = new Map<string, Promise<string>>();
+  private readonly macBuilds = new Map<string, Promise<MacTests>>();
 
   constructor(project: Project) {
     this.project = project;
@@ -149,35 +154,36 @@ export class CodeVersions {
   }
 
   /**
-   * A Swift Mac app's test bundle for a version (app.kind: mac), built once per version and
-   * sanitizer: by default into its own `.build/windtunnel-<sanitizer>`, so builds with and
-   * without ThreadSanitizer don't overwrite each other.
+   * A Swift Mac app's tests for a version (app.kind: mac), built once per version and sanitizer:
+   * a Swift package's test bundle, by default into its own `.build/windtunnel-<sanitizer>` so
+   * builds with and without ThreadSanitizer don't overwrite each other; an Xcode project's
+   * app-hosted bundles, into a derived data folder of their own in /tmp.
    */
-  macTests(prepared: PreparedVersion, sanitizer: "thread" | "none"): Promise<string> {
+  macTests(prepared: PreparedVersion, sanitizer: Sanitizer): Promise<MacTests> {
     const key = `${prepared.version.id}:${sanitizer}`;
     let pending = this.macBuilds.get(key);
     if (!pending) {
-      pending = this.buildMacTests(prepared, sanitizer);
+      pending = this.project.config.mac!.project ? this.buildXcodeTests(prepared, sanitizer) : this.buildMacTests(prepared, sanitizer);
       this.macBuilds.set(key, pending);
       pending.catch(() => this.macBuilds.delete(key));
     }
     return pending;
   }
 
-  private async buildMacTests(prepared: PreparedVersion, sanitizer: "thread" | "none"): Promise<string> {
+  private async buildMacTests(prepared: PreparedVersion, sanitizer: Sanitizer): Promise<MacTests> {
     const mac = this.project.config.mac!;
     const dir = join(prepared.worktree, this.project.appSubdir, mac.dir);
     const scratch = `.build/windtunnel-${sanitizer}`;
     const command = mac.build ?? `swift build --build-tests --scratch-path ${scratch}${sanitizer === "thread" ? " --sanitize=thread" : ""}`;
     const marker = join(dir, ".build", `windtunnel-built-${sanitizer}`);
-    const bundle = async () => {
-      if (mac.tests) return join(dir, mac.tests);
+    const bundle = async (): Promise<MacTests> => {
+      if (mac.tests) return { kind: "package", bundle: join(dir, mac.tests) };
       const products = join(dir, mac.build ? ".build" : scratch, "debug");
       const found = (await readdir(products).catch(() => [])).filter((f) => f.endsWith(".xctest"));
       if (found.length !== 1) {
         throw new Error(`expected one test bundle in ${products}, found ${found.length ? found.join(", ") : "none"}: set mac.tests`);
       }
-      return join(products, found[0]!);
+      return { kind: "package", bundle: join(products, found[0]!) };
     };
     if (await exists(marker)) return bundle();
     return withLock(`${dir}.mac-${sanitizer}.lock`, async () => {
@@ -187,6 +193,24 @@ export class CodeVersions {
         await writeFile(marker, command);
       }
       return bundle();
+    });
+  }
+
+  private async buildXcodeTests(prepared: PreparedVersion, sanitizer: Sanitizer): Promise<MacTests> {
+    const mac = this.project.config.mac!;
+    const dir = join(prepared.worktree, this.project.appSubdir, mac.dir);
+    const derivedData = derivedDataDir(this.project.key, prepared.version.id, sanitizer);
+    const command = mac.build ?? xcodeBuildCommand(mac, sanitizer);
+    const marker = join(derivedData, "windtunnel-built");
+    const tests = async (): Promise<MacTests> => ({ kind: "xcode", hosted: await hostedTests(derivedData) });
+    if (await exists(marker)) return tests();
+    await mkdir(dirname(derivedData), { recursive: true });
+    return withLock(`${derivedData}.lock`, async () => {
+      if (!(await exists(marker))) {
+        await sh(command, { cwd: dir, logFile: this.logFile(prepared.version.id), env: { CI: "1", DERIVED_DATA: derivedData } });
+        await writeFile(marker, command);
+      }
+      return tests();
     });
   }
 
@@ -215,6 +239,9 @@ export class CodeVersions {
 
   async remove(id: string): Promise<void> {
     await removeWorktree(this.project.repoRoot, join(this.worktreesDir, id));
+    if (this.project.config.mac?.project) {
+      for (const sanitizer of ["none", "thread"] as const) await rm(derivedDataDir(this.project.key, id, sanitizer), { recursive: true, force: true });
+    }
   }
 
   logFile(id: string): string {

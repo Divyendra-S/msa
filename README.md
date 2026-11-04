@@ -320,6 +320,23 @@ starts it with `xctest` on one test method, directly. The Map and `windtunnel sc
 code: actors, tasks, dispatch queues, shared state the compiler doesn't check, file writes and
 cancellation checks, as places to put probe points.
 
+An Xcode project works too, with its tests hosted in the app (`TEST_HOST`), as most are. Name the
+project and its scheme, and call `Probe.hostScenario()` first thing in the app's entry point: each
+run starts the app's own executable, which runs the one scenario in place of the app and exits,
+before anything shows.
+
+```yaml
+mac:
+  project: Recorder.xcodeproj
+  scheme: Recorder
+```
+
+The build is `xcodebuild build-for-testing`, ad-hoc signed (no certificate needed), into /tmp,
+where macOS doesn't register apps it finds: a second copy of an app can take its links and its
+permissions. In a run, `UserDefaults.standard` is the run's own, not the app's real settings.
+Steps can show the app's own screens (`Probe.step("export", showing: { ExportPage(…) })`), drawn
+off screen at the step's end: Replay shows them as it shows a page's screenshots.
+
 ## Experiments
 
 An experiment is a flow (a Playwright script split into named steps) plus perturbations,
@@ -434,4 +451,7 @@ pnpm mac:open
 
 The same views as native SwiftUI, plus experiments you can run from the app and hunts with
 Claude 5: in your own Claude Code (the app follows every run it starts) or headless on an
-Anthropic API key. See [`apps/mac`](apps/mac/README.md).
+Anthropic API key. Its Replay plays each test's newest run step by step, each screen large, to
+the rule that broke and the agent's finding: why it breaks, what would fix it, and where (an
+experiment's `finding:`). Play all goes through every test in turn. See
+[`apps/mac`](apps/mac/README.md).

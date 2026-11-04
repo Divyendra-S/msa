@@ -4,7 +4,7 @@ export { createSimulators, iosRuntimes, SIMULATOR_PREFIX, windtunnelSimulators }
 export { stopSimulators } from "./ios/simulators.ts";
 export { findWebDriverAgentSource } from "./ios/wda.ts";
 export { parseSanitizerLog, readSanitizerReports, type Sanitizer, type SanitizerReport, threadSanitizerProblem } from "./mac/sanitizer.ts";
-export { findScenario, type ProbePoint, probePoints, type ScenarioSource, swiftFiles } from "./mac/swift.ts";
+export { findScenario, isTestFile, type ProbePoint, probePoints, type ScenarioSource, scenarioHost, swiftFiles } from "./mac/swift.ts";
 export {
   avdHome,
   createAvd,

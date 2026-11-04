@@ -8,13 +8,13 @@ import { buildWebDriverAgent, findWebDriverAgentSource, WebDriverAgent, type Web
 import { Appium } from "../phone/appium.ts";
 import { type Branch, Branches } from "../branches/branches.ts";
 import { browserFor } from "../browser.ts";
-import type { CodeVersion, CodeVersionSpec } from "../branches/code-versions.ts";
+import type { CodeVersion, CodeVersionSpec, MacTests } from "../branches/code-versions.ts";
 import { CONFIG_FILE, ConfigError, expandVars, type MacConfig } from "../config.ts";
 import type { Database } from "../database.ts";
 import { CommandError, runScript, sh } from "../exec.ts";
 import { ScenarioRun, stopScenarios } from "../mac/scenario.ts";
 import { type Sanitizer, threadSanitizerLibrary, threadSanitizerProblem } from "../mac/sanitizer.ts";
-import { findScenario } from "../mac/swift.ts";
+import { findScenario, scenarioHost } from "../mac/swift.ts";
 import type { TestUser } from "../flow-api.ts";
 import { checkRules, loadRules, phoneFilesOf, type Rule, type RuleResult } from "../rules.ts";
 import { type DbSnapshot, diffSnapshots, snapshotDatabase } from "./db-diff.ts";
@@ -133,14 +133,17 @@ interface IosRuntime {
   agents: Map<string, Promise<WebDriverAgent>>;
 }
 
-/** What a Mac app's runs on one code version need: xctest, the version's test bundle, ThreadSanitizer's runtime. */
+/** What a Mac app's runs on one code version need: its tests as built, and how to start them. */
 interface MacSetup {
-  xctest: string;
-  bundle: string;
-  /** The Swift package's folder in the version's worktree. */
+  /** xctest, for a Swift package's bundle; an Xcode project's tests run inside its app instead. */
+  xctest?: string;
+  tests: MacTests;
+  /** The Swift package's (or Xcode project's) folder in the version's worktree. */
   cwd: string;
-  /** ThreadSanitizer's runtime, when the build has it. */
+  /** ThreadSanitizer's runtime, loaded into xctest when the build has it (an app built with it carries its own). */
   library?: string;
+  /** Whether the build has ThreadSanitizer, whose reports the run then collects. */
+  sanitized: boolean;
 }
 
 /** The phones of a run, leased from the emulators or simulators; none for web and desktop apps. */
@@ -502,9 +505,13 @@ export class Runner {
     let dataDir: string | undefined;
     try {
       const setup = await this.macSetup(job.version);
-      const scenario = await findScenario(setup.cwd, job.experiment.scenario!);
+      const { tests } = setup;
+      const named = job.experiment.scenario!.split("/")[0]!.split(".").slice(0, -1).join(".");
+      const hosted = tests.kind === "xcode" ? (tests.hosted.find((h) => h.module === named) ?? tests.hosted[0]) : undefined;
+      if (tests.kind === "xcode" && !hosted) throw new Error(`the build of ${mac.project} has no test bundle that runs inside the app`);
+      const scenario = await findScenario(setup.cwd, job.experiment.scenario!, undefined, hosted && { module: hosted.module });
       if (!scenario) throw new Error(`no XCTest method ${job.experiment.scenario} in this version's tests`);
-      const reports = setup.library ? join(dir, "tsan") : undefined;
+      const reports = setup.sanitized ? join(dir, "tsan") : undefined;
       await this.branches.isolated(job.version, { keepDatabase: job.options.keepDatabase }, async (state) => {
         dataDir = state.dataDir;
         if (state.database) await this.baseline(job.version.id, state.database);
@@ -515,12 +522,11 @@ export class Runner {
         run = new ScenarioRun({
           experiment: job.experiment,
           variant: job.variant,
-          xctest: setup.xctest,
-          bundle: setup.bundle,
+          ...(hosted ? { host: hosted } : { xctest: setup.xctest!, bundle: (tests as { bundle: string }).bundle }),
           test: scenario.test,
           cwd: setup.cwd,
           env,
-          ...(setup.library && reports ? { sanitizer: { library: setup.library, reports } } : {}),
+          ...(reports ? { sanitizer: { ...(setup.library ? { library: setup.library } : {}), reports } } : {}),
           dir,
         });
         await run.execute();
@@ -581,7 +587,7 @@ export class Runner {
     return summary;
   }
 
-  /** xctest, the version's test bundle (built on first use) and ThreadSanitizer's runtime, once per version. */
+  /** The version's tests (built on first use), and what starts them, once per version. */
   private macSetup(version: CodeVersion): Promise<MacSetup> {
     let setup = this.macSetups.get(version.id);
     if (!setup) {
@@ -595,13 +601,24 @@ export class Runner {
             throw new ConfigError(`${problem}. Update Xcode, or run without ThreadSanitizer: mac.sanitizer: none in ${CONFIG_FILE}, or WINDTUNNEL_SANITIZER=none`);
           }
         }
+        const prepared = await this.branches.prepare(version);
+        const cwd = join(prepared.worktree, this.project.appSubdir, mac.dir);
+        if (mac.project) {
+          // The tests run inside the app: without the hook, each run would start the app itself, on screen.
+          if (!(await scenarioHost(cwd))) {
+            throw new ConfigError(
+              `${mac.project}: the app never calls Probe.hostScenario(). An Xcode project's scenarios run inside its app; call it first thing in the app's entry point, so a run starts the scenario instead of the app (swift/WindTunnelProbe/README.md)`,
+            );
+          }
+          const tests = await this.branches.versions.macTests(prepared, sanitizer);
+          return { tests, cwd, sanitized: sanitizer === "thread" };
+        }
         const xctest = (await runScript("xcrun --find xctest", { cwd: this.project.root, timeoutMs: 30_000 })).stdout.trim();
         if (!xctest) throw new ConfigError("xctest not found: install Xcode (the Command Line Tools alone have no XCTest)");
         const library = sanitizer === "thread" ? await threadSanitizerLibrary() : undefined;
         if (sanitizer === "thread" && !library) throw new ConfigError("ThreadSanitizer's runtime is not in the active Xcode toolchain");
-        const prepared = await this.branches.prepare(version);
-        const bundle = await this.branches.versions.macTests(prepared, sanitizer);
-        return { xctest, bundle, cwd: join(prepared.worktree, this.project.appSubdir, mac.dir), ...(library ? { library } : {}) };
+        const tests = await this.branches.versions.macTests(prepared, sanitizer);
+        return { xctest, tests, cwd, ...(library ? { library } : {}), sanitized: sanitizer === "thread" };
       })();
       this.macSetups.set(version.id, setup);
       setup.catch(() => this.macSetups.delete(version.id));

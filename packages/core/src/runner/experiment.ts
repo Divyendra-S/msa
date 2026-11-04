@@ -154,6 +154,17 @@ export const ExperimentSchema = z.strictObject({
   repeat: z.number().int().min(1).max(100).default(3),
   /** Limit for one run of the flow. */
   timeout: Duration.default(60_000),
+  /**
+   * What the agent found once a rule broke and it read the code behind it: why the app breaks, what
+   * would fix it, and where (`path:line`). Replay shows it with the rule that broke.
+   */
+  finding: z
+    .strictObject({
+      cause: z.string().min(1),
+      fix: z.string().min(1).optional(),
+      code: z.array(z.string().min(1)).default([]),
+    })
+    .optional(),
 }).refine((e) => (e.flow === undefined) !== (e.scenario === undefined), { message: "an experiment has a flow, or (for a Swift Mac app) a scenario" });
 
 export type Experiment = z.output<typeof ExperimentSchema> & { id: string; file?: string };
@@ -387,10 +398,11 @@ export async function checkExperiment(experiment: Experiment, project: Project, 
  */
 async function checkScenario(experiment: Experiment, project: Project, errors: string[], warnings: string[]): Promise<string[]> {
   const dir = join(project.root, project.config.mac?.dir ?? ".");
+  const xcode = project.config.mac?.project ? {} : undefined;
   const files = await swiftFiles(dir);
-  const scenario = await findScenario(dir, experiment.scenario!, files);
+  const scenario = await findScenario(dir, experiment.scenario!, files, xcode);
   if (!scenario) {
-    errors.push(`scenario ${experiment.scenario}: no such XCTest method in ${dir}/Tests (Class/testMethod)`);
+    errors.push(`scenario ${experiment.scenario}: no such XCTest method in ${xcode ? `${dir}'s tests` : `${dir}/Tests`} (Class/testMethod)`);
     return [];
   }
   const points = await probePoints(dir, files);

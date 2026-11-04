@@ -420,8 +420,8 @@ the code.
   is built once per version (`swift build --build-tests`) and each run starts `xctest -XCTest
   <Class/test> <bundle>` directly; `swift test` takes a lock on `.build`, so parallel runs would
   queue. Points are calls at the existing seam (`POINT writer.finish`), so delays, failures, races
-  and their notes are the web's. Xcode projects aren't supported yet: their tests usually run
-  inside the app, which opens its window.
+  and their notes are the web's. Xcode projects came after the phase (below): their tests
+  usually run inside the app, which would open its window.
 - [x] **Rules:** `check:` scripts on what's left (the exported video opens and has the right
   length); builds with ThreadSanitizer, where any data race it reports breaks a `no-data-races`
   rule, with both stacks as the sample. Done: the recorder's checks read its take files (whole,
@@ -469,8 +469,71 @@ Found on the way:
 - `FileManager.createFile` replaces a file with a new one, so two writers "sharing" a path really
   write two files, and one move fails loudly; the recorder's writer reopens and truncates instead.
 - Foundation finds the home folder through `CFFIXED_USER_HOME`, not `HOME`; runs set both.
-- Not yet: Xcode projects (and tests hosted in the app), Swift Testing (`@Test`) scenarios,
-  driving a Mac app's real UI (Later).
+- Not yet: Swift Testing (`@Test`) scenarios, driving a Mac app's real UI (Later). Xcode
+  projects: below.
+
+## After Phase 5: Xcode projects, and Orbit
+
+The owner asked to test Orbit (`~/orca/reco`, a menu bar screen recorder and editor) with Wind
+Tunnel running everything. Orbit is an Xcode project whose tests run inside the app
+(`TEST_HOST`), which Phase 5 left out.
+
+- [x] **Xcode projects:** `mac.project` and `mac.scheme`. Each version is built once with
+  `xcodebuild build-for-testing`, ad-hoc signed (this Mac has no signing certificate, and a run
+  needs none) and without the hardened runtime, into `/tmp/windtunnel-<uid>/`, where macOS
+  doesn't register the apps it finds. The `.xctestrun` gives the app, the bundle and XCTest's
+  paths.
+- [x] **Hosted scenarios:** each run starts the app's own executable. `Probe.hostScenario()`, the
+  first line of the app's entry point, loads XCTest (through its Objective-C API: the app links
+  nothing of it) and the bundle, runs the one test and exits, before the app shows anything; the
+  runner refuses an app without it. `xcodebuild test-without-building` per run was the other way:
+  slower, through Launch Services and testmanagerd, and it starts the app as the installed one.
+  `UserDefaults.standard` points at a file in the run's folder: `CFFIXED_USER_HOME` moves the home
+  folder but not preferences (measured: a test write landed in the real `~/Library/Preferences`,
+  removed at once).
+- [x] **Held points:** a point stays held when its task is cancelled meanwhile (the request
+  goes through a detached task); a hosted app keeps running while a point is held, and a second
+  after; a run whose process ended with a point still held warns that the code after it never
+  ran (found when Orbit's scenario ended before its cancelled export woke up).
+- [x] Map, `windtunnel scan` and `doctor` read Xcode projects: tests anywhere (files importing
+  XCTest), where the app calls `Probe.hostScenario()`, the package in `project.pbxproj`.
+- [x] **Step pictures** (asked for after the first Orbit run, whose Replay had no screens):
+  `Probe.step("…", showing: { view })` draws the app's own view at the step's end, in a titled
+  window that is never ordered in, and sends a JPEG with the step's end; the run keeps it as the
+  step's screenshot (`screens/step-NN-app.jpg`), which Replay already shows. Found on the way:
+  drawing the views turns a Liquid Glass column into its raw shape texture (pink), so glass and
+  backdrop layers are hidden and the window's ground shows; a player layer only reaches the
+  screen, so its current frame is drawn in its place through the item's video composition;
+  tearing a picture's window down cancelled Orbit's export (`ExportOptions` cancels on
+  disappear), so picture windows stay open until the scenario ends; a 2x drawing with a 400 ms
+  settle took 0.6 s and let the export finish before Cancel, so pictures are 1x with a shorter
+  settle (about 0.3 s) and Orbit's export scenario records 12 s.
+- [x] Tests: 192 (`pnpm test`); `pnpm typecheck` clean; `zoo:verify:mac` unchanged (84 runs).
+
+**Orbit**, outside this repo and not committed: `WindTunnelProbe` as a local package (absolute
+path) in `Reco.xcodeproj`, `Probe.hostScenario()` in `RecoMain`, four probe points
+(`writer.drain`, `writer.finish` in `AssetWriter.finishWriting`; `project.save` around
+`EditorViewModel.save`'s write; `export.pumped` after `MovieEncoder.write`'s pump), three XCTest
+scenarios (`RecoTests/WindTunnelScenarios.swift`), each step showing Orbit's editor or export page,
+three `check:` rules reading the movies with ffprobe, seven experiments. 27 runs in 14 s after a 56 s build; no window from Orbit, and its real
+settings untouched. What broke:
+
+- **Cancelling an export can crash Orbit** (1 to 2 runs in 3, with no pressure at all):
+  `ExportSession.cancel()` cancels the task, whose handler calls `reader.cancelReading()` while
+  the export queue is inside `AVAssetReaderOutput.copyNextSampleBuffer()` (`MovieEncoder.Pump`);
+  `EXC_BAD_ACCESS` / `EXC_BREAKPOINT` in MediaToolbox, on `com.diip3sh.Reco.export.0`.
+- **Cancel, then export again, can lose the new export:** `cancel()` marks the session idle at
+  once, so a second export starts while the first winds down; the first then cancels its writer
+  and removes the same path (`ExportService`), deleting the second's file, which Orbit reports
+  done. `slow-cancel-then-export` breaks `exports-exist` in every run that doesn't crash.
+- **An autosave can overwrite the last edits:** `save()` writes off the main actor; when the
+  editor closes while an autosave is writing, its own save can finish first, and the older one
+  then writes over it. `autosave-races-close` breaks `saved-project-is-latest` in 3 of 3 runs of
+  the `2,1` order.
+- Recording (Stop while frames still arrive, a slow drain, a failed finish) holds.
+
+Not yet: a dependency outside the repository (the probe package here) isn't part of a version's
+identity, so a change to it needs its build removed by hand.
 
 ## Later
 

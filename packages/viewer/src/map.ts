@@ -80,11 +80,14 @@ export interface MapExperiment {
   description?: string;
   /** A Swift Mac app's XCTest method, which it runs in place of a flow. */
   scenario?: string;
+  /** Why it breaks the app, what would fix it and where, as the agent found it. */
+  finding?: { cause: string; fix?: string; code: string[] };
   users: string[];
   /** Where it pushes, and the routes that lands on: requests sent at once, slowed or lost, a step submitted twice, a webhook sent twice. */
   pressure: { what: string; routes: string[]; step?: string }[];
   /** Its newest finished run, and the repetition the steps come from. */
-  run?: { id: string; outcome: string; headline: string; startedAt: string; rep: number; reps: number; broken: string[] };
+  /** `variant`: the race's ordering that repetition ran (`2,1`), when it had one. */
+  run?: { id: string; outcome: string; headline: string; startedAt: string; rep: number; reps: number; variant?: string; broken: string[] };
   pages: string[];
   routes: string[];
   /** Tables that run changed. */
@@ -211,6 +214,7 @@ export async function mapView(workspace: Workspace, runner: Runner): Promise<Map
       id: e.id,
       ...(e.description ? { description: e.description } : {}),
       ...(e.scenario ? { scenario: e.scenario } : {}),
+      ...(e.finding ? { finding: e.finding } : {}),
       users: e.users ?? [],
       pressure: pressureOf(e, steps, routes.filter((r) => r.webhook).map((r) => r.key), !!(project.config.android || project.config.ios)),
       ...(entry && result && focus
@@ -222,6 +226,7 @@ export async function mapView(workspace: Workspace, runner: Runner): Promise<Map
               startedAt: entry.startedAt,
               rep: focus.rep,
               reps: result.reps.length,
+              ...(focus.variant !== "default" ? { variant: focus.variant } : {}),
               broken: unique(result.reps.flatMap((r) => r.broken)),
             },
           }

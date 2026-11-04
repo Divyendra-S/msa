@@ -1,6 +1,6 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { findScenario, type ProbePoint, probePoints, swiftFiles } from "@windtunnel/core";
+import { findScenario, isTestFile, type ProbePoint, probePoints, scenarioHost, swiftFiles } from "@windtunnel/core";
 import { blankComments, lineAt, matchBrace } from "./phone-code.ts";
 
 /** A Swift Mac app's code as Wind Tunnel tests it: its probe points, where more could go, and its scenarios. */
@@ -12,6 +12,8 @@ export interface MacApp {
   sites: ConcurrencySite[];
   /** The XCTest methods experiments can run as scenarios, and the steps each marks. */
   scenarios: { id: string; file: string; line: number; steps: string[] }[];
+  /** An Xcode project's: its `.xcodeproj` (or `.xcworkspace`), and where the app calls `Probe.hostScenario()`. */
+  xcode?: { project: string; host?: { file: string; line: number } };
 }
 
 export interface ConcurrencySite {
@@ -44,10 +46,14 @@ const SITES: { kind: string; pattern: RegExp; note: string }[] = [
 /** Probe points closer than this many lines count as already covering a site. */
 const NEAR = 3;
 
-/** Reads a Swift package (a `Package.swift` in `dir`); undefined when there is none. */
-export async function findMacApp(dir: string): Promise<MacApp | undefined> {
-  const manifest = await readFile(join(dir, "Package.swift"), "utf8").catch(() => undefined);
-  if (manifest === undefined) return undefined;
+/**
+ * Reads a Swift package (a `Package.swift` in `dir`) or an Xcode project (`project`, else the one
+ * `.xcodeproj` or `.xcworkspace` there); undefined when there is neither.
+ */
+export async function findMacApp(dir: string, project?: string): Promise<MacApp | undefined> {
+  const manifest = project ? undefined : await readFile(join(dir, "Package.swift"), "utf8").catch(() => undefined);
+  const xcode = manifest === undefined ? (project ?? (await readdir(dir).catch(() => [])).find((f) => /\.(xcodeproj|xcworkspace)$/.test(f))) : undefined;
+  if (manifest === undefined && !xcode) return undefined;
   const files = await swiftFiles(dir);
   const points = await probePoints(dir, files);
   const sites: ConcurrencySite[] = [];
@@ -56,10 +62,10 @@ export async function findMacApp(dir: string): Promise<MacApp | undefined> {
   for (const { file, text } of files) {
     if (file === "Package.swift" || file.startsWith(".")) continue;
     const code = blankComments(text);
-    if (file.startsWith("Tests/")) {
+    if (isTestFile(file, text)) {
       for (const cls of code.matchAll(/\bclass\s+(\w+)\s*:\s*XCTestCase\b/g)) {
         for (const fn of code.slice(cls.index).matchAll(/\bfunc\s+(test\w*)\s*\(/g)) {
-          const found = await findScenario(dir, `${cls[1]}/${fn[1]}`, files);
+          const found = await findScenario(dir, `${cls[1]}/${fn[1]}`, files, xcode ? {} : undefined);
           if (found && !scenarios.some((s) => s.id === `${cls[1]}/${fn[1]}`)) scenarios.push({ id: `${cls[1]}/${fn[1]}`, file, line: found.line, steps: found.steps });
         }
       }
@@ -88,7 +94,9 @@ export async function findMacApp(dir: string): Promise<MacApp | undefined> {
     }
   }
   sites.sort((a, b) => a.file.localeCompare(b.file) || a.lines[0]! - b.lines[0]!);
-  return { framework: "Swift (Mac)", points: enriched, sites, scenarios };
+  if (!xcode) return { framework: "Swift (Mac)", points: enriched, sites, scenarios };
+  const host = await scenarioHost(dir, files);
+  return { framework: "Swift (Mac, Xcode)", points: enriched, sites, scenarios, xcode: { project: xcode, ...(host ? { host } : {}) } };
 }
 
 /** Types and functions in the code, with the span of their bodies. */

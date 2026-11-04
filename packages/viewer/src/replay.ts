@@ -21,22 +21,24 @@ export interface ReplayView {
 export interface ReplayExperiment {
   id: string;
   description?: string;
-  /** A Swift Mac app's XCTest method: its steps have no screen, only the probe points its code reached. */
+  /** A Swift Mac app's XCTest method: each step shows what the scenario pictured, and the probe points its code reached. */
   scenario?: string;
+  /** Why it breaks the app, what would fix it and where (`path:line`), as the agent found it. */
+  finding?: MapExperiment["finding"];
   users: string[];
   pressure: MapExperiment["pressure"];
   /** Its runs on record, oldest first (the last 16). */
   history: { id: string; outcome: string; startedAt: string }[];
   /** The newest finished run, and the repetition shown (a broken one if any). */
-  run?: { id: string; outcome: string; startedAt: string; rep: number; reps: number; broken: string[]; durationMs: number; error?: string };
+  run?: { id: string; outcome: string; startedAt: string; rep: number; reps: number; variant?: string; broken: string[]; durationMs: number; error?: string };
   lanes: { tab: string; user: string }[];
   /** A column per step of the flow; `pressure`: what the experiment did there, in a few words. */
   columns: { step: string; attempt?: string; start: number; pressure: string[] }[];
   frames: ReplayFrame[];
   /** The payment provider's webhook deliveries, under the step they came during. */
   webhooks: { column: number; at: number; type: string; status: number | null; ms?: number }[];
-  /** Rules that broke in the repetition shown, and how many held. */
-  rules: { broken: { id: string; description?: string; rows: number; sample?: string }[]; held: number };
+  /** Rules that broke in the repetition shown (`examples`: their first rows, in full), and how many held. */
+  rules: { broken: { id: string; description?: string; rows: number; sample?: string; examples: string[] }[]; held: number };
   /** What changed in the database, e.g. `orders +2`. */
   changes: string[];
 }
@@ -82,6 +84,8 @@ export interface ReplayRequest {
 
 const HISTORY = 16;
 const TEXT = 280;
+/** Rows of a broken rule shown in full. */
+const EXAMPLES = 3;
 
 export async function replayView(workspace: Workspace, runner: Runner): Promise<ReplayView> {
   const [map, rules, runs] = await Promise.all([mapView(workspace, runner), workspace.rules(), listRuns(runner.store, 300)]);
@@ -100,6 +104,7 @@ export async function replayView(workspace: Workspace, runner: Runner): Promise<
       id: e.id,
       ...(e.description ? { description: e.description } : {}),
       ...(e.scenario ? { scenario: e.scenario } : {}),
+      ...(e.finding ? { finding: e.finding } : {}),
       users: e.users,
       pressure: e.pressure,
       history: (history.get(e.id) ?? []).slice(-HISTORY),
@@ -126,6 +131,7 @@ export async function replayView(workspace: Workspace, runner: Runner): Promise<
       startedAt: e.run.startedAt,
       rep: e.run.rep,
       reps: e.run.reps,
+      ...(e.run.variant ? { variant: e.run.variant } : {}),
       broken: e.run.broken,
       durationMs: detail?.durationMs ?? 0,
       ...(detail?.error ? { error: detail.error } : {}),
@@ -160,7 +166,13 @@ export async function replayView(workspace: Workspace, runner: Runner): Promise<
       rules: {
         broken: detail.rules
           .filter((r) => !r.ok)
-          .map((r) => ({ id: r.id, ...(describe.get(r.id) ? { description: describe.get(r.id) } : {}), rows: r.rows.length, ...(r.rows[0] ? { sample: sample(r.rows[0]) } : {}) })),
+          .map((r) => ({
+            id: r.id,
+            ...(describe.get(r.id) ? { description: describe.get(r.id) } : {}),
+            rows: r.rows.length,
+            ...(r.rows[0] ? { sample: sample(r.rows[0]) } : {}),
+            examples: r.rows.slice(0, EXAMPLES).map((row) => sample(row, Infinity)),
+          })),
         held: detail.rules.filter((r) => r.ok).length,
       },
       changes: detail.diff && detail.diff !== "no changes" ? detail.diff.split(" · ") : [],
@@ -314,9 +326,9 @@ function tag(note: string): string {
   return gist === "held at the race barrier" ? "held for the race" : gist === "released with the others" ? "released together" : gist;
 }
 
-function sample(row: Record<string, unknown>): string {
+function sample(row: Record<string, unknown>, keys = 4): string {
   return Object.entries(row)
-    .slice(0, 4)
+    .slice(0, keys)
     .map(([k, v]) => `${k} ${typeof v === "object" && v !== null ? JSON.stringify(v) : String(v)}`)
     .join(" · ");
 }

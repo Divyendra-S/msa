@@ -1,4 +1,7 @@
 import Foundation
+#if DEBUG
+import os
+#endif
 
 /// The places in an app's code where a Wind Tunnel run can step in, and the steps of a test
 /// scenario.
@@ -102,6 +105,13 @@ final class Harness: Sendable {
 
     private let base: URL
     private let session: URLSession
+    /// Points waiting for the run's answer right now.
+    private let waiting = OSAllocatedUnfairLock(initialState: 0)
+
+    /// Whether any point is waiting for the run's answer.
+    var isHolding: Bool {
+        waiting.withLock { $0 > 0 }
+    }
 
     private init(base: URL) {
         self.base = base
@@ -127,6 +137,8 @@ final class Harness: Sendable {
 
     /// Asks what to do at a point, and does it; returns the section's id for `done`.
     func ask(_ name: String, section: Bool) async throws -> Int? {
+        waiting.withLock { $0 += 1 }
+        defer { waiting.withLock { $0 -= 1 } }
         let reply: Reply
         do {
             reply = try JSONDecoder().decode(Reply.self, from: await post("point", ["name": name, "section": section]))
@@ -152,9 +164,10 @@ final class Harness: Sendable {
         _ = try? await post("done", body)
     }
 
-    func step(_ name: String, phase: String, error: (any Error)?) async {
+    func step(_ name: String, phase: String, error: (any Error)?, picture: Data? = nil) async {
         var body: [String: Any] = ["name": name, "phase": phase]
         if let error { body["error"] = String(describing: error) }
+        if let picture { body["picture"] = picture.base64EncodedString() }
         _ = try? await post("step", body)
     }
 
@@ -163,9 +176,15 @@ final class Harness: Sendable {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "content-type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await session.data(for: request)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
-        return data
+        // Detached, so a held point stays held when its task is cancelled meanwhile: the run lets it
+        // go, as the await it stands for would have finished.
+        let session = session
+        let finalRequest = request
+        return try await Task.detached {
+            let (data, response) = try await session.data(for: finalRequest)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw URLError(.badServerResponse) }
+            return data
+        }.value
     }
 
     private func warn(_ text: String) {

@@ -6,12 +6,14 @@ A handoff for whoever picks up this repo next, human or coding agent. Newest fir
 [`platforms-plan.md`](platforms-plan.md) for testing Tauri, Android, iOS and Swift Mac apps. This
 file says what happened recently, why, and what to know before changing things.
 
-## Where things stand (2026-11-02)
+## Where things stand (2026-11-03)
 
 - `main` has Phases 1–7 done; Phase 8 (submission) is partly done.
 - **[`platforms-plan.md`](platforms-plan.md)**: all five phases are done and pushed:
-  groundwork, Tauri, Android, iOS and Swift Mac apps. `zoo:verify:mac` passes (84 runs), nothing
-  appears on screen, Replay shows the scenario's steps, and there are 183 tests. The
+  groundwork, Tauri, Android, iOS and Swift Mac apps. After them, Xcode projects (tests hosted in
+  the app), step pictures, and Replay's player with findings, tried on Orbit (`~/orca/reco`) at the
+  owner's request: not committed yet. 192 tests;
+  `zoo:verify:mac` passes (84 runs), nothing appears on screen. The
   ThreadSanitizer rule can't run on this Mac until Xcode is 26.4 or newer (macOS 26.5.2, Xcode
   26.0.1: Apple's known issue 171762808): after updating Xcode, run `pnpm zoo:verify:mac` again.
 - Waiting on the project owner, not on code: the Muse Code install and `pnpm bench check --paid`,
@@ -20,6 +22,56 @@ file says what happened recently, why, and what to know before changing things.
   panel; a test-database leak to fix; stretch items S1, S3, S5–S7 in `execution-plan.md`.
 
 ## Recent work, newest first
+
+### Replay plays each run: the player, Play all, findings
+
+- **The player** (`apps/mac/Sources/WindTunnel/Views/RunPlayer.swift`): Play on a test, or a click
+  on one of its pages, opens its newest run: each step's screen as large as the window allows, at
+  full resolution (decoded off the main thread, the run's screens preloaded; pinch or double-click
+  to zoom, kept across steps), what the step did beside it, and the flow along the bottom, a tile
+  per step with a bar that fills as it plays (2.6 s a step). The last screen is the result: the
+  rules that broke with their rows in full, then the finding. Play all goes through every test,
+  6 s on each result. It replaced the narrow inspector beside the board.
+- **Findings:** an experiment's optional `finding: {cause, fix?, code: [path:line]}`, written by
+  the agent once it has read the code behind a broken rule (the hunt skill now says so). Replay
+  gets it with the run, and the shown repetition's race order (`variant`).
+- **Pictures** are drawn at 2x (2560×1600, JPEG 0.85, encoded off the main actor): about half a
+  second each. A step a scenario doesn't picture shows the code it reached. A step a crash ended
+  says so (`the scenario crashed (SIGSEGV) during this step`).
+- **Orbit** after pulling its `main` (74 commits, the v6 Liquid Glass editor; the old local
+  squash of #12 is on `main-before-pull-2026-11-03` there): the export picture follows the new
+  editor (export is a mode of its window), recording is one step, and each broken experiment has
+  its finding. Same three bugs, same lines: autosave `2,1` breaks 3/3, slow cancel then export
+  3/3, Cancel crashes 1–3 runs in 3.
+
+### Xcode projects, and Orbit tested with them
+
+- **Xcode projects** (`mac.project`, `mac.scheme`): built once per version with `xcodebuild
+  build-for-testing`, ad-hoc signed, without the hardened runtime, into `/tmp/windtunnel-<uid>/`
+  (`mac/xcode.ts`; the `.xctestrun` gives the app, the bundle and XCTest's paths). Each run
+  starts the app's own executable; `Probe.hostScenario()`, the first line of its entry point,
+  loads XCTest through its Objective-C API and the bundle, runs the one test, and exits before
+  anything shows. The runner refuses an app that never calls it (it would start on screen).
+  `UserDefaults.standard` is a file in the run's folder: `CFFIXED_USER_HOME` doesn't move
+  preferences (a test write landed in the real `~/Library/Preferences` and was removed).
+- **Held points:** stay held when their task is cancelled (a detached request); a hosted app
+  keeps running while one is held, then a second more; a run whose process ended with a point
+  held warns (`ScenarioRun.warnings`).
+- Map, `scan` and `doctor` read Xcode projects (tests in any folder that imports XCTest).
+- **Step pictures:** `Probe.step("…", showing: { view })` draws the app's own view off screen at the
+  step's end (`Picture.swift`): glass layers hidden, player layers replaced by their current frame,
+  the window kept open until the scenario ends (Orbit's export page cancels its export when it
+  disappears). The run saves it as the step's screenshot; Replay shows it.
+- **Orbit** (`~/orca/reco`, uncommitted there): the probe package, `Probe.hostScenario()`, four
+  points, three scenarios in `RecoTests/WindTunnelScenarios.swift` (their steps show Orbit's editor
+  and export page in Replay), `check:` rules on the movies
+  (ffprobe), seven experiments. Found: cancelling an export can crash it
+  (`copyNextSampleBuffer` racing `cancelReading`); cancel-then-export-again can delete the new
+  export Orbit reports done; an autosave finishing after the close's save overwrites the last
+  edits. Recording holds. Details in `platforms-plan.md`.
+- Know before changing: the probe package is outside Orbit's repo, so a change to it doesn't
+  change the version id; remove `/tmp/windtunnel-<uid>/<project>/<version>-none/windtunnel-built`
+  to rebuild. Runs leave crash reports in `~/Library/Logs/DiagnosticReports` when the app crashes.
 
 ### Platforms Phase 5: Swift Mac apps
 

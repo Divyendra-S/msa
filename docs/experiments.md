@@ -109,6 +109,19 @@ timeout: 60s                       # per run
 The id is the file name. Unknown fields, steps, users, tabs and rules are errors
 (`windtunnel validate`).
 
+Once an experiment breaks a rule and the agent has read the code behind it, it writes down what
+it found, which Replay shows with the rule that broke (the player's last screen):
+
+```yaml
+finding:
+  cause: Each click on Pay inserts an order; nothing checks for one already in flight.
+  fix: Disable Pay while the order is sent, and make POST /api/orders idempotent on the cart id.
+  code: [app/api/orders/route.ts:41]    # where to look, path:line from the repository
+```
+
+`cause` is required; `fix` and `code` are optional. It stays when the experiment later holds, and
+Replay then says it broke before for that reason.
+
 ### Request patterns
 
 `"METHOD /path"`: `POST /api/orders`, `GET /api/orders/:id`, `* /api/*/items`, `* /api/**`.
@@ -357,6 +370,12 @@ A scenario with no steps is one step, named after its method. An XCTest failure,
 or a crash is the run's error, in the step it happened in; a rule that breaks still makes the
 run broken.
 
+`Probe.step("export", showing: { … }) { … }` also pictures the step: at its end the app draws
+that view (its own screens, fed the scenario's models) in a window that is never on screen, and
+Replay shows it as the step's screenshot, with its probe points under it. Video players show their
+current frame; glass and blur-behind layers are left out. Each picture takes about a third of a
+second, while the scenario waits and the app's work goes on.
+
 Rules: `check:` commands on what the run left in `$DATA_DIR`, SQL when the app keeps a SQLite file
 (`db.kind: sqlite`), and, with ThreadSanitizer on (`mac.sanitizer: thread`, the default):
 
@@ -372,6 +391,22 @@ summary and both stacks (`access`/`stack`, `previous`/`previous_stack`). Built w
 the run says so. On macOS 26.4 and later, ThreadSanitizer needs Xcode 26.4 or newer: older
 toolchains build it, but the program crashes as it starts (Apple's known issue 171762808).
 `windtunnel doctor` tries it. `zoo/recorder` is the example.
+
+An Xcode project (`mac.project`, an `.xcodeproj` or `.xcworkspace` in `mac.dir`, with
+`mac.scheme`) is built once per version with `xcodebuild build-for-testing`, ad-hoc signed and
+without the hardened runtime, into `/tmp/windtunnel-<uid>/` (`mac.build` replaces the command; it
+must build into `$DERIVED_DATA`). Its tests usually run inside the app (`TEST_HOST`), so each run
+starts the app's own executable with the test to run, and the app's `Probe.hostScenario()`, first
+thing in its entry point, loads XCTest and the test bundle, runs that test in place of the app,
+and exits. Nothing shows: no window, menu bar item or Dock icon. `UserDefaults.standard` is a file
+in the run's folder, since the home folder doesn't move preferences. The runner refuses an app
+that never calls `Probe.hostScenario()`, which would start itself on screen. Scenarios are XCTest
+classes anywhere in the tests (files that import XCTest), in the test bundle's module.
+
+A scenario ends when its test returns. Work it didn't wait for still runs while a point holds it:
+an app hosting the scenario keeps running until no point is held, and a moment after. When the
+process ends first (`xctest` exits with the test), the run warns that the code after the point
+never ran.
 
 ### Check rules: files, media, anything SQL can't read
 

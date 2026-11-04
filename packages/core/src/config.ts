@@ -127,11 +127,22 @@ const IosSchema = z.object({
 
 /** A Swift Mac app's code (app.kind: mac), driven by its own XCTest scenarios. */
 const MacSchema = z.object({
-  /** The Swift package's folder, relative to this file. */
+  /** The Swift package's folder (or the Xcode project's), relative to this file. */
   dir: z
     .string()
     .default(".")
     .refine((d) => !d.startsWith("/"), "a path relative to windtunnel.config.yaml"),
+  /**
+   * An Xcode project (`.xcodeproj` or `.xcworkspace`) in `dir`, whose tests run inside its app.
+   * Each run starts the app's executable, and the app's `Probe.hostScenario()` runs the scenario
+   * in place of the app. Without it, `dir` is a Swift package.
+   */
+  project: z
+    .string()
+    .refine((p) => /\.(xcodeproj|xcworkspace)\/?$/.test(p), "an .xcodeproj or .xcworkspace")
+    .optional(),
+  /** The scheme that builds the app and its tests (with `project`). */
+  scheme: z.string().optional(),
   /**
    * `thread`: build with ThreadSanitizer, and a `sanitizer: thread` rule breaks on any data race
    * it reports. `none`: build without it. $WINDTUNNEL_SANITIZER overrides this.
@@ -139,10 +150,12 @@ const MacSchema = z.object({
   sanitizer: z.enum(["thread", "none"]).default("thread"),
   /**
    * Builds the package and its tests, in `dir` of each code version. Default: `swift build
-   * --build-tests` into `.build/windtunnel-<sanitizer>`, with ThreadSanitizer when it is on.
+   * --build-tests` into `.build/windtunnel-<sanitizer>`, with ThreadSanitizer when it is on. For
+   * an Xcode project, `xcodebuild build-for-testing`, ad-hoc signed, into `$DERIVED_DATA`; a
+   * command given here must build into `$DERIVED_DATA` too.
    */
   build: z.string().optional(),
-  /** The test bundle the build leaves, relative to `dir` (default: the one the default build makes). */
+  /** The test bundle the build leaves, relative to `dir` (default: the one the default build makes). Swift packages only. */
   tests: z.string().optional(),
   /** Environment variables the scenarios run with (DATA_DIR and HOME are the run's own folder). */
   env: z.record(z.string(), z.string()).default({}),
@@ -252,6 +265,9 @@ export function parseConfig(text: string, source = CONFIG_FILE): WindtunnelConfi
     if (app.start) throw new ConfigError(`${source}: app.start: a Mac app's scenarios run its code; there is no server to start`);
     if (result.data.mockPay) throw new ConfigError(`${source}: mockPay: a Mac app has no server for webhooks`);
     if (result.data.db?.kind === "postgres") throw new ConfigError(`${source}: db: a Mac app's database is a SQLite file (db.kind: sqlite)`);
+    if (mac?.project && !mac.scheme) throw new ConfigError(`${source}: mac.scheme: the scheme that builds ${mac.project} and its tests`);
+    if (mac?.scheme && !mac.project) throw new ConfigError(`${source}: mac.scheme is for an Xcode project: set mac.project too`);
+    if (mac?.project && mac.tests) throw new ConfigError(`${source}: mac.tests: an Xcode project's tests are found in its build`);
     // Defaults: a Swift package in the config's folder.
     return { ...result.data, mac: mac ?? MacSchema.parse({}) };
   }

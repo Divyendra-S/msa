@@ -38,7 +38,7 @@ export interface AppMap {
   helperFlags: string[];
   schema?: TableInfo[];
   /** A Swift Mac app: where more probe points could go, and the scenarios experiments run. */
-  mac?: { sites: ConcurrencySite[]; scenarios: MacApp["scenarios"] };
+  mac?: { sites: ConcurrencySite[]; scenarios: MacApp["scenarios"]; xcode?: MacApp["xcode"] };
   windtunnel: {
     users: string[];
     flows: { id: string; steps: string[]; params: string[] }[];
@@ -105,7 +105,7 @@ export async function buildAppMap(project: Project, options: { schema?: TableInf
   }
   // A Swift Mac app: its probe points are its calls at the seam, as `POINT <name>`.
   const macRoot = join(project.root, project.config.mac?.dir ?? ".");
-  const mac = project.config.mac ? await findMacApp(macRoot) : undefined;
+  const mac = project.config.mac ? await findMacApp(macRoot, project.config.mac.project) : undefined;
   for (const p of mac?.points ?? []) {
     const notes = [p.section ? "covers a section: in a race let go one at a time, the next goes when it ends" : "a point: a run can hold, delay, fail or cancel the task here"];
     if (p.in) notes.push(`in ${p.in}`);
@@ -122,7 +122,7 @@ export async function buildAppMap(project: Project, options: { schema?: TableInf
     pages,
     helperFlags: [...helperFlags],
     schema: options.schema,
-    ...(mac ? { mac: { sites: mac.sites, scenarios: mac.scenarios } } : {}),
+    ...(mac ? { mac: { sites: mac.sites, scenarios: mac.scenarios, ...(mac.xcode ? { xcode: mac.xcode } : {}) } } : {}),
     windtunnel: await windtunnelFiles(project),
   };
 }
@@ -392,6 +392,14 @@ export function formatAppMap(map: AppMap, options: { focus?: string; maxChars?: 
     for (const x of sites) lines.push(`${x.probed ? "* " : "  "}${x.kind}  ${x.file}:${x.lines.join(",")}${x.in ? `  in ${x.in}` : ""}  ${x.note}`);
     lines.push("", `Scenarios (${map.mac.scenarios.length}): XCTest methods an experiment runs (scenario: Class/testMethod), and their steps`);
     for (const x of map.mac.scenarios) lines.push(`${x.id}  ${x.file}:${x.line}  steps ${x.steps.join(", ") || "(none marked: the whole test is one step)"}`);
+    const xcode = map.mac.xcode;
+    if (xcode) {
+      lines.push(
+        xcode.host
+          ? `They run inside the app (${xcode.project}): Probe.hostScenario() at ${xcode.host.file}:${xcode.host.line} runs each in place of the app`
+          : `! They run inside the app (${xcode.project}), which never calls Probe.hostScenario(): call it first thing in its entry point, or each run would start the app itself`,
+      );
+    }
   }
 
   if (map.schema) {

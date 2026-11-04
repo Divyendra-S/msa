@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 
-/** A scenario's XCTest method, found in the package's sources. */
+/** A scenario's XCTest method, found in the package's sources (or the Xcode project's). */
 export interface ScenarioSource {
   /** What `xctest -XCTest` takes: `RecorderScenarios.RecorderScenarios/testStopWhileWriting`. */
   test: string;
@@ -40,17 +40,24 @@ export async function swiftFiles(dir: string): Promise<{ file: string; text: str
 }
 
 /**
- * Finds `Class/testMethod` (or `Module.Class/testMethod`) in the package's tests. The module is
- * the test target: the folder under `Tests/` the class is in.
+ * Finds `Class/testMethod` (or `Module.Class/testMethod`) in the tests. In a Swift package, the
+ * module is the test target: the folder under `Tests/` the class is in. In an Xcode project
+ * (`xcode`), tests can be in any folder, and the module is the test bundle's, once built.
  */
-export async function findScenario(dir: string, scenario: string, files?: { file: string; text: string }[]): Promise<ScenarioSource | undefined> {
+export async function findScenario(
+  dir: string,
+  scenario: string,
+  files?: { file: string; text: string }[],
+  xcode?: { module?: string },
+): Promise<ScenarioSource | undefined> {
   const [qualified, method] = scenario.split("/") as [string, string];
   const parts = qualified.split(".");
   const className = parts.pop()!;
-  const module = parts.join(".") || undefined;
+  const named = parts.join(".") || undefined;
+  if (xcode && named && xcode.module && named !== xcode.module) return undefined;
   for (const { file, text } of files ?? (await swiftFiles(dir))) {
-    const target = /^Tests\/([^/]+)\//.exec(file)?.[1];
-    if (!target || (module && module !== target)) continue;
+    const target = xcode ? (isTestFile(file, text) ? (named ?? xcode.module ?? "") : undefined) : /^Tests\/([^/]+)\//.exec(file)?.[1];
+    if (target === undefined || (!xcode && named && named !== target)) continue;
     const code = blankCommentsAndStrings(text);
     const cls = new RegExp(`\\bclass\\s+${className}\\b[^{]*\\{`).exec(code);
     if (!cls) continue;
@@ -61,22 +68,37 @@ export async function findScenario(dir: string, scenario: string, files?: { file
     const open = code.indexOf("{", at);
     const body = text.slice(open, matchBrace(code, open));
     const steps = [...body.matchAll(/\bProbe\.step\(\s*"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1]!);
-    return { test: `${module ?? target}.${className}/${method}`, file, line: lineAt(text, at), steps };
+    return { test: `${target ? `${target}.` : ""}${className}/${method}`, file, line: lineAt(text, at), steps };
   }
   return undefined;
 }
 
-/** Every probe point in the package's code (tests left out). */
+/** Every probe point in the app's code (tests left out). */
 export async function probePoints(dir: string, files?: { file: string; text: string }[]): Promise<ProbePoint[]> {
   const out: ProbePoint[] = [];
   for (const { file, text } of files ?? (await swiftFiles(dir))) {
-    if (file.startsWith("Tests/")) continue;
+    if (isTestFile(file, text)) continue;
     const code = blankComments(text);
     for (const m of code.matchAll(/\bProbe\.point\(\s*"((?:[^"\\]|\\.)*)"\s*\)\s*(\{)?/g)) {
       out.push({ name: m[1]!, file, line: lineAt(text, m.index), section: !!m[2] });
     }
   }
   return out;
+}
+
+/** Where the app calls `Probe.hostScenario()`, which runs an Xcode project's scenarios in place of the app. */
+export async function scenarioHost(dir: string, files?: { file: string; text: string }[]): Promise<{ file: string; line: number } | undefined> {
+  for (const { file, text } of files ?? (await swiftFiles(dir))) {
+    if (isTestFile(file, text)) continue;
+    const m = /\bProbe\.hostScenario\(\s*\)/.exec(blankComments(text));
+    if (m) return { file, line: lineAt(text, m.index) };
+  }
+  return undefined;
+}
+
+/** A test: under a Swift package's `Tests/`, or importing XCTest or Swift Testing. */
+export function isTestFile(file: string, text: string): boolean {
+  return file.startsWith("Tests/") || /^\s*(?:@testable\s+)?import\s+(?:XCTest|Testing)\b/m.test(text);
 }
 
 /** The text with comments blanked out (same length, newlines kept); strings stay, `//` in them too. */

@@ -372,6 +372,36 @@ private struct LinkButtonBody: View {
   }
 }
 
+/// A small pill in a tint, for the one action on a row: Play.
+struct PlayButtonStyle: ButtonStyle {
+  var tint: Color = Theme.text
+
+  func makeBody(configuration: Configuration) -> some View {
+    PlayButtonBody(configuration: configuration, tint: tint)
+  }
+}
+
+private struct PlayButtonBody: View {
+  let configuration: ButtonStyleConfiguration
+  let tint: Color
+  @State private var hovering = false
+
+  var body: some View {
+    configuration.label
+      .font(Theme.sans(11.5, .semibold))
+      .labelStyle(ActionLabelStyle())
+      .foregroundStyle(tint)
+      .padding(.horizontal, 10)
+      .frame(height: 22)
+      .background(Capsule().fill(tint.opacity(hovering ? 0.2 : 0.12)))
+      .overlay(Capsule().strokeBorder(tint.opacity(0.3), lineWidth: 1))
+      .scaleEffect(configuration.isPressed ? 0.97 : 1)
+      .contentShape(Capsule())
+      .animation(Theme.snappy, value: hovering)
+      .onHover { hovering = $0 }
+  }
+}
+
 /// A keyboard shortcut inside a button's label, `⌘O` or `↩`, a step quieter than the words.
 struct KeyHint: View {
   let keys: String

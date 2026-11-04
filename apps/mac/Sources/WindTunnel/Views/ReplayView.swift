@@ -4,16 +4,16 @@ import SwiftUI
 /// How the agent tested, as a board to pan around: every experiment in the order it was first
 /// run, and its newest run as the browser lived it. A lane per tab, a column per step, the page
 /// when the step ended, what it sent, where the experiment pushed, then what the database said.
-/// Click a page to see it large beside the board; ← and → step through.
+/// Play a test, or click one of its pages, to watch its run step by step (`RunPlayer`).
 struct ReplayPane: View {
   @Environment(AppModel.self) private var model
-  @State private var selection: FrameRef? = Launch.value("--frame").flatMap { FrameRef($0) }
+  @State private var player: PlayerRef? = Launch.value("--play").flatMap { PlayerRef($0) }
+    ?? Launch.value("--frame").flatMap { FrameRef($0) }.map { PlayerRef(experiment: $0.experiment, frame: $0.index) }
   @State private var order: Order = .asRun
-  @State private var size: CGFloat = Launch.value("--size").flatMap(Double.init).map { CGFloat($0) } ?? 168
+  @State private var size: CGFloat = Launch.value("--size").flatMap(Double.init).map { CGFloat($0) } ?? 200
   @State private var pinchFrom: CGFloat?
   @State private var hovered: String?
   @State private var viewport: CGSize = .zero
-  @FocusState private var focused: Bool
 
   enum Order: String, CaseIterable { case asRun = "As run", brokeFirst = "Broke first" }
 
@@ -21,9 +21,13 @@ struct ReplayPane: View {
     Group {
       if let replay = model.replay, !replay.experiments.isEmpty {
         let list = ordered(replay.experiments)
-        HStack(spacing: 0) {
+        ZStack {
+          // Kept under the player, so going back finds the board where it was.
           VStack(alignment: .leading, spacing: 0) {
-            ReplayHero(replay: replay, runs: model.runs, hovered: hovered, order: $order, size: $size)
+            ReplayHero(replay: replay, runs: model.runs, hovered: hovered, order: $order, size: $size) {
+              guard let first = list.first(where: { $0.run != nil }) else { return }
+              withAnimation(Theme.snappy) { player = PlayerRef(experiment: first.id, autoplay: true, chain: true) }
+            }
               .padding(.horizontal, Theme.gutter)
               .padding(.top, 4)
               .padding(.bottom, 18)
@@ -31,18 +35,20 @@ struct ReplayPane: View {
             Hairline()
             board(list, BoardMetrics(frame: size))
           }
-          if let selection, let e = list.first(where: { $0.id == selection.experiment }), e.frames.indices.contains(selection.index) {
-            FrameInspector(experiment: e, index: selection.index, step: step) { withAnimation(Theme.snappy) { self.selection = nil } }
-              .frame(width: 320)
-              .transition(.move(edge: .trailing).combined(with: .opacity))
+          .opacity(player == nil ? 1 : 0)
+          .allowsHitTesting(player == nil)
+          .accessibilityHidden(player != nil)
+          if let p = resolved(player, list), let i = list.firstIndex(where: { $0.id == p.experiment }) {
+            RunPlayer(
+              experiment: list[i], number: number(of: list[i]), place: (i + 1, list.count), start: p,
+              previous: i > 0 ? list[i - 1] : nil, next: list[(i + 1)...].first { $0.run != nil },
+              open: { id, chain in withAnimation(Theme.snappy) { player = PlayerRef(experiment: id, autoplay: true, chain: chain) } },
+              close: { withAnimation(Theme.snappy) { player = nil } }
+            )
+            .id(p.experiment)
+            .transition(.opacity.combined(with: .scale(scale: 0.985)))
           }
         }
-        .focusable()
-        .focused($focused)
-        .focusEffectDisabled()
-        .onKeyPress(.leftArrow) { step(-1) }
-        .onKeyPress(.rightArrow) { step(1) }
-        .onExitCommand { withAnimation(Theme.snappy) { selection = nil } }
       } else if model.replay != nil {
         EmptyState(title: "No tests yet", text: "When the agent writes experiments and runs them, each one plays out here step by step: the pages, the requests, and where a rule broke.")
       } else if let error = model.replayError {
@@ -60,38 +66,26 @@ struct ReplayPane: View {
 
   private func board(_ list: [Replay.Experiment], _ m: BoardMetrics) -> some View {
     let width = list.map(m.width).max() ?? 600
-    return ScrollViewReader { proxy in
-      ScrollView([.horizontal, .vertical]) {
-        LazyVStack(alignment: .leading, spacing: 0) {
-          ForEach(Array(list.enumerated()), id: \.element.id) { i, e in
-            BoardRow(number: number(of: e), experiment: e, m: m, selected: selection?.experiment == e.id ? selection?.index : nil) { index in
-              focused = true
-              let ref = FrameRef(experiment: e.id, index: index)
-              withAnimation(Theme.snappy) { selection = selection == ref ? nil : ref }
-            }
-            .onHover { inside in
-              if inside { hovered = e.id } else if hovered == e.id { hovered = nil }
-            }
-            .id(e.id)
-            if i < list.count - 1 { Hairline().frame(width: width) }
+    return ScrollView([.horizontal, .vertical]) {
+      LazyVStack(alignment: .leading, spacing: 0) {
+        ForEach(Array(list.enumerated()), id: \.element.id) { i, e in
+          BoardRow(number: number(of: e), experiment: e, m: m) { ref in
+            withAnimation(Theme.snappy) { player = ref }
           }
+          .onHover { inside in
+            if inside { hovered = e.id } else if hovered == e.id { hovered = nil }
+          }
+          .id(e.id)
+          if i < list.count - 1 { Hairline().frame(width: width) }
         }
-        .padding(.horizontal, Theme.gutter)
-        .padding(.bottom, 40)
-        // A board narrower or shorter than the window stays at the top left, on a ground that fills it.
-        .frame(minWidth: viewport.width, minHeight: viewport.height, alignment: .topLeading)
-        .background(DotGrid())
       }
-      .onGeometryChange(for: CGSize.self) { $0.size } action: { viewport = $0 }
-      .onAppear {
-        if let s = selection { proxy.scrollTo(s.experiment, anchor: .top) }
-      }
-      .onChange(of: selection) { _, now in
-        guard let now else { return }
-        // Only as far as it takes to show it: stepping along a row shouldn't jump.
-        withAnimation(Theme.spring) { proxy.scrollTo(now, anchor: nil) }
-      }
+      .padding(.horizontal, Theme.gutter)
+      .padding(.bottom, 40)
+      // A board narrower or shorter than the window stays at the top left, on a ground that fills it.
+      .frame(minWidth: viewport.width, minHeight: viewport.height, alignment: .topLeading)
+      .background(DotGrid())
     }
+    .onGeometryChange(for: CGSize.self) { $0.size } action: { viewport = $0 }
     .simultaneousGesture(
       MagnifyGesture()
         .onChanged { g in
@@ -101,6 +95,14 @@ struct ReplayPane: View {
         }
         .onEnded { _ in pinchFrom = nil }
     )
+  }
+
+  /// `--play all`: the first test that ran.
+  private func resolved(_ p: PlayerRef?, _ list: [Replay.Experiment]) -> PlayerRef? {
+    guard var p, p.experiment == PlayerRef.all, !list.contains(where: { $0.id == p.experiment }) else { return p }
+    guard let first = list.first(where: { $0.run != nil }) else { return nil }
+    p = PlayerRef(experiment: first.id, autoplay: true, chain: true)
+    return p
   }
 
   /// Its place in the order the agent first ran them, whatever the order shown.
@@ -114,20 +116,9 @@ struct ReplayPane: View {
     case .brokeFirst: list.filter(\.broke) + list.filter { !$0.broke }
     }
   }
-
-  /// The next or previous page in the chosen experiment, column by column.
-  private func step(_ by: Int) -> KeyPress.Result {
-    guard let s = selection, let e = model.replay?.experiments.first(where: { $0.id == s.experiment }) else { return .ignored }
-    let path = e.frames.indices.sorted { (e.frames[$0].column, e.frames[$0].lane) < (e.frames[$1].column, e.frames[$1].lane) }
-    guard let at = path.firstIndex(of: s.index) else { return .ignored }
-    let next = at + by
-    guard path.indices.contains(next) else { return .handled }
-    withAnimation(Theme.snappy) { selection = FrameRef(experiment: e.id, index: path[next]) }
-    return .handled
-  }
 }
 
-/// One page on the board: an experiment and a frame of its newest run.
+/// One page on the board: an experiment and a frame of its newest run (`--frame`).
 nonisolated struct FrameRef: Hashable {
   let experiment: String
   let index: Int
@@ -196,6 +187,7 @@ private struct ReplayHero: View {
   let hovered: String?
   @Binding var order: ReplayPane.Order
   @Binding var size: CGFloat
+  let playAll: () -> Void
   @Environment(AppModel.self) private var model
   @State private var pointed: RunListEntry?
 
@@ -230,6 +222,10 @@ private struct ReplayHero: View {
       .layoutPriority(1)
       Spacer(minLength: 0)
       VStack(alignment: .trailing, spacing: 12) {
+        Button(action: playAll) { Label("Play all", systemImage: "play.fill") }
+          .buttonStyle(ActionButtonStyle(prominent: true))
+          .disabled(ran.isEmpty)
+          .help("Watch every test step by step, one after another, in the order below")
         TabStrip(items: ReplayPane.Order.allCases, selection: $order, size: 12) { o, _ in Text(o.rawValue) }
         HStack(spacing: 8) {
           Image(systemName: "photo").font(.system(size: 9))
@@ -300,8 +296,8 @@ private struct BoardRow: View {
   let number: Int
   let experiment: Replay.Experiment
   let m: BoardMetrics
-  let selected: Int?
-  let onSelect: (Int) -> Void
+  /// Plays the run in the player, from a step or one of its pages.
+  let play: (PlayerRef) -> Void
   @Environment(AppModel.self) private var model
 
   private var tint: Color { experiment.broke ? Theme.fail : Theme.accent }
@@ -313,7 +309,7 @@ private struct BoardRow: View {
         if !column.pressure.isEmpty { band(c) }
       }
       RowWires(experiment: e, m: m)
-      RowHeader(number: number, experiment: e)
+      RowHeader(number: number, experiment: e) { play(PlayerRef(experiment: e.id, autoplay: true)) }
       ForEach(Array(e.lanes.enumerated()), id: \.offset) { l, lane in
         laneLabel(lane, l)
       }
@@ -324,8 +320,8 @@ private struct BoardRow: View {
       }
       ForEach(Array(e.frames.enumerated()), id: \.offset) { i, f in
         let o = m.origin(column: f.column, lane: f.lane)
-        FrameCell(frame: f, m: m, tint: e.columns[f.column].pressure.isEmpty ? nil : tint, selected: selected == i)
-          .onTapGesture { onSelect(i) }
+        FrameCell(frame: f, m: m, tint: e.columns[f.column].pressure.isEmpty ? nil : tint)
+          .onTapGesture { play(PlayerRef(experiment: e.id, frame: i)) }
           .id(FrameRef(experiment: e.id, index: i))
           .place(o.x, o.y)
       }
@@ -400,6 +396,7 @@ private struct BoardRow: View {
 private struct RowHeader: View {
   let number: Int
   let experiment: Replay.Experiment
+  let play: () -> Void
   @Environment(AppModel.self) private var model
 
   var body: some View {
@@ -422,6 +419,10 @@ private struct RowHeader: View {
           }
           .padding(.leading, 6)
           .help("Its runs, oldest first")
+          Button(action: play) { Label("Play", systemImage: "play.fill") }
+            .buttonStyle(PlayButtonStyle(tint: e.broke ? Theme.fail : e.run?.outcome == "error" ? Theme.error : Theme.text))
+            .help("Watch this run step by step, to what it found")
+            .padding(.leading, 8)
           Button("Open run") {
             model.selectedRun = run.id
             model.section = .runs
@@ -471,7 +472,6 @@ private struct FrameCell: View {
   let m: BoardMetrics
   /// The pressure colour when the experiment pushed at this step.
   let tint: Color?
-  let selected: Bool
   @State private var hover = false
 
   var body: some View {
@@ -479,18 +479,24 @@ private struct FrameCell: View {
       ShotView(frame: frame)
         .frame(width: m.frame, height: m.shot)
         .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(edge, lineWidth: selected ? 1.5 : 1))
-        .shadow(color: .black.opacity(hover || selected ? 0.22 : 0.1), radius: hover || selected ? 8 : 3, y: hover || selected ? 3 : 1)
+        .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(edge, lineWidth: 1))
+        .overlay {
+          if hover {
+            Image(systemName: "play.fill").font(.system(size: 13)).foregroundStyle(.white)
+              .frame(width: 34, height: 34).background(Circle().fill(.black.opacity(0.55)))
+              .transition(.opacity)
+          }
+        }
+        .shadow(color: .black.opacity(hover ? 0.22 : 0.1), radius: hover ? 8 : 3, y: hover ? 3 : 1)
       caption.frame(width: m.frame + 12, height: m.caption, alignment: .topLeading)
     }
     .contentShape(Rectangle())
     .onHover { hover = $0 }
     .animation(Theme.snappy, value: hover)
-    .help(frame.actions.isEmpty ? frame.step : frame.actions.joined(separator: "\n"))
+    .help("Play from \(frame.step)" + (frame.actions.isEmpty ? "" : "\n" + frame.actions.joined(separator: "\n")))
   }
 
   private var edge: Color {
-    if selected { return Theme.accent }
     if frame.error != nil { return Theme.fail.opacity(0.7) }
     return hover ? Theme.lineStrong : Theme.line
   }
@@ -516,7 +522,7 @@ private struct FrameCell: View {
   }
 }
 
-private struct RequestLine: View {
+struct RequestLine: View {
   let request: Replay.Request
   let tint: Color?
 
@@ -670,7 +676,7 @@ private struct RowWires: View {
 }
 
 /// The board's ground: a faint dot every 20 points.
-private struct DotGrid: View {
+struct DotGrid: View {
   var body: some View {
     Canvas { ctx, size in
       let dot = GraphicsContext.Shading.color(Theme.overlay(0.07))
@@ -692,7 +698,7 @@ private struct DotGrid: View {
 
 /// A step's screenshot, small. Runs from before screenshots show what the page said instead, and
 /// a Swift scenario's step the probe points its code reached.
-private struct ShotView: View {
+struct ShotView: View {
   let frame: Replay.Frame
   @Environment(AppModel.self) private var model
   @State private var image: NSImage?
@@ -710,6 +716,15 @@ private struct ShotView: View {
         .transition(.opacity)
       } else if let points = frame.points {
         VStack(alignment: .leading, spacing: 4) {
+          HStack(spacing: 4) {
+            Image(systemName: "curlybraces").font(.system(size: 8))
+            Text("no window, code only")
+          }
+          .font(Theme.sans(9)).foregroundStyle(Theme.faint)
+          .padding(.bottom, 2)
+          if let error = frame.error {
+            Text(error).font(Theme.sans(9, .medium)).foregroundStyle(Theme.fail).lineLimit(2)
+          }
           // The point, then what the run did there under it.
           ForEach(Array(points.prefix(5).enumerated()), id: \.offset) { _, point in
             let parts = point.components(separatedBy: " · ")
@@ -720,7 +735,7 @@ private struct ShotView: View {
               }
             }
           }
-          if points.isEmpty { Text("no probe points").font(Theme.sans(9)).foregroundStyle(Theme.ghost) }
+          if points.isEmpty { Text("reached no probe point").font(Theme.sans(9)).foregroundStyle(Theme.ghost) }
         }
         .padding(8)
         .help((["The probe points this step's code reached"] + points).joined(separator: "\n"))
@@ -743,12 +758,19 @@ private struct ShotView: View {
   }
 }
 
-/// Screenshots from the bridge, decoded small for the board and kept.
+/// Screenshots from the bridge: decoded small for the board, and whole for the player, and kept.
 final class Shots {
   private var thumbs: [String: NSImage] = [:]
   private var loading: [String: Task<NSImage?, Never>] = [:]
+  /// Whole screenshots, the newest few: a 2560-pixel one is 16 MB decoded.
+  private var fulls: [String: NSImage] = [:]
+  private var fullOrder: [String] = []
+  private var loadingFull: [String: Task<NSImage?, Never>] = [:]
+  private static let keptFull = 40
 
   func cached(_ path: String) -> NSImage? { thumbs[path] }
+
+  func cachedFull(_ path: String) -> NSImage? { fulls[path] }
 
   func thumb(_ path: String, api: API) async -> NSImage? {
     if let image = thumbs[path] { return image }
@@ -764,15 +786,37 @@ final class Shots {
     return image
   }
 
-  /// The screenshot as taken, for the inspector.
+  /// The screenshot as taken, decoded off the main thread, for the player.
   func full(_ path: String, api: API) async -> NSImage? {
-    guard let data = try? await api.data(path) else { return nil }
-    return NSImage(data: data)
+    if let image = fulls[path] { return image }
+    if let task = loadingFull[path] { return await task.value }
+    let task = Task<NSImage?, Never> {
+      guard let data = try? await api.data(path) else { return nil }
+      return await Shots.decode(data).map { NSImage(cgImage: $0, size: .zero) }
+    }
+    loadingFull[path] = task
+    let image = await task.value
+    loadingFull[path] = nil
+    if let image {
+      fulls[path] = image
+      fullOrder.append(path)
+      if fullOrder.count > Self.keptFull { fulls[fullOrder.removeFirst()] = nil }
+    }
+    return image
   }
 
   func clear() {
     thumbs = [:]
     loading = [:]
+    fulls = [:]
+    fullOrder = []
+    loadingFull = [:]
+  }
+
+  /// The whole image, decoded now rather than when it is first drawn.
+  @concurrent nonisolated static func decode(_ data: Data) async -> CGImage? {
+    guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+    return CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
   }
 
   @concurrent nonisolated static func decode(_ data: Data, max: Int) async -> CGImage? {
@@ -783,135 +827,5 @@ final class Shots {
       kCGImageSourceCreateThumbnailWithTransform: true,
     ]
     return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
-  }
-}
-
-// MARK: - Beside
-
-/// One page large, and everything about its step.
-private struct FrameInspector: View {
-  let experiment: Replay.Experiment
-  let index: Int
-  let step: (Int) -> KeyPress.Result
-  let close: () -> Void
-  @Environment(AppModel.self) private var model
-  @State private var image: NSImage?
-
-  var body: some View {
-    let f = experiment.frames[index]
-    let lane = experiment.lanes.indices.contains(f.lane) ? experiment.lanes[f.lane].tab : ""
-    let column = experiment.columns[f.column]
-    let tint = experiment.broke ? Theme.fail : Theme.accent
-    VStack(alignment: .leading, spacing: 0) {
-      HStack(alignment: .firstTextBaseline, spacing: 8) {
-        Text(f.step + (f.attempt.map { " · \($0)" } ?? "")).font(Theme.mono(13, .medium)).foregroundStyle(Theme.text)
-        Text(lane + (f.as.map { " as \($0)" } ?? "")).font(Theme.mono(11)).foregroundStyle(Theme.faint)
-        Spacer()
-        Button { _ = step(-1) } label: { Image(systemName: "chevron.left") }.help("Previous page (←)")
-        Button { _ = step(1) } label: { Image(systemName: "chevron.right") }.help("Next page (→)")
-        Button(action: close) { Image(systemName: "xmark") }.help("Close (esc)").padding(.leading, 4)
-      }
-      .buttonStyle(LinkButtonStyle(color: Theme.faint))
-      Text("\(experiment.id) · step \(f.column + 1) of \(experiment.columns.count) · \(Fmt.ms(f.start))–\(Fmt.ms(f.end))")
-        .font(Theme.sans(11)).foregroundStyle(Theme.ghost).lineLimit(1).truncationMode(.middle)
-        .padding(.top, 4)
-      ScrollView {
-        VStack(alignment: .leading, spacing: 18) {
-          page(f)
-          if !column.pressure.isEmpty {
-            Item(label: "Pushed here") {
-              Text(column.pressure.joined(separator: " · ")).font(Theme.sans(12)).foregroundStyle(tint)
-            }
-          }
-          if !f.actions.isEmpty {
-            Item(label: "Did") {
-              ForEach(Array(f.actions.enumerated()), id: \.offset) { _, a in Text(a).font(Theme.mono(11)).foregroundStyle(Theme.dim) }
-            }
-          }
-          if !f.harness.isEmpty {
-            Item(label: "The harness") {
-              ForEach(Array(f.harness.enumerated()), id: \.offset) { _, h in Text(h).font(Theme.sans(12)).foregroundStyle(tint) }
-            }
-          }
-          if !f.requests.isEmpty {
-            Item(label: "Sent") {
-              ForEach(Array(f.requests.enumerated()), id: \.offset) { _, r in
-                VStack(alignment: .leading, spacing: 3) {
-                  RequestLine(request: r, tint: column.pressure.isEmpty ? nil : tint)
-                  ForEach(Array(r.notes.enumerated()), id: \.offset) { _, n in Text(n).font(Theme.sans(11)).foregroundStyle(Theme.faint) }
-                  if let from = r.from { Text("sent by \(from)").font(Theme.sans(11)).foregroundStyle(Theme.faint) }
-                }
-              }
-            }
-          }
-          if let error = f.error {
-            Item(label: "Stopped") { Text(error).font(Theme.sans(12)).foregroundStyle(Theme.fail) }
-          }
-          if let text = f.text, !text.isEmpty {
-            Item(label: "The page said") {
-              Text(text).font(Theme.sans(11.5)).foregroundStyle(Theme.dim).lineSpacing(2).textSelection(.enabled)
-            }
-          }
-          if let run = experiment.run {
-            Button("Open run") {
-              model.selectedRun = run.id
-              model.section = .runs
-            }
-            .buttonStyle(ActionButtonStyle())
-          }
-        }
-        .padding(.top, 16)
-        .padding(.bottom, 24)
-      }
-      .scrollIndicators(.never)
-    }
-    .padding(.horizontal, 18)
-    .padding(.top, 16)
-    .frame(maxHeight: .infinity, alignment: .top)
-    .overlay(alignment: .leading) { Hairline(vertical: true) }
-    .task(id: f.shot) {
-      image = nil
-      guard let path = f.shot, let api = model.api else { return }
-      image = model.shots.cached(path)
-      if let full = await model.shots.full(path, api: api) { image = full }
-    }
-  }
-
-  /// Width over height of a screenshot taller than it is wide.
-  private var portrait: CGFloat? {
-    guard let size = image?.size, size.height > size.width, size.height > 0 else { return nil }
-    return size.width / size.height
-  }
-
-  private func page(_ f: Replay.Frame) -> some View {
-    VStack(alignment: .leading, spacing: 6) {
-      ZStack {
-        Rectangle().fill(Theme.fill)
-        if let image {
-          Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
-        } else if f.shot == nil {
-          Text("No screenshot for this run: it's older than step screenshots.").font(Theme.sans(11)).foregroundStyle(Theme.ghost).padding(12)
-        }
-      }
-      // A phone's screen keeps its own shape, not a browser's.
-      .aspectRatio(portrait ?? 16 / 10, contentMode: .fit)
-      .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-      .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).strokeBorder(Theme.line, lineWidth: 1))
-      .frame(maxHeight: portrait == nil ? nil : 420, alignment: .leading)
-      if let path = f.path { Text(path).font(Theme.mono(11)).foregroundStyle(Theme.faint) }
-    }
-  }
-}
-
-private struct Item<Content: View>: View {
-  let label: String
-  @ViewBuilder var content: () -> Content
-
-  var body: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      Text(label).label()
-      content()
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
   }
 }

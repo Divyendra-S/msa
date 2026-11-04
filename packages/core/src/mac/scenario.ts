@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { closeSync, openSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, writeFileSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { killTree } from "../exec.ts";
@@ -8,6 +8,7 @@ import { type Experiment, isNetworkPerturbation, type RaceOrder, type Variant } 
 import { Network, newGroup, type NetworkTab, type RaceRecord, type RequestRecord } from "../runner/network.ts";
 import type { FlowError, StepRecord } from "../runner/rep.ts";
 import { type PointCall, ProbeServer } from "./probe.ts";
+import type { HostedTests } from "./xcode.ts";
 
 /** The one tab of a Mac app's run: its code, as the scenario drives it. */
 export const SCENARIO_TAB = "app";
@@ -17,16 +18,19 @@ const LOG_TAIL = 8;
 export interface ScenarioInput {
   experiment: Experiment;
   variant: Variant;
-  /** Xcode's xctest, the test bundle, and the test (`Module.Class/testMethod`). */
-  xctest: string;
-  bundle: string;
+  /** A Swift package's tests: Xcode's xctest and the test bundle. */
+  xctest?: string;
+  bundle?: string;
+  /** An Xcode project's: the app they run inside, through `Probe.hostScenario()`. */
+  host?: HostedTests;
+  /** `Module.Class/testMethod`. */
   test: string;
-  /** Where the test runs: the package's folder in the version's worktree. */
+  /** Where the test runs: the package's (or project's) folder in the version's worktree. */
   cwd: string;
   /** DATA_DIR, HOME, the database's variables, `mac.env`. */
   env: Record<string, string>;
-  /** ThreadSanitizer's runtime, loaded at start, and the folder its reports go to. */
-  sanitizer?: { library: string; reports: string };
+  /** ThreadSanitizer's runtime, loaded into xctest at start (an app built with it has its own), and the folder its reports go to. */
+  sanitizer?: { library?: string; reports: string };
   /** The run's folder: `scenario.log` goes there. */
   dir: string;
 }
@@ -49,9 +53,13 @@ export class ScenarioRun {
   readonly steps: StepRecord[] = [];
   readonly errors: FlowError[] = [];
   timedOut = false;
+  /** When the test's process exited by itself (not killed or crashed), from t0. */
+  private exitedAt?: number;
   private readonly input: ScenarioInput;
   private readonly network: Network;
   private readonly tab: NetworkTab;
+  /** Step pictures saved so far. */
+  private pictures = 0;
   /** Steps started and not yet ended, innermost last. */
   private readonly running: StepRecord[] = [];
 
@@ -91,7 +99,7 @@ export class ScenarioRun {
     try {
       server = await ProbeServer.start(port, {
         point: (call) => this.point(call),
-        step: (name, phase, error) => this.step(name, phase, error),
+        step: (name, phase, error, picture) => this.step(name, phase, error, picture),
       });
       await this.runTest(server.url);
     } finally {
@@ -106,6 +114,13 @@ export class ScenarioRun {
   /** Parts of the experiment that never took effect: a pass then proves less than it seems. */
   warnings(): string[] {
     const out = this.network.unused().map((p) => `${p.do} ${p.request}${p.step ? ` (step ${p.step})` : ""}: the code never reached it`);
+    // A point let go after the process was gone: the code after it never ran.
+    const exited = this.exitedAt;
+    for (const r of this.network.log) {
+      if (exited !== undefined && r.method === "POINT" && typeof r.sent === "number" && r.sent > exited) {
+        out.push(`point ${r.url}: still held when the scenario ended (at ${exited} ms; let go at ${r.sent} ms), so the code after it never ran; wait for that work in the scenario`);
+      }
+    }
     const race = this.input.experiment.race;
     if (race) {
       const record = this.network.race;
@@ -132,7 +147,7 @@ export class ScenarioRun {
     );
   }
 
-  private step(name: string, phase: "start" | "end", error?: string): void {
+  private step(name: string, phase: "start" | "end", error?: string, picture?: Buffer): void {
     if (phase === "start") {
       const record: StepRecord = { tab: SCENARIO_TAB, step: name, start: this.now(), end: this.now(), actions: [], quiet: true };
       this.steps.push(record);
@@ -144,6 +159,13 @@ export class ScenarioRun {
     const [record] = this.running.splice(index, 1);
     record!.end = this.now();
     if (error) record!.error = error;
+    // What the step showed, drawn off screen by the app: its screenshot, as a page's step has one.
+    if (picture?.length) {
+      const name = `step-${String(++this.pictures).padStart(2, "0")}-${SCENARIO_TAB}.jpg`;
+      mkdirSync(join(this.input.dir, "screens"), { recursive: true });
+      writeFileSync(join(this.input.dir, "screens", name), picture);
+      record!.shot = name;
+    }
   }
 
   private async runTest(probe: string): Promise<void> {
@@ -151,20 +173,26 @@ export class ScenarioRun {
     const log = join(input.dir, "scenario.log");
     const { sanitizer } = input;
     if (sanitizer) await mkdir(sanitizer.reports, { recursive: true });
+    const { host } = input;
+    // An Xcode project's test runs inside its app: the app's own executable, which loads XCTest and the bundle.
+    const command = host ? host.executable : input.xctest!;
+    const args = host ? [] : ["-XCTest", input.test, input.bundle!];
+    const bundle = host ? host.bundle : input.bundle!;
     const fd = openSync(log, "a");
     let child: ChildProcess;
     try {
       // Started directly, not through a shell: macOS drops DYLD_ variables when it runs /bin/sh.
-      child = spawn(input.xctest, ["-XCTest", input.test, input.bundle], {
+      child = spawn(command, args, {
         cwd: input.cwd,
         env: {
           ...process.env,
           ...input.env,
+          ...(host ? { ...host.env, WINDTUNNEL_SCENARIO: input.test, WINDTUNNEL_TESTS: host.bundle, WINDTUNNEL_XCTEST: host.xctest } : {}),
           WINDTUNNEL_PROBE: probe,
           NSUnbufferedIO: "YES",
           ...(sanitizer
             ? {
-                DYLD_INSERT_LIBRARIES: sanitizer.library,
+                ...(sanitizer.library ? { DYLD_INSERT_LIBRARIES: sanitizer.library } : {}),
                 TSAN_OPTIONS: `log_path=${join(sanitizer.reports, "report")} halt_on_error=0 abort_on_error=0`,
               }
             : {}),
@@ -186,17 +214,19 @@ export class ScenarioRun {
     });
     clearTimeout(timer);
     live.delete(child);
+    // A crash or a timeout is the run's error already.
+    if (!exit.signal) this.exitedAt = this.now();
 
     const output = await readFile(log, "utf8").catch(() => "");
     const step = () => this.running.at(-1)?.step ?? this.steps.at(-1)?.step;
     const fail = (message: string) => this.errors.push({ tab: SCENARIO_TAB, ...(step() ? { step: step()! } : {}), message });
     const tail = () => output.trimEnd().split("\n").slice(-LOG_TAIL).join("\n");
     if (this.timedOut) return void fail(`the scenario did not finish in ${input.experiment.timeout / 1000} s`);
-    if (exit.code === -1) return void fail(`could not start ${input.xctest}`);
+    if (exit.code === -1) return void fail(`could not start ${command}`);
     if (exit.signal) return void fail(`the scenario crashed (${exit.signal})\n${tail()}`);
     const executed = [...output.matchAll(/Executed (\d+) tests?, with (\d+) failures?/g)].at(-1);
     if (!executed || executed[1] === "0") {
-      return void fail(exit.code === 0 ? `no test ${input.test} in ${input.bundle}` : `the scenario exited with ${exit.code}\n${tail()}`);
+      return void fail(exit.code === 0 ? `no test ${input.test} in ${bundle}` : `the scenario exited with ${exit.code}\n${tail()}`);
     }
     // `…/Scenarios.swift:31: error: -[Module.Class testX] : XCTAssertEqual failed: …`
     for (const m of output.matchAll(/^.*?:(\d+): error: -\[\S+ \S+\] : (.*)$/gm)) fail(`${m[2]!.trim()} (line ${m[1]})`);
@@ -210,7 +240,9 @@ export class ScenarioRun {
     const end = this.now();
     for (const record of this.running.splice(0)) {
       record.end = end;
-      record.error ??= "the scenario ended during this step";
+      // What ended it, when the run knows (a crash), in a line.
+      const cause = this.errors.find((e) => e.step === record.step)?.message.split("\n")[0];
+      record.error ??= cause ? `${cause} during this step` : "the scenario ended during this step";
     }
     if (this.steps.length > 0) return;
     const name = this.input.test.split("/").at(-1)!;

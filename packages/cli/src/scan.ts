@@ -29,7 +29,7 @@ export interface ScanResult {
 }
 
 /**
- * `windtunnel scan`: the static half of the app map for any Next.js, Tauri or Swift package folder, no config needed and
+ * `windtunnel scan`: the static half of the app map for any Next.js, Tauri, Swift package or Xcode project folder, no config needed and
  * no model, build or database involved. The Mac app shows it as soon as a folder is picked, before
  * anything is set up.
  */
@@ -39,10 +39,12 @@ export async function scan(dir: string): Promise<ScanResult> {
     ? await openProject(resolve(dir)).catch(() => undefined)
     : undefined;
   const root = configured?.root ?? (await nextApp(resolve(dir)));
-  // A Swift package with no web app in it is read as a Mac app's code.
-  const swift = !configured && root === resolve(dir) && (await stat(join(root, "Package.swift")).then(() => true, () => false));
+  // A Swift package or an Xcode project with no web app in it is read as a Mac app's code.
+  const here = !configured && root === resolve(dir);
+  const swift = here && (await stat(join(root, "Package.swift")).then(() => true, () => false));
+  const xcode = here && !swift ? (await readdir(root).catch(() => [])).find((f) => /\.(xcodeproj|xcworkspace)$/.test(f)) : undefined;
   // The map reads only the source tree; the project's other parts are for runs.
-  const config = swift ? { app: { kind: "mac" }, mac: { dir: "." }, users: {} } : { users: {} };
+  const config = swift || xcode ? { app: { kind: "mac" }, mac: { dir: ".", ...(xcode ? { project: xcode } : {}) }, users: {} } : { users: {} };
   const project = configured ?? ({ root, repoRoot: root, appSubdir: "", stateDir: join(root, ".windtunnel"), config } as unknown as Project);
   const map = await buildAppMap(project);
   return {

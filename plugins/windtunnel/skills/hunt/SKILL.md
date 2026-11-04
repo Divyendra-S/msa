@@ -69,4 +69,13 @@ Fix: <the smallest correct fix>
 View: <the evidence packet's "Viewer:" link, if it has one>
 ```
 
+Write the same into the experiment that reproduces it, so the app's Replay shows why it breaks and what to fix after the rule that broke:
+
+```yaml
+finding:
+  cause: <What happens, as above>
+  fix: <Fix, as above>
+  code: [<file>:<line>]
+```
+
 Then list the experiments that passed (what you ruled out), and any `high` free-sweep findings in one line each. Don't change application code during a hunt; offer the prove skill to fix and prove each bug.

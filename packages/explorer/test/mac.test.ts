@@ -112,3 +112,34 @@ describe("findMacApp", () => {
     assert.equal(await findMacApp(join(root, "Sources")), undefined);
   });
 });
+
+describe("findMacApp in an Xcode project", () => {
+  let root: string;
+
+  before(async () => {
+    root = await mkdtemp(join(tmpdir(), "wt-xcode-"));
+    const files: Record<string, string> = {
+      "App.xcodeproj/project.pbxproj": "// WindTunnelProbe\n",
+      "App/Writer.swift": WRITER,
+      "App/AppMain.swift": "import WindTunnelProbe\n\n@main\nenum AppMain {\n    static func main() {\n        Probe.hostScenario()\n    }\n}\n",
+      "AppTests/WriterScenarios.swift": SCENARIOS,
+    };
+    for (const [path, text] of Object.entries(files)) {
+      await mkdir(dirname(join(root, path)), { recursive: true });
+      await writeFile(join(root, path), text);
+    }
+  });
+
+  after(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("reads the app's folders and its tests wherever they are, and where the app hosts scenarios", async () => {
+    const app = await findMacApp(root);
+    assert.equal(app?.framework, "Swift (Mac, Xcode)");
+    assert.deepEqual(app!.xcode, { project: "App.xcodeproj", host: { file: "App/AppMain.swift", line: 6 } });
+    assert.deepEqual(app!.points.map((p) => `${p.name} ${p.file}:${p.line}`), ["writer.append App/Writer.swift:16"]);
+    assert.deepEqual(app!.scenarios, [{ id: "WriterScenarios/testWrite", file: "AppTests/WriterScenarios.swift", line: 5, steps: ["write", "finish"] }]);
+    assert.ok(!app!.sites.some((s) => s.file.startsWith("AppTests/")));
+  });
+});

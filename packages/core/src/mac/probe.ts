@@ -72,14 +72,14 @@ export class PointCall implements Call {
 export interface ProbeHandlers {
   /** A point was reached: hand it to the seam. */
   point(call: PointCall): void;
-  /** A scenario step started or ended. */
-  step(name: string, phase: "start" | "end", error?: string): void;
+  /** A scenario step started or ended; at its end, maybe with what it showed (a JPEG). */
+  step(name: string, phase: "start" | "end", error?: string, picture?: Buffer): void;
 }
 
 /**
  * Where swift/WindTunnelProbe reports to during a run, on this Mac: `POST /point {name,
  * section}` waits for the decision, `POST /done {id}` ends a section, `POST /step {name,
- * phase}` marks a scenario step.
+ * phase, picture?}` marks a scenario step (`picture`: what it showed at its end, a base64 JPEG).
  */
 export class ProbeServer {
   readonly url: string;
@@ -125,7 +125,8 @@ export class ProbeServer {
             }
             case "/step": {
               if (typeof body.name !== "string" || (body.phase !== "start" && body.phase !== "end")) return reply(400, { error: "step needs a name and a phase" });
-              handlers.step(body.name, body.phase, typeof body.error === "string" ? body.error : undefined);
+              const picture = typeof body.picture === "string" ? Buffer.from(body.picture, "base64") : undefined;
+              handlers.step(body.name, body.phase, typeof body.error === "string" ? body.error : undefined, picture);
               return reply(200, { do: "go" });
             }
             default:

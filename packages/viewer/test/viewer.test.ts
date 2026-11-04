@@ -38,7 +38,8 @@ describe("viewer", () => {
       // The same app as Next.js files, for the map: a page with Send, and the route it posts to.
       "app/page.tsx": `"use client";\nexport default function Home() {\n  return <button onClick={() => fetch("/api/send", { method: "POST" })}>Send</button>;\n}\n`,
       "app/api/send/route.ts": `const pool = { query: async (_sql: string, _params: unknown[]) => {} };\n// Records a send.\nexport async function POST() {\n  await pool.query("INSERT INTO hits (who) VALUES ($1)", ["alice"]);\n  return Response.json({ ok: true });\n}\n`,
-      ".windtunnel/experiments/send-twice.yaml": "description: Alice double-clicks Send.\nflow: send\nperturb:\n  - do: double-submit\n    step: send\nrepeat: 2\n",
+      ".windtunnel/experiments/send-twice.yaml":
+        "description: Alice double-clicks Send.\nflow: send\nperturb:\n  - do: double-submit\n    step: send\nrepeat: 2\nfinding:\n  cause: Each click inserts a hit.\n  fix: Disable Send while it sends.\n  code: [app/send.ts:4]\n",
     });
     await writeStore(join(repo, ".windtunnel", "runs"));
     viewer = await startViewer({ cwd: repo, port: 0, env, distDir: join(repo, "no-ui") });
@@ -163,8 +164,10 @@ describe("viewer", () => {
     assert.deepEqual(send.requests, [
       { method: "POST", path: "/api/send", count: 2, statuses: [200, 200], together: false, tags: ["double-clicked"], notes: ["double-clicked"] },
     ]);
-    assert.deepEqual(e.rules, { broken: [{ id: "at-most-one-hit", rows: 1, sample: "hits 2" }], held: 0 });
+    assert.deepEqual(e.rules, { broken: [{ id: "at-most-one-hit", rows: 1, sample: "hits 2", examples: ["hits 2"] }], held: 0 });
     assert.deepEqual(e.changes, ["hits +2"]);
+    // What the agent found, beside the rule that broke.
+    assert.deepEqual(e.finding, { cause: "Each click inserts a hit.", fix: "Disable Send while it sends.", code: ["app/send.ts:4"] });
   });
 
   it("gives a run's evidence packet as text", async () => {
