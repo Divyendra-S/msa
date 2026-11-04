@@ -38,6 +38,8 @@ Call `windtunnel_prove` with the experiment ids (and `patch` if you didn't edit 
 - **revert**: the base again: it must fail again, so the pass wasn't luck.
 - **regression set**: every other experiment on base and fix: none may go from pass to anything else. The project's own tests (`app.test` in the config) run on both too, each against a fresh copy of the seed data.
 
+Once proven, call `windtunnel_check` to see the whole working tree against HEAD: the fixed experiments show as FIXED, and nothing should be REGRESSED.
+
 If the verdict is NOT PROVEN, read the reasons. Use `windtunnel_evidence` on the failing run ids it lists, adjust the fix, and prove again. Stop after three attempts and report what you learned.
 
 ## 4. Branch and report

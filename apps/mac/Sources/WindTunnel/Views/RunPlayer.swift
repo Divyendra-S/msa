@@ -630,6 +630,7 @@ private struct VerdictView: View {
   let open: (String) -> Void
   let again: () -> Void
   @Environment(AppModel.self) private var model
+  @State private var copied = false
 
   private enum Kind { case broke, error, held, notRun }
 
@@ -751,6 +752,20 @@ private struct VerdictView: View {
       Button { model.runExperiments([experiment.id]) } label: { Label("Run again", systemImage: "play") }
         .buttonStyle(ActionButtonStyle())
         .disabled(model.runningJob != nil)
+      if TestVerdict(experiment).failing {
+        Button {
+          model.copy(FixPrompt.text(experiment, file: model.experiments.first { $0.id == experiment.id }?.file, project: model.status?.project.name))
+          withAnimation(Theme.snappy) { copied = true }
+          Task {
+            try? await Task.sleep(for: .seconds(2))
+            withAnimation(Theme.snappy) { copied = false }
+          }
+        } label: {
+          Label(copied ? "Copied" : experiment.finding != nil ? "Copy fix prompt" : "Copy prompt", systemImage: copied ? "checkmark" : "doc.on.doc")
+        }
+        .buttonStyle(ActionButtonStyle())
+        .help("A prompt for your coding agent: what breaks, how to see it, why and where, and how to prove the fix.")
+      }
       Spacer(minLength: 12)
       if let next {
         Button { open(next.id) } label: {

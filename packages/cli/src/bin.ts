@@ -35,6 +35,8 @@ const { values, positionals } = parseArgs({
     hosts: { type: "string" },
     image: { type: "string" },
     ios: { type: "boolean", default: false },
+    fresh: { type: "boolean", default: false },
+    "fail-on": { type: "string" },
     help: { type: "boolean", short: "h", default: false },
   },
 });

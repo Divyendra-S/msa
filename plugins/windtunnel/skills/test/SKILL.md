@@ -11,4 +11,6 @@ description: "Re-run Wind Tunnel experiments on the current code and report what
 4. A line marked **for you** is a small decision the tool could not settle (which element a renamed locator means, or whether a failure under a perturbation is a bug). Answer it with `windtunnel_decide` (`id`, `answer`: an option id, or Playwright code for a selector). Read the options; don't open the page or the evidence for it.
 5. For each **bug**, call `windtunnel_evidence` with its run id and summarise in two or three lines: the rule broken, the request where it went wrong, and the handler file.
 
+Before a commit or a pull request, call `windtunnel_check` instead: it runs every experiment on the working tree and, where one doesn't hold, on HEAD (or `base`) too. Report its verdict line, then one line each for **REGRESSED** (holds on the base, not with the change: this change broke it), **NEW** (doesn't hold, and can't run on the base) and **BROKEN** (broken on the base too). Regressions come first.
+
 Don't fix application code unless asked; offer the prove skill for real regressions.

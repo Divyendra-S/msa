@@ -62,6 +62,15 @@ struct ReplayPane: View {
       }
     }
     .task { await model.loadReplay() }
+    // A test the Overview asked to play.
+    .onAppear { takePlayRequest() }
+    .onChange(of: model.playRequest) { takePlayRequest() }
+  }
+
+  private func takePlayRequest() {
+    guard let request = model.playRequest else { return }
+    model.playRequest = nil
+    withAnimation(Theme.snappy) { player = request }
   }
 
   private func board(_ list: [Replay.Experiment], _ m: BoardMetrics) -> some View {
@@ -700,6 +709,8 @@ struct DotGrid: View {
 /// a Swift scenario's step the probe points its code reached.
 struct ShotView: View {
   let frame: Replay.Frame
+  /// Too small for the probe points' names: a step without a picture shows a symbol, and its error.
+  var compact = false
   @Environment(AppModel.self) private var model
   @State private var image: NSImage?
 
@@ -714,6 +725,15 @@ struct ShotView: View {
             .clipped()
         }
         .transition(.opacity)
+      } else if compact && (frame.points != nil || frame.shot == nil) {
+        VStack(spacing: 4) {
+          Image(systemName: frame.error != nil ? "exclamationmark.triangle" : "curlybraces")
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(frame.error != nil ? Theme.fail : Theme.ghost)
+          Text(frame.error != nil ? "failed" : "code only").font(Theme.sans(9)).foregroundStyle(frame.error != nil ? Theme.fail : Theme.ghost)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .help(frame.error ?? (["No window: the probe points this step's code reached"] + (frame.points ?? [])).joined(separator: "\n"))
       } else if let points = frame.points {
         VStack(alignment: .leading, spacing: 4) {
           HStack(spacing: 4) {

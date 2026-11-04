@@ -59,10 +59,11 @@ describe("mcp server", { skip: !(await pgAvailable()) && "Postgres not reachable
     await rm(cache, { recursive: true, force: true });
   });
 
-  it("offers seven tools with short descriptions", async () => {
+  it("offers eight tools with short descriptions", async () => {
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map((t) => t.name).sort(), [
       "windtunnel_branch",
+      "windtunnel_check",
       "windtunnel_decide",
       "windtunnel_evidence",
       "windtunnel_map",

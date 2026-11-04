@@ -386,7 +386,11 @@ private struct Diagram: View {
         if c == 1 { Spacer(minLength: 44).frame(maxWidth: 120) }
         if c == 2 { Spacer(minLength: 56) }
         VStack(alignment: c == 0 ? .trailing : .leading, spacing: 0) {
-          Text(Self.titles[c]).label().padding(.bottom, 10)
+          // An empty column (a Swift app has no pages or tables) goes untitled; its probe points are routes.
+          if !graph.columns[c].isEmpty {
+            let points = c == 1 && graph.columns[1].allSatisfy { $0.name.hasPrefix("POINT ") }
+            Text(points ? "Probe points" : Self.titles[c]).label().padding(.bottom, 10)
+          }
           ForEach(graph.columns[c]) { node in
             if node.kind == .service, graph.columns[c].first(where: { $0.kind == .service }) == node {
               Text("Calls out").label(Theme.ghost).padding(.top, 14).padding(.bottom, 2)
@@ -593,11 +597,13 @@ private struct MapHero: View {
     let broke = routes.filter { graph.broke.contains($0.id) }
     let pages = graph.columns[0].filter { $0.kind == .page }
     let opened = pages.filter { graph.through[$0.id] != nil }
+    let points = !routes.isEmpty && routes.allSatisfy { $0.name.hasPrefix("POINT ") }
     HStack(alignment: .center, spacing: 48) {
       VStack(alignment: .leading, spacing: 0) {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
           Text("\(tested.count)").font(Theme.figure(56)).foregroundStyle(Theme.text)
-          Text("of \(Fmt.plural(routes.count, "route")) tested").font(Theme.sans(15)).foregroundStyle(Theme.faint)
+          // A Swift app's are its probe points.
+          Text(points ? "of \(Fmt.plural(routes.count, "probe point")) reached" : "of \(Fmt.plural(routes.count, "route")) tested").font(Theme.sans(15)).foregroundStyle(Theme.faint)
         }
         SplitBar(parts: [(tested.count - broke.count, Theme.accent), (broke.count, Theme.fail), (routes.count - tested.count, Theme.overlay(0.12))])
           .frame(width: 340)
@@ -622,10 +628,12 @@ private struct MapHero: View {
   }
 
   private func summary(pages: Int, opened: Int, broke: [MapGraph.Node], untested: [MapGraph.Node]) -> String {
-    var parts = ["\(opened) of \(Fmt.plural(pages, "page")) opened"]
-    if !broke.isEmpty { parts.append("rules broke at \(broke.map(\.name).joined(separator: ", "))") }
+    // A probe point by its name alone: `project.save`.
+    func name(_ n: MapGraph.Node) -> String { n.name.hasPrefix("POINT ") ? String(n.name.dropFirst(6)) : n.name }
+    var parts = pages == 0 ? [] : ["\(opened) of \(Fmt.plural(pages, "page")) opened"]
+    if !broke.isEmpty { parts.append("rules broke at \(broke.map(name).joined(separator: ", "))") }
     if !untested.isEmpty {
-      let names = untested.prefix(2).map(\.name).joined(separator: ", ")
+      let names = untested.prefix(2).map(name).joined(separator: ", ")
       parts.append("never sent: \(names)\(untested.count > 2 ? " and \(untested.count - 2) more" : "")")
     }
     return parts.joined(separator: "  ·  ")

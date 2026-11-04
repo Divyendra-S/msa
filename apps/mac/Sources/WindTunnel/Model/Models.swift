@@ -47,10 +47,15 @@ nonisolated struct RunListEntry: Decodable, Identifiable, Hashable, Sendable {
   let id: String
   let experiment: String
   let version: String?
+  /// `working tree`, or the ref or patch it ran on (a check's base, a proof's); nil in older runs.
+  let label: String?
   let startedAt: String
   let outcome: String
   let headline: String?
   let running: Progress?
+
+  /// On the code being worked on, not a check's or a proof's other version.
+  var onWorkingTree: Bool { label == nil || label == "working tree" }
 
   var started: Date { ISO.date(startedAt) ?? .distantPast }
   /// The rules this run broke, read from its headline ("fail · one-order-per-cart 2/2, …").
@@ -400,19 +405,72 @@ nonisolated struct HuntDetail: Decodable, Sendable {
 
 nonisolated struct RunJob: Decodable, Identifiable, Hashable, Sendable {
   let id: String
+  /// `run`, or `check`: the working tree against `base`.
+  var kind: String? = nil
   let experiments: [String]
   let repeatCount: Int?
+  var base: String? = nil
   let startedAt: String
   let endedAt: String?
   let status: String
   let exitCode: Int?
   let error: String?
-  let output: [String]
+  var output: [String]
 
   enum CodingKeys: String, CodingKey {
-    case id, experiments, startedAt, endedAt, status, exitCode, error, output
+    case id, kind, experiments, base, startedAt, endedAt, status, exitCode, error, output
     case repeatCount = "repeat"
   }
+
+  var isCheck: Bool { kind == "check" }
+}
+
+/// `GET /api/check`: the newest `windtunnel check`, the working tree against a base (HEAD).
+nonisolated struct Check: Decodable, Sendable {
+  struct Version: Decodable, Sendable {
+    let id: String
+    let label: String
+    let base: String?
+  }
+  struct Side: Decodable, Hashable, Sendable {
+    let outcome: String
+    let runId: String
+    /// `saved-project-is-latest 3/9`.
+    let broken: [String]
+    let reps: Int
+    let failed: Int
+    let errors: Int?
+    let error: String?
+    let reused: Bool?
+  }
+  struct Entry: Decodable, Hashable, Identifiable, Sendable {
+    let experiment: String
+    let description: String?
+    let flow: String?
+    /// regressed, new (can't run on the base), broken, fixed or holds.
+    let verdict: String
+    let change: Side
+    let base: Side?
+    /// Why it couldn't run on the base at all.
+    let baseError: String?
+    var id: String { experiment }
+  }
+  struct Counts: Decodable, Sendable {
+    let regressed: Int
+    let new: Int?
+    let broken: Int
+    let fixed: Int
+    let holds: Int
+  }
+  let id: String
+  let at: String
+  let base: Version
+  let change: Version
+  let same: Bool
+  let entries: [Entry]
+  let counts: Counts
+
+  var date: Date { ISO.date(at) ?? .distantPast }
 }
 
 nonisolated struct UsageTotals: Decodable, Identifiable, Hashable, Sendable {
@@ -644,10 +702,15 @@ nonisolated struct Replay: Decodable, Sendable {
     let startedAt: String
     let rep: Int
     let reps: Int
+    /// Its repetitions that broke a rule or couldn't finish, and those that couldn't (none from an older bridge).
+    let failed: Int?
+    let errors: Int?
     /// The race's ordering that repetition ran (`2,1`, `together`), when it had one.
     let variant: String?
     let broken: [String]
+    /// The repetition shown, and the whole run.
     let durationMs: Double
+    let runMs: Double?
     let error: String?
   }
   struct Past: Decodable, Hashable, Sendable {
@@ -725,6 +788,8 @@ nonisolated struct Replay: Decodable, Sendable {
   struct Experiment: Decodable, Hashable, Identifiable, Sendable {
     let id: String
     let description: String?
+    /// The flow it drives (a web or phone app's).
+    let flow: String?
     /// A Swift Mac app's XCTest method, run in place of a flow.
     let scenario: String?
     let finding: Finding?

@@ -92,6 +92,9 @@ final class AppModel {
   var appMapError: String?
   var replay: Replay?
   var replayError: String?
+  var check: Check?
+  /// A test for Replay to play when it opens: from the Overview's board.
+  var playRequest: PlayerRef?
   let shots = Shots()
   var usage: Usage?
   var hunts: [HuntInfo] = []
@@ -259,6 +262,8 @@ final class AppModel {
     mapFocus = .app
     replay = nil
     replayError = nil
+    check = nil
+    playRequest = nil
     shots.clear()
     usage = nil
     hunts = []
@@ -302,6 +307,7 @@ final class AppModel {
     hunts = (try? await h) ?? []
     jobs = (try? await j) ?? []
     await loadExperiments()
+    await loadCheck()
   }
 
   func loadStatus() async {
@@ -346,6 +352,12 @@ final class AppModel {
     } catch {
       replayError = error.localizedDescription
     }
+  }
+
+  /// The newest check of the working tree against its base.
+  func loadCheck() async {
+    struct Latest: Decodable { let check: Check? }
+    if let latest: Latest = try? await api?.get("/api/check") { check = latest.check }
   }
 
   func loadHunts() async {
@@ -418,15 +430,22 @@ final class AppModel {
     case .job(let id, let info):
       if let i = jobs.firstIndex(where: { $0.id == id }) { jobs[i] = info } else { jobs.insert(info, at: 0) }
       await loadStatus()
-      if info.status != "running" {
+      if info.status != "running" && info.isCheck {
+        await loadCheck()
+        note(Activity(at: .now, kind: .job, text: "check \(info.status)", outcome: info.status))
+        if let c = check, info.status == "done" {
+          notify(title: c.counts.regressed > 0 ? "\(Fmt.plural(c.counts.regressed, "regression")) against \(c.base.label)" : "Nothing regressed against \(c.base.label)", body: c.counts.broken > 0 ? "\(c.counts.broken) already broken there" : "Every experiment checked")
+        } else if let error = info.error {
+          notify(title: "Check \(info.status)", body: error)
+        }
+      } else if info.status != "running" {
         note(Activity(at: .now, kind: .job, text: "run \(info.status): \(info.experiments.isEmpty ? "all experiments" : info.experiments.joined(separator: ", "))", outcome: info.status))
         let failing = runs.prefix(40).filter { $0.outcome == "fail" && ($0.started > (ISO.date(info.startedAt) ?? .now)) }.count
         notify(title: failing > 0 ? "\(failing) experiment\(failing == 1 ? "" : "s") failing" : "Run finished", body: info.error ?? (info.experiments.isEmpty ? "All experiments" : info.experiments.joined(separator: ", ")))
       }
     case .jobOutput(let id, let line):
       if let i = jobs.firstIndex(where: { $0.id == id }) {
-        let j = jobs[i]
-        jobs[i] = RunJob(id: j.id, experiments: j.experiments, repeatCount: j.repeatCount, startedAt: j.startedAt, endedAt: j.endedAt, status: j.status, exitCode: j.exitCode, error: j.error, output: Array((j.output + [line]).suffix(200)))
+        jobs[i].output = Array((jobs[i].output + [line]).suffix(200))
       }
     case .other:
       break
@@ -456,6 +475,27 @@ final class AppModel {
         notice = error.localizedDescription
       }
     }
+  }
+
+  /// `windtunnel check`: the working tree against `base` (default HEAD), to see what a change broke.
+  func checkChanges(base: String? = nil) {
+    guard let api else { return }
+    Task {
+      do {
+        var body: [String: Any] = [:]
+        if let base { body["base"] = base }
+        let job: RunJob = try await api.post("/api/check", body)
+        if let i = jobs.firstIndex(where: { $0.id == job.id }) { jobs[i] = job } else { jobs.insert(job, at: 0) }
+      } catch {
+        notice = error.localizedDescription
+      }
+    }
+  }
+
+  /// Opens Replay on a test's newest run, playing.
+  func play(_ experiment: String) {
+    playRequest = PlayerRef(experiment: experiment, autoplay: true)
+    section = .replay
   }
 
   func stopJob(_ id: String) {
@@ -557,6 +597,29 @@ final class AppModel {
     NSWorkspace.shared.open(URL(fileURLWithPath: path))
   }
 
+  /// `Recorder/Export/ExportService.swift:36`, from the repository (or the app's folder): a Swift
+  /// file in Xcode at that line, anything else in its default app.
+  func openCode(_ ref: String) {
+    var path = ref
+    var line: String?
+    if let colon = ref.lastIndex(of: ":"), Int(ref[ref.index(after: colon)...]) != nil {
+      path = String(ref[..<colon])
+      line = String(ref[ref.index(after: colon)...])
+    }
+    let roots = [status?.project.repoRoot, status?.project.root, projectPath].compactMap { $0 }
+    guard let full = path.hasPrefix("/") ? path : roots.map({ ($0 as NSString).appendingPathComponent(path) }).first(where: { FileManager.default.fileExists(atPath: $0) }) else {
+      notice = "\(path) isn't in \(roots.first.map(Fmt.tilde) ?? "the project")"
+      return
+    }
+    if let line, full.hasSuffix(".swift"), FileManager.default.isExecutableFile(atPath: "/usr/bin/xed") {
+      let xed = Process()
+      xed.executableURL = URL(fileURLWithPath: "/usr/bin/xed")
+      xed.arguments = ["--line", line, full]
+      if (try? xed.run()) != nil { return }
+    }
+    NSWorkspace.shared.open(URL(fileURLWithPath: full))
+  }
+
   // MARK: Notifications
 
   private func requestNotifications() {
@@ -577,9 +640,10 @@ final class AppModel {
   /// Runs started together (one `windtunnel run`): within two seconds of each other, newest first.
   var batches: [Batch] { Batch.group(runs) }
 
-  /// Each experiment's newest finished run.
+  /// Each experiment's newest finished run on the working tree (on another version only when it has none).
   var latestByExperiment: [String: RunListEntry] {
     var out: [String: RunListEntry] = [:]
+    for r in runs where r.outcome != "running" && r.onWorkingTree && out[r.experiment] == nil { out[r.experiment] = r }
     for r in runs where r.outcome != "running" && out[r.experiment] == nil { out[r.experiment] = r }
     return out
   }

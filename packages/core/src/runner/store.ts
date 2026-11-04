@@ -11,6 +11,8 @@ export interface RunIndexEntry {
   id: string;
   experiment: string;
   version: string;
+  /** The version's label: `working tree`, or the ref or patch it ran on (a check's base, a proof's). Absent in older runs. */
+  label?: string;
   startedAt: string;
   outcome: string;
   /** e.g. `fail 3/3 one-order-per-cart` */

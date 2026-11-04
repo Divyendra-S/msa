@@ -4,9 +4,13 @@ import { createInterface } from "node:readline";
 
 export interface RunJob {
   id: string;
+  /** run: `windtunnel run` · check: `windtunnel check`, the working tree against `base`. */
+  kind: "run" | "check";
   /** Experiment ids; empty for every experiment. */
   experiments: string[];
   repeat?: number;
+  /** A check's base (default HEAD). */
+  base?: string;
   startedAt: string;
   endedAt?: string;
   /** done: the run finished, whatever its experiments found · failed: the CLI stopped on an error. */
@@ -23,6 +27,8 @@ const MAX_JOBS = 20;
 /** The run needs no model: no agent's credentials reach it. */
 const FOREIGN_ENV = /^(ANTHROPIC_|CLAUDE_|CLAUDECODE|OPENAI_|CODEX_)/;
 const ID = /^[\w][\w.-]*$/;
+/** A git ref, as far as a check's base goes: no option, no spaces. */
+const REF = /^[\w][\w./~^@{}-]*$/;
 
 /**
  * `windtunnel run` started from the viewer (the Mac app's Run button): the CLI in a child process,
@@ -58,7 +64,8 @@ export class RunJobs {
     return [...this.jobs].reverse();
   }
 
-  start(input: { experiments?: unknown; repeat?: unknown }): RunJob {
+  /** `check`: `windtunnel check` against `base` (default HEAD) instead of `windtunnel run`. */
+  start(input: { experiments?: unknown; repeat?: unknown; check?: unknown; base?: unknown }): RunJob {
     const cli = this.cli;
     if (!cli?.length) throw new JobError(501, "this viewer can't start runs: start it with windtunnel view");
     if (this.current) throw new JobError(409, `a run (${this.current.job.id}) is still going`);
@@ -70,17 +77,32 @@ export class RunJobs {
     if (repeat !== undefined && !(Number.isInteger(repeat) && (repeat as number) >= 1 && (repeat as number) <= 50)) {
       throw new JobError(400, "repeat: a whole number from 1 to 50");
     }
+    const kind = input.check === true ? "check" : "run";
+    const base = input.base;
+    if (base !== undefined && !(kind === "check" && typeof base === "string" && REF.test(base))) {
+      throw new JobError(400, "base: a git ref, for a check");
+    }
 
     const stamp = new Date().toISOString().replace(/[-:T]/g, "").slice(2, 14);
     const job: RunJob = {
       id: `${stamp.slice(0, 6)}-${stamp.slice(6)}-${randomBytes(2).toString("hex")}`,
+      kind,
       experiments: experiments as string[],
       ...(repeat !== undefined ? { repeat: repeat as number } : {}),
+      ...(typeof base === "string" ? { base } : {}),
       startedAt: new Date().toISOString(),
       status: "running",
       output: [],
     };
-    const args = [...cli.slice(1), "run", ...job.experiments, ...(job.repeat ? ["--repeat", String(job.repeat)] : []), "--cwd", this.root];
+    const args = [
+      ...cli.slice(1),
+      kind,
+      ...job.experiments,
+      ...(job.repeat ? ["--repeat", String(job.repeat)] : []),
+      ...(job.base ? ["--base", job.base] : []),
+      "--cwd",
+      this.root,
+    ];
     const env = Object.fromEntries(Object.entries(this.env).filter(([k]) => !FOREIGN_ENV.test(k)));
     const child = spawn(cli[0]!, args, { cwd: this.root, env, stdio: ["ignore", "pipe", "pipe"] });
     const current = { job, child };
@@ -107,8 +129,9 @@ export class RunJobs {
       }
       job.exitCode = code;
       job.endedAt = new Date().toISOString();
-      // Exit 1 is also "an experiment didn't pass": only an error line makes it a failure.
-      if (job.status === "running") job.status = (code === 0 || code === 1) && !job.error ? "done" : "failed";
+      // A run's exit 1 is also "an experiment didn't pass", a check's 2 "a regression": only an error line makes it a failure.
+      const finished = code === 0 || code === 1 || (kind === "check" && code === 2);
+      if (job.status === "running") job.status = finished && !job.error ? "done" : "failed";
       this.current = undefined;
       this.emit(job.id, undefined, job);
     };

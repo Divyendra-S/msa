@@ -71,7 +71,7 @@ struct TopBar: View {
       if let job = model.runningJob {
         HStack(spacing: 8) {
           BrailleSpinner(size: 10)
-          Text(job.experiments.isEmpty ? "Running all" : "Running \(job.experiments.joined(separator: ", "))")
+          Text(job.isCheck ? "Checking against \(job.base ?? "HEAD")" : job.experiments.isEmpty ? "Running all" : "Running \(job.experiments.joined(separator: ", "))")
             .font(Theme.sans(12)).foregroundStyle(Theme.dim).lineLimit(1)
           Button("Stop") { model.stopJob(job.id) }
             .buttonStyle(.plain)
@@ -80,6 +80,21 @@ struct TopBar: View {
         }
         .frame(maxWidth: 340)
         .transition(.opacity)
+      }
+      if model.runningJob == nil, let estimate {
+        Text(estimate.text).font(Theme.sans(11)).monospacedDigit().foregroundStyle(Theme.ghost)
+          .help(estimate.help)
+      }
+      // The Overview has its own, with the result.
+      if model.section != .overview {
+        Button {
+          model.checkChanges()
+        } label: {
+          Label("Check changes", systemImage: "arrow.triangle.branch")
+        }
+        .buttonStyle(ActionButtonStyle())
+        .disabled(model.runningJob != nil || model.experiments.isEmpty)
+        .help("What your uncommitted changes break: every experiment on the working tree, and what fails, on HEAD too. No model involved.")
       }
       Button {
         model.runExperiments([])
@@ -96,6 +111,18 @@ struct TopBar: View {
     .contentShape(Rectangle())
     .gesture(WindowDragGesture())
     .animation(Theme.spring, value: model.runningJob?.id)
+  }
+
+  /// How long Run all takes, by each experiment's newest run (they run one after another).
+  private var estimate: (text: String, help: String)? {
+    guard let list = model.replay?.experiments, !list.isEmpty else { return nil }
+    let timed = list.compactMap { e in e.run.flatMap { r in r.runMs.map { (ms: $0, reps: r.reps) } } }
+    guard !timed.isEmpty else { return nil }
+    let ms = timed.reduce(0) { $0 + $1.ms } * Double(list.count) / Double(timed.count)
+    let reps = timed.reduce(0) { $0 + $1.reps }
+    let minutes = ms / 60_000
+    let text = minutes < 1 ? "under a minute" : "about \(Int(minutes.rounded())) min"
+    return (text, "Run all: \(Fmt.plural(list.count, "experiment")), about \(Fmt.plural(reps, "run")), \(text) by their newest runs.")
   }
 }
 

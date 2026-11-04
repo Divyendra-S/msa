@@ -66,6 +66,7 @@ export {
 export { type DbDiff, diffSnapshots, snapshotDatabase } from "./runner/db-diff.ts";
 export { DRILL_CHARS, drillDown, type EvidenceOptions, evidencePacket, PACKET_CHARS } from "./runner/evidence.ts";
 export { findFlowFile, FLOWS_DIR, LOGIN_FLOW, type LoadedFlow, loadFlow, stepNames } from "./runner/flows.ts";
+export { check, type CheckEntry, type CheckOptions, type CheckResult, type CheckSide, type CheckVerdict, formatCheck, formatCheckMarkdown, latestCheckPath } from "./runner/check.ts";
 export { formatProof, type ProofResult, prove, type ProveOptions, type RegressionResult } from "./runner/prove.ts";
 export { matchesLogged, matchesRequest, parseRequestPattern, type RequestPattern } from "./runner/match.ts";
 export { experimentInputs, flowFiles } from "./runner/inputs.ts";

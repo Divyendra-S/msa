@@ -57,7 +57,7 @@ schemas load on demand). Check with `claude --plugin-dir ./plugins/windtunnel pl
 | `init` | Reads the repo, writes `windtunnel.config.yaml` and a login flow after one confirmation, validates, maps and crawls the app (with the free sweep) |
 | `hunt` | Reads the map, turns flagged code patterns into hypotheses, writes rules and experiments after one approval, runs them, confirms bugs with evidence, reports each with a reproducing run |
 | `prove` | Fixes a reproduced bug, proves the fix with `windtunnel_prove`, and (with the user's yes) makes a branch with the fix, regression experiments and evidence |
-| `test` | Re-runs only the experiments the code changes affect; reports the failure sorting (healed flows included), answers handed-back decisions, reads evidence only for bugs |
+| `test` | Re-runs only the experiments the code changes affect; reports the failure sorting (healed flows included), answers handed-back decisions, reads evidence only for bugs; before a commit or pull request, checks the working tree against HEAD with `windtunnel_check` |
 
 In Claude Code they are `/windtunnel:init`, `/windtunnel:hunt checkout`, and so on. The
 `windtunnel-helper` subagent (Haiku on Claude, Muse Spark on Muse) handles routine
@@ -73,6 +73,7 @@ follow-ups: validating, re-running, summarising evidence, answering obvious deci
 | `windtunnel_evidence` | `handle` | Evidence packet for a run id, or one detail: `<run>/<n>/steps`, `requests`, `sql`, `sql:<table>`, `trace`, `diff`, `diff:<table>`, `rule:<id>`, `page`, `log`, `console`, `webhooks`; or `crawl`, `crawl:<path>`, `sweep`, `usage`, `decisions` |
 | `windtunnel_branch` | `action` (`start`/`list`/`stop`), `ref?`, `patch?`, `id?` | A running copy of the app with its own database and mock payments, to try things by hand |
 | `windtunnel_prove` | `experiments`, `base?`, `patch?`, `repeat?`, `branch?`, `message?` | The proof matrix and a verdict; with `branch`, the branch it created |
+| `windtunnel_check` | `experiments?`, `base?`, `patch?`, `repeat?` | Each experiment on the working tree (or `patch`) and, where it doesn't hold, on `base` (default HEAD): REGRESSED, NEW (can't run on the base), BROKEN (on the base too), FIXED or holds, with the agent's `finding` cause where there is one, then a verdict line. Reuses results on record for the same code |
 | `windtunnel_decide` | `id?`, `answer?` | Open decisions Wind Tunnel handed back; with `id` and `answer`, applies the answer (a selector is written into the flow file and checked with a run) |
 
 `patch` is a unified diff or the path to one. Long runs send MCP progress notifications

@@ -1,12 +1,13 @@
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   Branches,
   browserStatus,
   chromiumStatus,
   type CodeVersionSpec,
+  check,
   clean,
   ConfigError,
   createAvd,
@@ -33,6 +34,8 @@ import {
   systemImageDir,
   avdHome,
   describeDatabase,
+  formatCheck,
+  formatCheckMarkdown,
   formatProof,
   formatResults,
   formatUsage,
@@ -105,6 +108,8 @@ export interface Flags {
   hosts?: string;
   image?: string;
   ios?: boolean;
+  fresh?: boolean;
+  "fail-on"?: string;
   help?: boolean;
 }
 
@@ -116,6 +121,9 @@ Commands
   install             Set up the coding agents found here (Claude Code, Codex, Muse Code) and check
                       Docker, Postgres and Playwright's Chromium; asks once before changing anything
   run [experiment…]   Run experiments (default: all in .windtunnel/experiments)
+  check [exp…]        Before a pull request: every experiment on the working tree, and where one doesn't
+                      hold, on --base (default HEAD), so a change's regressions stand apart from what was
+                      broken already. Exit 0: nothing regressed · 2: a regression · 1: it couldn't run
   affected [exp…]     Which experiments the working tree's changes affect, and why (runs nothing)
   validate [exp…]     Check experiment files and flows, and run the rules on the seed data
   runs                List recent runs
@@ -166,7 +174,10 @@ Options
   --crawl             (map) crawl the running app first (see crawl)
   --users <a,b>       (crawl) test users to crawl as, besides an anonymous visitor (default: crawl.users,
                       else the first user)
-  --base <git ref>    (prove) code with the bug (default HEAD)
+  --base <git ref>    (prove) code with the bug (default HEAD); (check) code to compare with (default HEAD)
+  --fail-on <what>    (check) what exits 2: regressed (default), broken (anything that doesn't hold), never
+  --fresh             (check) run on the working tree even where this exact code's result is on record
+  --out <file>        (check) also write the result as a pull request comment (Markdown)
   --branch <name>     (prove) when proven, create this branch: the fix + the experiments as regression
                       tests + .windtunnel/evidence/<id>.md (the working tree is not touched)
   --message <text>    (prove --branch) commit message (default: generated from the proof)
@@ -196,6 +207,8 @@ export async function main(args: string[], flags: Flags): Promise<number> {
     switch (command) {
       case "run":
         return await run(args.slice(1), flags);
+      case "check":
+        return await checkCommand(args.slice(1), flags);
       case "affected":
         return await affected(args.slice(1), flags);
       case "validate":
@@ -659,6 +672,35 @@ async function run(ids: string[], flags: Flags): Promise<number> {
     }
     print(flags, { results: final, triage: sorted }, `\n${formatResults(final)}${tail}`);
     return final.every((r) => r.outcome === "pass") ? 0 : 1;
+  } finally {
+    await runner.close();
+  }
+}
+
+async function checkCommand(ids: string[], flags: Flags): Promise<number> {
+  const failOn = flags["fail-on"] ?? "regressed";
+  if (!["regressed", "broken", "never"].includes(failOn)) throw new ConfigError("--fail-on must be regressed, broken or never");
+  const repeat = flags.repeat === undefined ? undefined : Number(flags.repeat);
+  if (repeat !== undefined && !(Number.isInteger(repeat) && repeat >= 1 && repeat <= 100)) {
+    throw new ConfigError("--repeat must be a whole number from 1 to 100");
+  }
+  const runner = await Runner.open(flags.cwd);
+  stopOnSignals(() => runner.close());
+  try {
+    await metered(runner.project.stateDir);
+    const experiments = await loadExperiments(runner.project, ids);
+    const result = await check(runner, {
+      experiments,
+      base: { ref: flags.base ?? "HEAD" },
+      change: await versionSpec(flags),
+      repeat,
+      fresh: flags.fresh,
+      onProgress: live(flags) ? (m) => process.stderr.write(`  ${m}\n`) : undefined,
+    });
+    if (flags.out) await writeFile(resolve(flags.out), `${formatCheckMarkdown(result)}\n`);
+    print(flags, result, formatCheck(result) + (flags.out ? `\n\nPull request comment: ${resolve(flags.out)}` : ""));
+    const failing = failOn === "never" ? 0 : failOn === "broken" ? result.counts.regressed + result.counts.new + result.counts.broken : result.counts.regressed;
+    return failing > 0 ? 2 : 0;
   } finally {
     await runner.close();
   }

@@ -135,7 +135,18 @@ describe("viewer", () => {
     const [e] = map.experiments;
     assert.equal(e.id, "send-twice");
     // The repetition that broke the rule, step by step.
-    assert.deepEqual(e.run, { id: RUN, outcome: "flaky", headline: "flaky · at-most-one-hit 1/2", startedAt: "2026-10-29T10:00:00.000Z", rep: 1, reps: 2, broken: ["at-most-one-hit"] });
+    assert.deepEqual(e.run, {
+      id: RUN,
+      outcome: "flaky",
+      headline: "flaky · at-most-one-hit 1/2",
+      startedAt: "2026-10-29T10:00:00.000Z",
+      rep: 1,
+      reps: 2,
+      broken: ["at-most-one-hit"],
+      failed: 1,
+      errors: 0,
+      durationMs: 1000,
+    });
     assert.deepEqual(e.steps, [
       { name: "open", pages: ["/"], calls: [] },
       { name: "send", pages: [], calls: [{ route: "POST /api/send", count: 2, tabs: 1, together: false, failed: 0 }] },

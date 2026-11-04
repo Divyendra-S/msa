@@ -332,6 +332,7 @@ export class Runner {
       id: runId,
       experiment: experiment.id,
       version: version.id,
+      label: version.label,
       startedAt,
       outcome: result.outcome,
       headline: headline(result),

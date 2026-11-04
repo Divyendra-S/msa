@@ -402,6 +402,21 @@ pnpm wt --cwd zoo/shop prove checkout-two-buyers --base-patch zoo/cases/05-overs
 pnpm wt --cwd zoo/shop prove checkout-two-buyers --branch windtunnel/fix-oversell   # bug in HEAD, fix in the working tree
 ```
 
+## Before a pull request
+
+```sh
+pnpm wt --cwd zoo/shop check                        # the working tree against HEAD
+pnpm wt --cwd zoo/shop check --base main --out check.md   # against main, plus a PR comment
+```
+
+Every experiment runs on the working tree; those that don't hold run on the base as well, so a
+change's regressions stand apart from what was broken already. Each comes back REGRESSED
+(holds on the base), NEW (can't run on the base: the code it needs came with the change),
+BROKEN (broken on the base too), FIXED or holds. Results on record for exactly the same code
+are reused, so a check right after a run is quick. Exit 0: nothing regressed · 2: a regression
+(`--fail-on broken` also counts what was broken already) · 1: it couldn't run. Agents call it
+as `windtunnel_check` before a commit.
+
 ## Benchmark
 
 ```sh
@@ -451,7 +466,10 @@ pnpm mac:open
 
 The same views as native SwiftUI, plus experiments you can run from the app and hunts with
 Claude 5: in your own Claude Code (the app follows every run it starts) or headless on an
-Anthropic API key. Its Replay plays each test's newest run step by step, each screen large, to
+Anthropic API key. The Overview shows each of the app's flows with its steps and a card per
+experiment on it (as is, slowed, failed, cancelled, raced), live while it runs; then what went
+wrong, each with its picture, the cause and the code, and **Copy fix prompt** for your coding
+agent; and **Check changes**, the working tree against HEAD. Its Replay plays each test's newest run step by step, each screen large, to
 the rule that broke and the agent's finding: why it breaks, what would fix it, and where (an
 experiment's `finding:`). Play all goes through every test in turn. See
 [`apps/mac`](apps/mac/README.md).

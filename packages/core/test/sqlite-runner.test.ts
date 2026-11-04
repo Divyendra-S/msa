@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { clean } from "../src/cleanup.ts";
+import { check, formatCheck, formatCheckMarkdown } from "../src/runner/check.ts";
 import type { DbDiff } from "../src/runner/db-diff.ts";
 import { loadExperiments } from "../src/runner/experiment.ts";
 import type { RequestRecord } from "../src/runner/network.ts";
@@ -165,5 +166,57 @@ every-hit-has-its-receipt:
     const result = await rep<{ branch: { seam?: string }; steps: { shot?: string }[] }>(proxied.get("plain")!, "result.json");
     assert.equal(result.branch.seam, "proxy");
     assert.ok(result.steps.every((s) => s.shot), "every step has its screenshot");
+  });
+
+  it("checks a change against the base: what it broke, what was broken already, what it fixed", async () => {
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo }).toString();
+    const patchFor = async (server: string) => {
+      await writeFile(join(repo, "server.cjs"), server);
+      const diff = git("diff");
+      git("checkout", "--", ".");
+      return diff;
+    };
+    const insert = `db.prepare("INSERT INTO hits (who) VALUES ('alice')").run().lastInsertRowid`;
+    // Two rows per send: even a single send now breaks both rules.
+    const breaks = await patchFor(SERVER.replace(insert, `db.prepare("INSERT INTO hits (who) VALUES ('alice'), ('alice')").run().lastInsertRowid`));
+    // One row per user: a second send reuses the first one's row.
+    const fixes = await patchFor(
+      SERVER.replace(insert, `(db.prepare("SELECT id FROM hits WHERE who = 'alice'").get()?.id ?? db.prepare("INSERT INTO hits (who) VALUES ('alice')").run().lastInsertRowid)`),
+    );
+    const experiments = (await loadExperiments(runner.project)).filter((e) => e.id !== "lost-response");
+
+    // Nothing changed: the working tree's runs from before are reused, and nothing can have regressed.
+    const same = await check(runner, { experiments });
+    assert.equal(same.same, true);
+    assert.ok(same.entries.every((e) => e.change.reused), "reused the runs on record");
+    assert.deepEqual(same.entries.map((e) => `${e.experiment} ${e.verdict}`), ["double-submit broken", "plain holds"]);
+    assert.match(formatCheck(same), /has the same code as HEAD @ [0-9a-f]{12}, so nothing could regress/);
+
+    const broke = await check(runner, { experiments, change: { patch: breaks } });
+    assert.equal(broke.same, false);
+    assert.deepEqual(broke.entries.map((e) => `${e.experiment} ${e.verdict}`), ["plain regressed", "double-submit broken"]);
+    const plain = broke.entries[0]!;
+    assert.equal(plain.base?.outcome, "pass");
+    assert.ok(plain.base?.reused, "the base's result came from the record, not a new run");
+    assert.deepEqual(plain.change.broken.sort(), ["at-most-one-hit 1/1", "every-hit-has-its-receipt 1/1"]);
+    assert.deepEqual(broke.counts, { regressed: 1, new: 0, broken: 1, fixed: 0, holds: 0 });
+    assert.match(formatCheck(broke), /REGRESSED {2}plain +at-most-one-hit 1\/1, every-hit-has-its-receipt 1\/1 · holds on HEAD/);
+    assert.match(formatCheck(broke), /Verdict: 1 regression · 1 already broken/);
+    assert.match(formatCheckMarkdown(broke), /❌ \*\*1 regression\*\*/);
+
+    const fixed = await check(runner, { experiments, change: { patch: fixes } });
+    assert.deepEqual(fixed.entries.map((e) => `${e.experiment} ${e.verdict}`), ["double-submit fixed", "plain holds"]);
+    assert.match(formatCheck(fixed), /FIXED {6}double-submit/);
+    assert.match(formatCheck(fixed), /Verdict: nothing regressed · 1 fixed/);
+
+    // A base the experiments can't run on: what breaks with the change is new with it.
+    const down = await patchFor(`process.exit(3);\n${SERVER}`);
+    const fresh = await check(runner, { experiments: experiments.filter((e) => e.id === "plain"), base: { ref: "HEAD", patch: down }, change: { patch: breaks } });
+    assert.deepEqual(fresh.entries.map((e) => `${e.experiment} ${e.verdict} ${e.base?.outcome}`), ["plain new error"]);
+    assert.match(formatCheck(fresh), /NEW +plain .* · can't run on HEAD \+ patch/);
+
+    // The newest check is kept for the viewer.
+    const latest = JSON.parse(await readFile(join(runner.project.stateDir, "checks", "latest.json"), "utf8")) as { id: string };
+    assert.equal(latest.id, fresh.id);
   });
 });

@@ -9,6 +9,7 @@ import {
   compareLanes,
   ConfigError,
   type LaneRef,
+  latestCheckPath,
   listRuns,
   listUsage,
   loadExperiments,
@@ -129,6 +130,16 @@ export async function startViewer(options: ViewerOptions): Promise<Viewer> {
       method: "POST",
       pattern: /^\/api\/experiments\/run$/,
       handler: async (req) => jobs.start((await readBody(req)) as { experiments?: unknown; repeat?: unknown }),
+    },
+    {
+      method: "POST",
+      pattern: /^\/api\/check$/,
+      handler: async (req) => jobs.start({ ...((await readBody(req)) as { experiments?: unknown; repeat?: unknown; base?: unknown }), check: true }),
+    },
+    {
+      method: "GET",
+      pattern: /^\/api\/check$/,
+      handler: async () => ({ check: await readFile(latestCheckPath(project.stateDir), "utf8").then((t) => JSON.parse(t) as unknown, () => null) }),
     },
     { method: "GET", pattern: /^\/api\/jobs$/, handler: async () => jobs.list() },
     {

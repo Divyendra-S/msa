@@ -21,6 +21,8 @@ export interface ReplayView {
 export interface ReplayExperiment {
   id: string;
   description?: string;
+  /** The flow it drives. */
+  flow?: string;
   /** A Swift Mac app's XCTest method: each step shows what the scenario pictured, and the probe points its code reached. */
   scenario?: string;
   /** Why it breaks the app, what would fix it and where (`path:line`), as the agent found it. */
@@ -29,8 +31,24 @@ export interface ReplayExperiment {
   pressure: MapExperiment["pressure"];
   /** Its runs on record, oldest first (the last 16). */
   history: { id: string; outcome: string; startedAt: string }[];
-  /** The newest finished run, and the repetition shown (a broken one if any). */
-  run?: { id: string; outcome: string; startedAt: string; rep: number; reps: number; variant?: string; broken: string[]; durationMs: number; error?: string };
+  /**
+   * The newest finished run, and the repetition shown (a broken one if any): `failed` of its `reps`
+   * broke a rule or couldn't finish (`errors`); `runMs`: all of them, `durationMs`: the one shown.
+   */
+  run?: {
+    id: string;
+    outcome: string;
+    startedAt: string;
+    rep: number;
+    reps: number;
+    failed: number;
+    errors: number;
+    variant?: string;
+    broken: string[];
+    durationMs: number;
+    runMs: number;
+    error?: string;
+  };
   lanes: { tab: string; user: string }[];
   /** A column per step of the flow; `pressure`: what the experiment did there, in a few words. */
   columns: { step: string; attempt?: string; start: number; pressure: string[] }[];
@@ -103,6 +121,7 @@ export async function replayView(workspace: Workspace, runner: Runner): Promise<
     const base = {
       id: e.id,
       ...(e.description ? { description: e.description } : {}),
+      ...(e.flow ? { flow: e.flow } : {}),
       ...(e.scenario ? { scenario: e.scenario } : {}),
       ...(e.finding ? { finding: e.finding } : {}),
       users: e.users,
@@ -131,9 +150,12 @@ export async function replayView(workspace: Workspace, runner: Runner): Promise<
       startedAt: e.run.startedAt,
       rep: e.run.rep,
       reps: e.run.reps,
+      failed: e.run.failed,
+      errors: e.run.errors,
       ...(e.run.variant ? { variant: e.run.variant } : {}),
       broken: e.run.broken,
       durationMs: detail?.durationMs ?? 0,
+      runMs: e.run.durationMs,
       ...(detail?.error ? { error: detail.error } : {}),
     };
     if (!detail) {

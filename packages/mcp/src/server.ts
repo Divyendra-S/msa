@@ -1,8 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
+  check,
   ConfigError,
   describeDatabase,
+  formatCheck,
   formatProof,
   formatResults,
   formatUsage,
@@ -241,6 +243,32 @@ export function createServer(workspace: Workspace): McpServer {
           ? `Ask the user before pushing (git push -u ${created.remote} ${created.name}). PR text: ${created.evidenceCopy}`
           : `The repository has no git remote. PR text: ${created.evidenceCopy}`,
       ].join("\n") + usage;
+    }),
+  );
+
+  server.registerTool(
+    "windtunnel_check",
+    {
+      description:
+        "Before a pull request: every experiment on the working tree (or a patch), and those that don't hold, on the base too. Says what the change regressed, what is new with it, what was broken already and what it fixed. Reuses results on record for the same code.",
+      inputSchema: {
+        experiments: z.array(z.string()).optional().describe("Experiment ids (default: all)"),
+        base: z.string().optional().describe("Git ref to compare with (default: HEAD)"),
+        patch: z.string().optional().describe("The change as a unified diff or path to one, applied on the base (default: the working tree)"),
+        repeat: z.number().int().min(1).max(50).optional().describe("Runs per experiment, overriding each one's repeat"),
+      },
+    },
+    tool("windtunnel_check", async ({ experiments: ids, base, patch, repeat }, progress) => {
+      let n = 0;
+      const runner = await workspace.open();
+      const result = await check(runner, {
+        experiments: await loadExperiments(runner.project, ids ?? []),
+        base: { ref: base ?? "HEAD" },
+        change: patch ? await workspace.versionSpec({ ref: base ?? "HEAD", patch }) : {},
+        repeat,
+        onProgress: (m) => progress(++n, undefined, m),
+      });
+      return `${formatCheck(result)}\n\n${formatUsage((await workspace.meter()).totals(), runner.project.config.budget)}`;
     }),
   );
 

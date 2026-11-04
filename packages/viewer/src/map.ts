@@ -78,6 +78,8 @@ export interface MapCall {
 export interface MapExperiment {
   id: string;
   description?: string;
+  /** The flow it drives (`.windtunnel/flows/<name>.ts`). */
+  flow?: string;
   /** A Swift Mac app's XCTest method, which it runs in place of a flow. */
   scenario?: string;
   /** Why it breaks the app, what would fix it and where, as the agent found it. */
@@ -87,7 +89,20 @@ export interface MapExperiment {
   pressure: { what: string; routes: string[]; step?: string }[];
   /** Its newest finished run, and the repetition the steps come from. */
   /** `variant`: the race's ordering that repetition ran (`2,1`), when it had one. */
-  run?: { id: string; outcome: string; headline: string; startedAt: string; rep: number; reps: number; variant?: string; broken: string[] };
+  /** `failed`: its runs that broke a rule or couldn't finish, `errors` those that couldn't; `durationMs`: all of them. */
+  run?: {
+    id: string;
+    outcome: string;
+    headline: string;
+    startedAt: string;
+    rep: number;
+    reps: number;
+    variant?: string;
+    broken: string[];
+    failed: number;
+    errors: number;
+    durationMs: number;
+  };
   pages: string[];
   routes: string[];
   /** Tables that run changed. */
@@ -180,10 +195,15 @@ export async function mapView(workspace: Workspace, runner: Runner): Promise<Map
   });
 
   const all = await loadExperiments(project).catch(() => [] as Experiment[]);
+  // The working tree's newest run: one on another version (a check's base, a proof's) only when there is no other.
   const newest = new Map<string, { id: string; outcome: string; headline: string; startedAt: string }>();
+  const elsewhere = new Map<string, { id: string; outcome: string; headline: string; startedAt: string }>();
   for (const r of await listRuns(store, 300)) {
-    if (r.outcome !== "running" && r.outcome !== "stopped" && !newest.has(r.experiment)) newest.set(r.experiment, r);
+    if (r.outcome === "running" || r.outcome === "stopped") continue;
+    const into = r.label === undefined || r.label === "working tree" ? newest : elsewhere;
+    if (!into.has(r.experiment)) into.set(r.experiment, r);
   }
+  for (const [id, r] of elsewhere) if (!newest.has(id)) newest.set(id, r);
 
   const experiments: MapExperiment[] = [];
   for (const e of all.sort((a, b) => a.id.localeCompare(b.id))) {
@@ -213,6 +233,7 @@ export async function mapView(workspace: Workspace, runner: Runner): Promise<Map
     experiments.push({
       id: e.id,
       ...(e.description ? { description: e.description } : {}),
+      ...(e.flow ? { flow: e.flow } : {}),
       ...(e.scenario ? { scenario: e.scenario } : {}),
       ...(e.finding ? { finding: e.finding } : {}),
       users: e.users ?? [],
@@ -228,6 +249,9 @@ export async function mapView(workspace: Workspace, runner: Runner): Promise<Map
               reps: result.reps.length,
               ...(focus.variant !== "default" ? { variant: focus.variant } : {}),
               broken: unique(result.reps.flatMap((r) => r.broken)),
+              failed: result.reps.filter((r) => r.outcome !== "ok").length,
+              errors: result.reps.filter((r) => r.outcome === "error").length,
+              durationMs: result.durationMs,
             },
           }
         : {}),
